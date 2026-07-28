@@ -9,7 +9,7 @@ interface SettingsState {
 
 const defaultSettings: StoreSettings = {
   logo: null,
-  name: 'Cement Store',
+  name: 'Altech Production',
   description: 'Vente & Fabrication de Ciment',
   email: '',
   phone: '',

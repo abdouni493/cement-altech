@@ -286,14 +286,14 @@ export default function CommandsPage() {
 
     const logoHtml = settings.logo
       ? `<img src="${settings.logo}" style="max-height: 70px; margin-bottom: 5px;" />`
-      : `<div style="font-size: 32px; font-weight: bold; color: #d97706;">🏗️ ${settings.name || 'CEMENT STORE'}</div>`;
+      : `<div style="font-size: 32px; font-weight: bold; color: #d97706;">🏗️ ${settings.name || 'ALTECH PRODUCTION'}</div>`;
 
     const htmlContent = `
       <div style="font-family: Arial, sans-serif; color: #000; padding: 25px; max-width: 800px; margin: 0 auto; border: 2px solid #000; border-radius: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px;">
           <div>
             ${logoHtml}
-            <h2 style="margin: 5px 0 2px 0; font-size: 20px; font-weight: bold;">${settings.name || 'CEMENT STORE'}</h2>
+            <h2 style="margin: 5px 0 2px 0; font-size: 20px; font-weight: bold;">${settings.name || 'ALTECH PRODUCTION'}</h2>
             <p style="margin: 2px 0; font-size: 12px;">📍 ${settings.address || 'Adresse non spécifiée'}</p>
             <p style="margin: 2px 0; font-size: 12px;">📞 Tel: ${settings.phone || 'N/A'}</p>
             ${settings.nif ? `<p style="margin: 2px 0; font-size: 11px;">NIF: ${settings.nif} | NIS: ${settings.nis || ''} | RC: ${settings.rc || ''}</p>` : ''}

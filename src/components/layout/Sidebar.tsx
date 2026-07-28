@@ -77,7 +77,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             <LogoBadge size={44} icon={24} />
             <div className="min-w-0">
               <h2 className="font-display text-base font-bold text-text-primary leading-tight truncate">
-                {store.name || 'Cement Store'}
+                {store.name || 'Altech Production'}
               </h2>
               <p className="text-[11px] text-text-secondary/80 truncate">
                 {store.description || 'Vente & Fabrication de Ciment'}

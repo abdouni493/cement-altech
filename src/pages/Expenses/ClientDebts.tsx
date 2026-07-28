@@ -749,7 +749,7 @@ function PrintHistoryModal({
         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px;">
           <div>
             ${storeSettings.logo ? `<img src="${storeSettings.logo}" style="max-height: 60px; margin-bottom: 5px;" />` : ''}
-            <h1 style="margin: 0; font-size: 20px; font-weight: bold;">${storeSettings.name || 'CEMENT STORE'}</h1>
+            <h1 style="margin: 0; font-size: 20px; font-weight: bold;">${storeSettings.name || 'ALTECH PRODUCTION'}</h1>
             <p style="margin: 3px 0; font-size: 11px;">${storeSettings.address || ''} | Tel: ${storeSettings.phone || ''}</p>
             ${storeSettings.nif ? `<p style="margin: 2px 0; font-size: 10px;">NIF: ${storeSettings.nif} | NIS: ${storeSettings.nis || ''}</p>` : ''}
           </div>

@@ -18,9 +18,9 @@ export const INITIAL_ADMIN_ACCOUNTS: User[] = [
   DEFAULT_DEMO_ADMIN,
   {
     id: 'usr-admin-master',
-    name: 'Admin Cement Store',
+    name: 'Admin Altech Production',
     username: 'admin',
-    email: 'admin@cementstore.com',
+    email: 'admin@altechproduction.com',
     password: 'admin',
     role: 'admin',
     permissions: 'all',
