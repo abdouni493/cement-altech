@@ -11,6 +11,7 @@ import { Modal } from '@/components/ui/Modal';
 import { toast } from '@/components/ui/Toast';
 import { useSettingsStore } from '@/store/settingsStore';
 import { LogoBadge } from '@/components/shared/LogoBadge';
+import { hydrateFromSupabase } from '@/lib/sync';
 
 const floatingIcons = Array.from({ length: 12 }).map((_, i) => ({
   id: i,
@@ -34,6 +35,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
   const [shake, setShake] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   // Admin Account Creation state
   const [isRegistering, setIsRegistering] = useState(false);
@@ -42,32 +44,49 @@ export default function Login() {
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
 
-  const handleLogin = (e: React.FormEvent) => {
+  // Signs in against Supabase Auth, then loads every module from the database.
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    const ok = login({ identifier, password });
-    if (ok) {
-      toast.success(t('welcome') + ' 👋');
-      navigate('/dashboard');
-    } else {
-      setShake(true);
-      setTimeout(() => setShake(false), 500);
-      toast.error(t('invalidCredentials'));
+    setBusy(true);
+    try {
+      const ok = await login({ identifier, password });
+      if (ok) {
+        await hydrateFromSupabase();
+        toast.success(t('welcome') + ' 👋');
+        navigate('/dashboard');
+      } else {
+        setShake(true);
+        setTimeout(() => setShake(false), 500);
+        toast.error(t('invalidCredentials'));
+      }
+    } finally {
+      setBusy(false);
     }
   };
 
-  const handleDemoLogin = () => {
-    loginAsDemo();
-    toast.success('Bienvenue ! Connecté en tant que Compte Démo Administrateur 🚀');
-    navigate('/dashboard');
+  const handleDemoLogin = async () => {
+    setBusy(true);
+    try {
+      await loginAsDemo();
+      await hydrateFromSupabase();
+      toast.success('Bienvenue ! Connecté en tant que Compte Démo Administrateur 🚀');
+      navigate('/dashboard');
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const handleCreateAdmin = (e: React.FormEvent) => {
+  const handleCreateAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!regName || !regUsername || !regEmail || !regPassword) {
       toast.error('Veuillez remplir tous les champs');
       return;
     }
-    const res = createAccount({
+    if (regPassword.length < 6) {
+      toast.error('Le mot de passe doit contenir au moins 6 caractères');
+      return;
+    }
+    const res = await createAccount({
       name: regName,
       username: regUsername,
       email: regEmail,
@@ -177,8 +196,14 @@ export default function Login() {
                 </button>
               }
             />
-            <Button type="submit" variant="gold" size="lg" className="w-full font-bold shadow-gold">
-              {t('login')}
+            <Button
+              type="submit"
+              variant="gold"
+              size="lg"
+              disabled={busy}
+              className="w-full font-bold shadow-gold disabled:opacity-70"
+            >
+              {busy ? 'Connexion…' : t('login')}
             </Button>
           </form>
 
@@ -188,7 +213,8 @@ export default function Login() {
               type="button"
               variant="liver"
               size="lg"
-              className="w-full font-bold flex items-center justify-center gap-2 shadow-md border border-amber-500/40 hover:scale-[1.01]"
+              disabled={busy}
+              className="w-full font-bold flex items-center justify-center gap-2 shadow-md border border-amber-500/40 hover:scale-[1.01] disabled:opacity-70"
               onClick={handleDemoLogin}
             >
               <Sparkles size={18} className="text-amber-400 animate-pulse" />

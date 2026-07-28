@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware';
 import type { ComptoirItem, Destruction } from '@/types';
 import { uid } from '@/lib/utils';
 import { getCurrentUsername } from './authStore';
+import { rpc } from '@/lib/db';
+import { push } from '@/lib/persist';
 
 export const INITIAL_COMPTOIR_ITEMS: ComptoirItem[] = [
   {
@@ -89,11 +91,23 @@ export const useComptoirStore = create<ComptoirState>()(
           ),
           destructions: [destruction, ...get().destructions],
         });
+
+        push(
+          'comptoir.destroy',
+          () => rpc.destroyComptoirItem(comptoirId, qty, reason),
+          (row: { id: string }) =>
+            set({
+              destructions: get().destructions.map((d) =>
+                d.id === destruction.id ? { ...d, id: row.id } : d
+              ),
+            })
+        );
       },
 
       recoverDestruction: (destructionId) => {
         const dest = get().destructions.find((d) => d.id === destructionId);
         if (!dest) return;
+        push('comptoir.recoverDestruction', () => rpc.recoverDestruction(destructionId));
         const itemExists = get().items.some((it) => it.id === dest.comptoirId);
         set({
           items: itemExists
@@ -116,12 +130,14 @@ export const useComptoirStore = create<ComptoirState>()(
       },
 
       deleteDestructions: (destructionIds) => {
+        push('comptoir.deleteDestructions', () => rpc.deleteDestructions(destructionIds));
         set({
           destructions: get().destructions.filter((d) => !destructionIds.includes(d.id)),
         });
       },
 
       recoverDestructions: (destructionIds) => {
+        push('comptoir.recoverDestructions', () => rpc.recoverDestructions(destructionIds));
         let currentItems = [...get().items];
         destructionIds.forEach((id) => {
           const dest = get().destructions.find((d) => d.id === id);

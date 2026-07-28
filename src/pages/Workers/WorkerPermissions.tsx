@@ -4,6 +4,7 @@ import { Checkbox } from '@/components/ui/Switch';
 import { useWorkerStore } from '@/store/workerStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { toast } from '@/components/ui/Toast';
+import { rpc } from '@/lib/db';
 import { PERMISSION_MODULES, type Worker, type WorkerPermissions as PermsType } from '@/types';
 import type { TranslationKey } from '@/lib/i18n';
 
@@ -51,9 +52,17 @@ export function WorkerPermissions({ worker, onClose }: WorkerPermissionsProps) {
     });
   };
 
-  const handleSave = () => {
+  // Saves locally then pushes the matrix to Supabase (workers + profiles rows),
+  // so the worker gets the new rights on his next login.
+  const handleSave = async () => {
     setPermissions(worker.id, perms);
-    toast.success('Permissions enregistrées');
+    try {
+      await rpc.setWorkerPermissions(worker.id, perms);
+      toast.success('Permissions enregistrées');
+    } catch (e) {
+      console.warn('[workers] permissions non synchronisées:', (e as Error).message);
+      toast.success('Permissions enregistrées localement');
+    }
     onClose();
   };
 

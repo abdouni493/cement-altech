@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { StoreSettings } from '@/types';
+import { db } from '@/lib/db';
+import { push } from '@/lib/persist';
 
 interface SettingsState {
   settings: StoreSettings;
@@ -25,7 +27,11 @@ export const useSettingsStore = create<SettingsState>()(
   persist(
     (set, get) => ({
       settings: defaultSettings,
-      updateSettings: (data) => set({ settings: { ...get().settings, ...data } }),
+      updateSettings: (data) => {
+        const next = { ...get().settings, ...data };
+        set({ settings: next });
+        push('settings.save', () => db.settings.save(next));
+      },
     }),
     { name: 'cement-settings' }
   )

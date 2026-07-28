@@ -9,6 +9,7 @@ import { useWorkerStore } from '@/store/workerStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { toast } from '@/components/ui/Toast';
 import { todayISO } from '@/lib/utils';
+import { db, rpc } from '@/lib/db';
 import type { Worker } from '@/types';
 
 interface CreateWorkerProps {
@@ -38,6 +39,7 @@ export function CreateWorker({ initial, onClose }: CreateWorkerProps) {
   const [roleModal, setRoleModal] = useState(false);
   const [roleName, setRoleName] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
 
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -48,21 +50,59 @@ export function CreateWorker({ initial, onClose }: CreateWorkerProps) {
     setRoleName(''); setRoleModal(false);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     const errs: Record<string, string> = {};
     if (!form.fullName.trim()) errs.fullName = 'Nom requis';
     if (!form.phone.trim()) errs.phone = 'Téléphone requis';
     if (!form.roleId) errs.roleId = 'Rôle requis';
+    if (form.hasAccount) {
+      if (!form.email.trim()) errs.email = 'Email requis pour le compte';
+      if (!initial && form.password.length < 6) errs.password = 'Mot de passe : 6 caractères minimum';
+    }
     setErrors(errs);
     if (Object.keys(errs).length) return;
 
+    setSaving(true);
+    const payload: Partial<Worker> = {
+      ...form,
+      paymentType: form.paymentType as 'monthly' | 'daily',
+      paymentAmount: Number(form.paymentAmount),
+    };
+
+    // 1. persist the employee row in Supabase (falls back to local-only offline)
+    let workerId = initial?.id;
+    try {
+      if (initial) {
+        await db.workers.update(initial.id, payload);
+      } else {
+        const row = await db.workers.create(payload);
+        workerId = row.id;
+      }
+    } catch (e) {
+      console.warn('[workers] enregistrement Supabase impossible:', (e as Error).message);
+    }
+
+    // 2. mirror it in the local store
     if (initial) {
-      updateWorker(initial.id, { ...form, paymentType: form.paymentType as 'monthly' | 'daily', paymentAmount: Number(form.paymentAmount) });
+      updateWorker(initial.id, payload);
       toast.success('Employé modifié');
     } else {
-      addWorker({ ...form, paymentType: form.paymentType as 'monthly' | 'daily', paymentAmount: Number(form.paymentAmount) });
+      const created = addWorker({ ...(payload as Worker), id: workerId });
+      workerId = created.id;
       toast.success('Employé créé');
     }
+
+    // 3. create the real login account in the Supabase authentication table
+    if (form.hasAccount && form.email.trim() && form.password && workerId) {
+      try {
+        await rpc.createWorkerAccount(workerId, form.email.trim(), form.password, form.username.trim() || undefined);
+        toast.success(`Compte de connexion créé pour ${form.fullName}`);
+      } catch (e) {
+        toast.error(`Compte non créé : ${(e as Error).message}`);
+      }
+    }
+
+    setSaving(false);
     onClose();
   };
 
@@ -101,17 +141,25 @@ export function CreateWorker({ initial, onClose }: CreateWorkerProps) {
         <Switch checked={form.hasAccount} onChange={(v) => set('hasAccount', v)} label={t('accountActive')} />
         {form.hasAccount && (
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <Input label={t('email')} value={form.email} onChange={(e) => set('email', e.target.value)} />
+            <Input label={`${t('email')} *`} value={form.email} onChange={(e) => set('email', e.target.value)} error={errors.email} />
             <Input label={t('username')} value={form.username} onChange={(e) => set('username', e.target.value)} />
-            <Input label={t('password')} type="text" value={form.password} onChange={(e) => set('password', e.target.value)} />
+            <Input label={`${t('password')} *`} type="text" value={form.password} onChange={(e) => set('password', e.target.value)} error={errors.password} />
           </div>
         )}
-        {form.hasAccount && <p className="text-xs text-text-muted">Le compte est créé sans permissions — configurez-les via le bouton « Permissions ».</p>}
+        {form.hasAccount && (
+          <p className="text-xs text-text-muted">
+            Le compte de connexion est enregistré dans la table d’authentification Supabase :
+            l’employé pourra se connecter avec son email <em>ou</em> son nom d’utilisateur.
+            Il est créé sans permissions — configurez-les via le bouton « Permissions ».
+          </p>
+        )}
       </section>
 
       <div className="flex justify-end gap-3">
-        <Button variant="secondary" onClick={onClose}>{t('cancel')}</Button>
-        <Button variant="gold" onClick={handleSubmit}>{t('save')}</Button>
+        <Button variant="secondary" onClick={onClose} disabled={saving}>{t('cancel')}</Button>
+        <Button variant="gold" onClick={handleSubmit} disabled={saving}>
+          {saving ? 'Enregistrement…' : t('save')}
+        </Button>
       </div>
 
       <Modal open={roleModal} onClose={() => setRoleModal(false)} title={t('newRole')} size="sm">

@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware';
 import type { CaisseReport, CaisseReportType } from '@/types';
 import { uid, todayISO, nowTime } from '@/lib/utils';
 import { getCurrentUsername } from './authStore';
+import { db, rpc } from '@/lib/db';
+import { push, swapId } from '@/lib/persist';
 
 interface CaisseReportState {
   reports: CaisseReport[];
@@ -37,13 +39,24 @@ export const useCaisseReportStore = create<CaisseReportState>()(
           createdBy: getCurrentUsername(),
         };
         set({ reports: [report, ...get().reports] });
+        push(
+          'caisseReports.create',
+          () =>
+            rpc.createCaisseReport(
+              report.declaredAmount, report.description, type, report.date, report.endDate
+            ),
+          (row: { id: string }) => set({ reports: swapId(get().reports, report.id, row.id) })
+        );
         return report;
       },
 
       updateReport: (id, data) =>
         set({ reports: get().reports.map((r) => (r.id === id ? { ...r, ...data } : r)) }),
 
-      deleteReport: (id) => set({ reports: get().reports.filter((r) => r.id !== id) }),
+      deleteReport: (id) => {
+        set({ reports: get().reports.filter((r) => r.id !== id) });
+        push('caisseReports.delete', () => db.caisseReports.remove(id));
+      },
     }),
     { name: 'labochimie-caisse-reports' }
   )

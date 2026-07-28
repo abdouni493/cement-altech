@@ -5,6 +5,8 @@ import { uid } from '@/lib/utils';
 import { useStockStore } from './stockStore';
 import { useComptoirStore } from './comptoirStore';
 import { getCurrentUsername } from './authStore';
+import { db, rpc } from '@/lib/db';
+import { push, swapId } from '@/lib/persist';
 
 export const INITIAL_PRODUCTIONS: Production[] = [
   {
@@ -98,6 +100,41 @@ export const useProductionStore = create<ProductionState>()(
           .forEach((u) => stock.consumeStock(u.productId, u.quantityUsed));
         
         set({ productions: [production, ...get().productions] });
+
+        // create_production() writes the batch, its ingredients and consumes the stock
+        push(
+          'productions.create',
+          () =>
+            rpc.createProduction({
+              name, description, date, hour,
+              category_id: categoryId ?? null,
+              category_name: categoryName ?? null,
+              output_quantity: outputQuantity,
+              unit_price: unitPrice,
+              sell_by_unit: sellByUnit ?? false,
+              sell_unit: sellUnit ?? null,
+              has_loss: hasLoss ?? false,
+              expected_quantity: expectedQuantity ?? null,
+              loss_quantity: lossQuantity ?? 0,
+              loss_description: lossDescription ?? null,
+              loss_value: lossValue ?? 0,
+              used_products: usedProducts.map((u) => ({
+                product_id: u.productId,
+                product_name: u.productName,
+                quantity_used: u.quantityUsed,
+                source_type: u.sourceType ?? 'stock',
+                unit: u.unit ?? null,
+                unit_cost: u.unitCost ?? 0,
+                line_cost: u.lineCost ?? 0,
+              })),
+            }),
+          (row: { id: string }) =>
+            set({
+              productions: get().productions.map((p) =>
+                p.id === production.id ? { ...p, id: row.id } : p
+              ),
+            })
+        );
         return production;
       },
 
@@ -116,8 +153,10 @@ export const useProductionStore = create<ProductionState>()(
           }),
         }),
 
-      deleteProduction: (id) =>
-        set({ productions: get().productions.filter((p) => p.id !== id) }),
+      deleteProduction: (id) => {
+        set({ productions: get().productions.filter((p) => p.id !== id) });
+        push('productions.delete', () => db.productions.remove(id));
+      },
 
       transferToComptoir: (id, qty) => {
         const prod = get().productions.find((p) => p.id === id);
@@ -132,6 +171,8 @@ export const useProductionStore = create<ProductionState>()(
             p.id === id ? { ...p, sentToComptoir: newSent } : p
           ),
         });
+        push('productions.transferToComptoir', () => rpc.transferToComptoir(prod.id, qty));
+
         useComptoirStore.getState().addComptoirItem({
           productionId: prod.id,
           productName: prod.name,
@@ -152,10 +193,16 @@ export const useProductionStore = create<ProductionState>()(
         if (existing) return existing;
         const c: Category = { id: uid('pcat'), name };
         set({ categories: [...get().categories, c] });
+        push('productionCategories.create', () => db.productionCategories.create(name), (row) =>
+          set({ categories: swapId(get().categories, c.id, row.id) })
+        );
         return c;
       },
 
-      deleteCategory: (id) => set({ categories: get().categories.filter((c) => c.id !== id) }),
+      deleteCategory: (id) => {
+        set({ categories: get().categories.filter((c) => c.id !== id) });
+        push('productionCategories.delete', () => db.productionCategories.remove(id));
+      },
     }),
     {
       name: 'labochimie-productions',

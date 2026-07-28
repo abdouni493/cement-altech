@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware';
 import type { Product, Marque, Category, Unit } from '@/types';
 import { uid } from '@/lib/utils';
 import { getCurrentUsername } from './authStore';
+import { db } from '@/lib/db';
+import { push, swapId } from '@/lib/persist';
 
 const DEFAULT_UNITS: Unit[] = [
   { id: 'unit-m3', name: 'm³' },
@@ -192,13 +194,22 @@ export const useStockStore = create<StockState>()(
           createdBy: p.createdBy || getCurrentUsername(),
         };
         set({ products: [product, ...get().products] });
+        push('products.create', () => db.products.create(p), (row) =>
+          set({ products: swapId(get().products, product.id, row.id) })
+        );
         return product;
       },
 
-      updateProduct: (id, data) =>
-        set({ products: get().products.map((p) => (p.id === id ? { ...p, ...data } : p)) }),
+      updateProduct: (id, data) => {
+        set({ products: get().products.map((p) => (p.id === id ? { ...p, ...data } : p)) });
+        const merged = get().products.find((p) => p.id === id);
+        if (merged) push('products.update', () => db.products.update(id, merged));
+      },
 
-      deleteProduct: (id) => set({ products: get().products.filter((p) => p.id !== id) }),
+      deleteProduct: (id) => {
+        set({ products: get().products.filter((p) => p.id !== id) });
+        push('products.delete', () => db.products.remove(id));
+      },
 
       applyPurchaseToStock: (productId, qty, minAlert, purchasePrice, expirationDate, unitInfo) =>
         set({
@@ -231,28 +242,46 @@ export const useStockStore = create<StockState>()(
       addMarque: (name) => {
         const m: Marque = { id: uid('mq'), name };
         set({ marques: [...get().marques, m] });
+        push('marques.create', () => db.marques.create(name), (row) =>
+          set({ marques: swapId(get().marques, m.id, row.id) })
+        );
         return m;
       },
 
       addCategory: (name) => {
         const c: Category = { id: uid('cat'), name };
         set({ categories: [...get().categories, c] });
+        push('categories.create', () => db.categories.create(name), (row) =>
+          set({ categories: swapId(get().categories, c.id, row.id) })
+        );
         return c;
       },
 
-      deleteMarque: (id) => set({ marques: get().marques.filter((m) => m.id !== id) }),
+      deleteMarque: (id) => {
+        set({ marques: get().marques.filter((m) => m.id !== id) });
+        push('marques.delete', () => db.marques.remove(id));
+      },
 
-      deleteCategory: (id) => set({ categories: get().categories.filter((c) => c.id !== id) }),
+      deleteCategory: (id) => {
+        set({ categories: get().categories.filter((c) => c.id !== id) });
+        push('categories.delete', () => db.categories.remove(id));
+      },
 
       addUnit: (name) => {
         const existing = get().units.find((u) => u.name.toLowerCase() === name.toLowerCase());
         if (existing) return existing;
         const u: Unit = { id: uid('unit'), name };
         set({ units: [...get().units, u] });
+        push('units.create', () => db.units.create(name), (row) =>
+          set({ units: swapId(get().units, u.id, row.id) })
+        );
         return u;
       },
 
-      deleteUnit: (id) => set({ units: get().units.filter((u) => u.id !== id) }),
+      deleteUnit: (id) => {
+        set({ units: get().units.filter((u) => u.id !== id) });
+        push('units.delete', () => db.units.remove(id));
+      },
     }),
     {
       name: 'labochimie-stock',

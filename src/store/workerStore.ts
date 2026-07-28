@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Worker, Role, Acompte, Absence, WorkerPaymentRecord, WorkerPermissions } from '@/types';
 import { uid } from '@/lib/utils';
+import { db, rpc } from '@/lib/db';
+import { push, swapId } from '@/lib/persist';
 
 export const INITIAL_ROLES: Role[] = [
   { id: 'role-chef', name: 'Chef de Chantier & Centralier' },
@@ -110,7 +112,8 @@ export const useWorkerStore = create<WorkerState>()(
           absences: [],
           payments: [],
           ...w,
-          id: uid('wrk'),
+          // keep the Supabase uuid when the row was created in the database first
+          id: w.id || uid('wrk'),
         };
         set({ workers: [...get().workers, worker] });
         return worker;
@@ -119,17 +122,26 @@ export const useWorkerStore = create<WorkerState>()(
       updateWorker: (id, data) =>
         set({ workers: get().workers.map((w) => (w.id === id ? { ...w, ...data } : w)) }),
 
-      deleteWorker: (id) => set({ workers: get().workers.filter((w) => w.id !== id) }),
+      deleteWorker: (id) => {
+        set({ workers: get().workers.filter((w) => w.id !== id) });
+        push('workers.delete', () => db.workers.remove(id));
+      },
 
       addRole: (name) => {
         const existing = get().roles.find((r) => r.name.toLowerCase() === name.toLowerCase());
         if (existing) return existing;
         const role: Role = { id: uid('role'), name };
         set({ roles: [...get().roles, role] });
+        push('roles.create', () => db.roles.create(name), (row) =>
+          set({ roles: swapId(get().roles, role.id, row.id) })
+        );
         return role;
       },
 
-      deleteRole: (id) => set({ roles: get().roles.filter((r) => r.id !== id) }),
+      deleteRole: (id) => {
+        set({ roles: get().roles.filter((r) => r.id !== id) });
+        push('roles.delete', () => db.roles.remove(id));
+      },
 
       setPermissions: (workerId, permissions) =>
         set({
@@ -143,6 +155,10 @@ export const useWorkerStore = create<WorkerState>()(
             w.id === workerId ? { ...w, acomptes: [a, ...(w.acomptes || [])] } : w
           ),
         });
+        // books the matching caisse withdrawal (trg_worker_acompte_caisse)
+        push('workers.acompte', () =>
+          rpc.addWorkerAcompte(workerId, a.amount, a.date, a.description)
+        );
         return a;
       },
 
@@ -177,6 +193,10 @@ export const useWorkerStore = create<WorkerState>()(
             w.id === workerId ? { ...w, payments: [pay, ...(w.payments || [])] } : w
           ),
         });
+        // books the matching caisse withdrawal (trg_worker_payment_caisse)
+        push('workers.payment', () =>
+          rpc.payWorkerSalary(workerId, pay.amount, pay.period, pay.date, pay.description)
+        );
         return pay;
       },
 

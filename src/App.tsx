@@ -25,15 +25,43 @@ import Reports from '@/pages/Reports';
 import SettingsPage from '@/pages/Settings';
 
 import { useThemeStore, applyTheme } from '@/store/themeStore';
+import { hydrateFromSupabase } from '@/lib/sync';
 
 function PrivateRoute({ children }: { children: ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const isBootstrapping = useAuthStore((s) => s.isBootstrapping);
+  if (isBootstrapping) return <BootScreen />;
   return isAuthenticated ? <>{children}</> : <Navigate to="/login" replace />;
+}
+
+function BootScreen() {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-gradient-hero">
+      <div className="h-12 w-12 rounded-full border-4 border-gold/30 border-t-gold animate-spin" />
+      <p className="text-sm text-text-muted">Connexion à la base de données…</p>
+    </div>
+  );
 }
 
 export default function App() {
   const language = useAuthStore((s) => s.language);
   const theme = useThemeStore((s) => s.theme);
+  const restoreSession = useAuthStore((s) => s.restoreSession);
+
+  // Restores the Supabase session then reloads every module from the database.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await restoreSession();
+      if (cancelled) return;
+      if (useAuthStore.getState().isAuthenticated) {
+        await hydrateFromSupabase();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [restoreSession]);
 
   useEffect(() => {
     document.documentElement.setAttribute('dir', language === 'ar' ? 'rtl' : 'ltr');
