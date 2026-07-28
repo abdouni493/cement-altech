@@ -1,0 +1,222 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+
+:root,
+html.dark {
+  /* Premium Cement Store Dark Palette: Obsidian Black, Gold & Silver */
+  --color-cream: #0c0a09;
+  --color-gold: #eab308;
+  --color-gold-light: #fde047;
+  --color-gold-dark: #ca8a04;
+  --color-rose: #f43f5e;
+  --color-rose-deep: #e11d48;
+  --color-lavender: #a855f7;
+  --color-lavender-deep: #9333ea;
+  --color-chocolate: #1c1917;
+  --color-caramel: #f59e0b;
+  --color-pistachio: #10b981;
+  --color-vanilla: #18181b;
+
+  /* Signature Metallic & Dark Gradients */
+  --gradient-hero: linear-gradient(135deg, #1c1917 0%, #0c0a09 50%, #18181b 100%);
+  --gradient-sidebar: linear-gradient(180deg, #18181b 0%, #09090b 100%);
+  --gradient-card: linear-gradient(145deg, #1f1f23 0%, #121215 100%);
+  --gradient-button: linear-gradient(135deg, #fde047 0%, #eab308 50%, #ca8a04 100%);
+  --gradient-rose: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+  --gradient-lavender: linear-gradient(135deg, #c084fc 0%, #a855f7 100%);
+  --gradient-mint: linear-gradient(135deg, #34d399 0%, #10b981 100%);
+  --gradient-glass: linear-gradient(135deg, rgba(24, 24, 27, 0.85) 0%, rgba(12, 10, 9, 0.75) 100%);
+
+  /* Text colors */
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --text-light: #ffffff;
+
+  /* Metallic & Gold Shadows */
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(234, 179, 8, 0.05);
+  --shadow-hover: 0 10px 34px rgba(234, 179, 8, 0.18), 0 2px 8px rgba(0, 0, 0, 0.6);
+  --shadow-gold: 0 6px 22px rgba(234, 179, 8, 0.35);
+
+  /* Component surface colors for dark mode */
+  --surface-dropdown: #181820;
+  --surface-input: #16151a;
+  --surface-input-focus: #1d1c23;
+  --border-input: #54453b;
+  --logo-inner-bg: linear-gradient(to bottom right, #1c1917, #09090b);
+  --logo-inner-solid: #000000;
+}
+
+html.light {
+  /* Premium Cement Store Light Palette: Ivory White & Metallic Amber/Gold */
+  --color-cream: #f8fafc;
+  --color-gold: #d97706;
+  --color-gold-light: #fbbf24;
+  --color-gold-dark: #b45309;
+  --color-rose: #f43f5e;
+  --color-rose-deep: #e11d48;
+  --color-lavender: #9333ea;
+  --color-lavender-deep: #7c3aed;
+  --color-chocolate: #ffffff;
+  --color-caramel: #d97706;
+  --color-pistachio: #059669;
+  --color-vanilla: #f1f5f9;
+
+  /* Light Gradients */
+  --gradient-hero: linear-gradient(135deg, #fef3c7 0%, #f8fafc 50%, #ffffff 100%);
+  --gradient-sidebar: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
+  --gradient-card: linear-gradient(145deg, #ffffff 0%, #f8fafc 100%);
+  --gradient-button: linear-gradient(135deg, #fbbf24 0%, #d97706 50%, #b45309 100%);
+  --gradient-rose: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
+  --gradient-lavender: linear-gradient(135deg, #c084fc 0%, #9333ea 100%);
+  --gradient-mint: linear-gradient(135deg, #34d399 0%, #059669 100%);
+  --gradient-glass: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.90) 100%);
+
+  /* Text colors */
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-light: #ffffff;
+
+  /* Light Shadows */
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-hover: 0 10px 30px rgba(217, 119, 6, 0.15), 0 2px 6px rgba(0, 0, 0, 0.08);
+  --shadow-gold: 0 6px 20px rgba(217, 119, 6, 0.25);
+
+  /* Component surface colors for light mode */
+  --surface-dropdown: #ffffff;
+  --surface-input: #faf8f5;
+  --surface-input-focus: #ffffff;
+  --border-input: #d7cac0;
+  --logo-inner-bg: linear-gradient(to bottom right, #f8f7f4, #ffffff);
+  --logo-inner-solid: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background-color: var(--color-cream);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Arabic font when RTL */
+html[dir='rtl'] body {
+  font-family: 'Cairo', 'Inter', sans-serif;
+}
+
+.font-display {
+  font-family: 'Playfair Display', serif;
+}
+html[dir='rtl'] .font-display {
+  font-family: 'Cairo', serif;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+html.dark ::-webkit-scrollbar-track {
+  background: #09090b;
+}
+html.light ::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(234, 179, 8, 0.3);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(234, 179, 8, 0.6);
+}
+
+/* Utility classes */
+.glass {
+  background: var(--gradient-glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(234, 179, 8, 0.2);
+}
+
+.text-gradient-gold {
+  background: var(--gradient-button);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Animated Gold Metallic Button */
+.btn-gold-animated {
+  background: var(--gradient-button);
+  background-size: 200% 200%;
+  transition: all 0.3s ease;
+}
+.btn-gold-animated:hover {
+  background-position: right center;
+  box-shadow: var(--shadow-gold);
+}
+
+/* Number animation helper */
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-12px) rotate(4deg);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, rgba(234, 179, 8, 0.05) 25%, rgba(234, 179, 8, 0.2) 50%, rgba(234, 179, 8, 0.05) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Print styles */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
