@@ -35,11 +35,32 @@ export const toast = {
   info: (msg: string) => useToastStore.getState().push(msg, 'info'),
 };
 
+// Colors come from CSS variables so toasts adapt to light/dark mode
 const config = {
-  success: { icon: CheckCircle2, color: '#7A9E7E', bg: '#F0F7F1' },
-  error: { icon: XCircle, color: '#C4687A', bg: '#FBEEF2' },
-  warning: { icon: AlertTriangle, color: '#D4854A', bg: '#FCF3EA' },
-  info: { icon: Info, color: '#C9A84C', bg: '#FBF6E9' },
+  success: {
+    icon: CheckCircle2,
+    color: 'var(--toast-success-fg)',
+    bg: 'var(--toast-success-bg)',
+    border: 'var(--toast-success-border)',
+  },
+  error: {
+    icon: XCircle,
+    color: 'var(--toast-error-fg)',
+    bg: 'var(--toast-error-bg)',
+    border: 'var(--toast-error-border)',
+  },
+  warning: {
+    icon: AlertTriangle,
+    color: 'var(--toast-warning-fg)',
+    bg: 'var(--toast-warning-bg)',
+    border: 'var(--toast-warning-border)',
+  },
+  info: {
+    icon: Info,
+    color: 'var(--toast-info-fg)',
+    bg: 'var(--toast-info-bg)',
+    border: 'var(--toast-info-border)',
+  },
 };
 
 export function ToastViewport() {
@@ -61,7 +82,7 @@ export function ToastViewport() {
               exit={{ opacity: 0, x: 80, scale: 0.9 }}
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
               className="pointer-events-auto flex items-center gap-3 rounded-xl px-4 py-3 shadow-hover border"
-              style={{ background: c.bg, borderColor: c.color + '40' }}
+              style={{ background: c.bg, borderColor: c.border }}
             >
               <Icon size={22} style={{ color: c.color }} className="shrink-0" />
               <span className="text-sm font-medium text-text-primary flex-1">{t.message}</span>

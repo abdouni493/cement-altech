@@ -39,6 +39,20 @@ html.dark {
   --shadow-hover: 0 10px 34px rgba(234, 179, 8, 0.18), 0 2px 8px rgba(0, 0, 0, 0.6);
   --shadow-gold: 0 6px 22px rgba(234, 179, 8, 0.35);
 
+  /* Toast / notification colors for dark mode */
+  --toast-success-fg: #4ade80;
+  --toast-success-bg: #111f18;
+  --toast-success-border: rgba(74, 222, 128, 0.35);
+  --toast-error-fg: #fb7185;
+  --toast-error-bg: #241318;
+  --toast-error-border: rgba(251, 113, 133, 0.35);
+  --toast-warning-fg: #fb923c;
+  --toast-warning-bg: #241a10;
+  --toast-warning-border: rgba(251, 146, 60, 0.35);
+  --toast-info-fg: #fcd34d;
+  --toast-info-bg: #221d0e;
+  --toast-info-border: rgba(252, 211, 77, 0.35);
+
   /* Component surface colors for dark mode */
   --surface-dropdown: #181820;
   --surface-input: #16151a;
@@ -83,6 +97,20 @@ html.light {
   --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
   --shadow-hover: 0 10px 30px rgba(217, 119, 6, 0.15), 0 2px 6px rgba(0, 0, 0, 0.08);
   --shadow-gold: 0 6px 20px rgba(217, 119, 6, 0.25);
+
+  /* Toast / notification colors for light mode */
+  --toast-success-fg: #7a9e7e;
+  --toast-success-bg: #f0f7f1;
+  --toast-success-border: rgba(122, 158, 126, 0.4);
+  --toast-error-fg: #c4687a;
+  --toast-error-bg: #fbeef2;
+  --toast-error-border: rgba(196, 104, 122, 0.4);
+  --toast-warning-fg: #d4854a;
+  --toast-warning-bg: #fcf3ea;
+  --toast-warning-border: rgba(212, 133, 74, 0.4);
+  --toast-info-fg: #c9a84c;
+  --toast-info-bg: #fbf6e9;
+  --toast-info-border: rgba(201, 168, 76, 0.4);
 
   /* Component surface colors for light mode */
   --surface-dropdown: #ffffff;
