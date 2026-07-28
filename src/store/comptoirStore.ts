@@ -6,23 +6,6 @@ import { getCurrentUsername } from './authStore';
 import { rpc } from '@/lib/db';
 import { push } from '@/lib/persist';
 
-export const INITIAL_COMPTOIR_ITEMS: ComptoirItem[] = [
-  {
-    id: 'comp-1',
-    productionId: 'prod-batch-1',
-    productName: 'Béton Prêt à l\'Emploi B25 (m³)',
-    description: 'Béton B25 haute résistance prêt à la livraison',
-    quantity: 30,
-    unitPrice: 9800,
-    date: '2026-07-21',
-    categoryId: 'cat-2',
-    categoryName: 'Béton & Mortier',
-    sellByUnit: true,
-    unit: 'm³',
-    createdBy: 'admin',
-  },
-];
-
 interface ComptoirState {
   items: ComptoirItem[];
   destructions: Destruction[];
@@ -38,7 +21,7 @@ interface ComptoirState {
 export const useComptoirStore = create<ComptoirState>()(
   persist(
     (set, get) => ({
-      items: INITIAL_COMPTOIR_ITEMS,
+      items: [],
       destructions: [],
 
       addComptoirItem: (data) => {
@@ -165,16 +148,6 @@ export const useComptoirStore = create<ComptoirState>()(
         });
       },
     }),
-    {
-      name: 'labochimie-comptoir',
-      merge: (persisted, current) => {
-        const p = (persisted ?? {}) as Partial<ComptoirState>;
-        return {
-          ...current,
-          ...p,
-          items: p.items && p.items.length ? p.items : INITIAL_COMPTOIR_ITEMS,
-        };
-      },
-    }
+    { name: 'altech-comptoir' }
   )
 );

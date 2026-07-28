@@ -6,20 +6,6 @@ import { getCurrentUsername } from './authStore';
 import { db, rpc } from '@/lib/db';
 import { push, swapId } from '@/lib/persist';
 
-export const INITIAL_CAISSE_CATEGORIES: Category[] = [
-  { id: 'caisscat-1', name: 'Vente' },
-  { id: 'caisscat-2', name: 'Commande' },
-  { id: 'caisscat-3', name: 'Dépense' },
-  { id: 'caisscat-4', name: 'Achat' },
-];
-
-export const INITIAL_CAISSE_TRANSACTIONS: CaisseTransaction[] = [
-  { id: 'ctx-1', type: 'deposit', categoryName: 'Vente', amount: 50000, description: 'Règlement Vente VNT-2026-001 (Benali BTP)', date: '2026-07-20', createdAt: '2026-07-20T10:15:00.000Z', createdBy: 'admin' },
-  { id: 'ctx-2', type: 'deposit', categoryName: 'Vente', amount: 145000, description: 'Règlement Vente VNT-2026-002 (El Badr)', date: '2026-07-22', createdAt: '2026-07-22T11:30:00.000Z', createdBy: 'admin' },
-  { id: 'ctx-3', type: 'withdrawal', categoryName: 'Dépense', amount: 12000, description: 'Frais de transport & carburant malaxeur', date: '2026-07-23', createdAt: '2026-07-23T14:00:00.000Z', createdBy: 'admin' },
-  { id: 'ctx-4', type: 'deposit', categoryName: 'Commande', amount: 100000, description: 'Acompte commande CMD-2026-001', date: '2026-07-24', createdAt: '2026-07-24T10:05:00.000Z', createdBy: 'admin' },
-];
-
 interface CaisseState {
   transactions: CaisseTransaction[];
   categories: Category[];
@@ -35,9 +21,9 @@ interface CaisseState {
 export const useCaisseStore = create<CaisseState>()(
   persist(
     (set, get) => ({
-      transactions: INITIAL_CAISSE_TRANSACTIONS,
-      categories: INITIAL_CAISSE_CATEGORIES,
-      initialBalance: 250000,
+      transactions: [],
+      categories: [],
+      initialBalance: 0,
       setInitialBalance: (b) => {
         set({ initialBalance: b });
         push('caisse.setInitialBalance', () => db.caisse.setInitialBalance(b));
@@ -86,16 +72,10 @@ export const useCaisseStore = create<CaisseState>()(
       },
     }),
     {
-      name: 'labochimie-caisse',
+      name: 'altech-caisse',
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<CaisseState>;
-        return {
-          ...current,
-          ...p,
-          transactions: p.transactions && p.transactions.length ? p.transactions : INITIAL_CAISSE_TRANSACTIONS,
-          categories: p.categories && p.categories.length ? p.categories : INITIAL_CAISSE_CATEGORIES,
-          initialBalance: p.initialBalance !== undefined ? p.initialBalance : 250000,
-        };
+        return { ...current, ...p, initialBalance: p.initialBalance ?? 0 };
       },
     }
   )

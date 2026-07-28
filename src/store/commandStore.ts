@@ -38,48 +38,6 @@ export interface Command {
   createdBy: string;
 }
 
-export const INITIAL_COMMANDS: Command[] = [
-  {
-    id: 'cmd-1',
-    reference: 'CMD-2026-001',
-    createdAt: '2026-07-24T10:00:00.000Z',
-    receiveDate: '2026-07-30',
-    receiveHour: '09',
-    receiveMinute: '00',
-    clientId: 'cli-2',
-    clientName: 'Sarl El Badr Construction',
-    items: [
-      { productId: 'prod-3', productName: 'Béton Prêt à l\'Emploi B25 (m³)', quantity: 30, unitPrice: 9800, totalPrice: 294000 },
-    ],
-    totalAmount: 294000,
-    advancePaid: 100000,
-    paidAmount: 100000,
-    restAmount: 194000,
-    status: 'pending',
-    createdBy: 'admin',
-  },
-  {
-    id: 'cmd-2',
-    reference: 'CMD-2026-002',
-    createdAt: '2026-07-26T14:30:00.000Z',
-    receiveDate: '2026-08-02',
-    receiveHour: '11',
-    receiveMinute: '30',
-    clientId: 'cli-4',
-    clientName: 'Groupe Bâtiment Ouest',
-    items: [
-      { productId: 'prod-1', productName: 'Ciment Portland CPJ 42.5 (Sac 50kg)', quantity: 100, unitPrice: 850, totalPrice: 85000 },
-      { productId: 'prod-5', productName: 'Gravier Concassé 3/8 (Tonne)', quantity: 20, unitPrice: 2100, totalPrice: 42000 },
-    ],
-    totalAmount: 127000,
-    advancePaid: 127000,
-    paidAmount: 127000,
-    restAmount: 0,
-    status: 'finalised',
-    createdBy: 'admin',
-  },
-];
-
 export type AddCommandInput = Omit<Command, 'id' | 'reference' | 'createdAt' | 'paidAmount' | 'restAmount' | 'status' | 'createdBy' | 'advancePaid'> & {
   createdBy?: string;
   advancePaid?: number;
@@ -98,7 +56,7 @@ interface CommandState {
 export const useCommandStore = create<CommandState>()(
   persist(
     (set, get) => ({
-      commands: INITIAL_COMMANDS,
+      commands: [],
       addCommand: (data) => {
         const count = get().commands.length + 1;
         const ref = `CMD-${new Date().getFullYear()}-${String(count).padStart(3, '0')}`;
@@ -183,16 +141,6 @@ export const useCommandStore = create<CommandState>()(
         push('commands.delete', () => db.commands.remove(id));
       },
     }),
-    {
-      name: 'labochimie-commands',
-      merge: (persisted, current) => {
-        const p = (persisted ?? {}) as Partial<CommandState>;
-        return {
-          ...current,
-          ...p,
-          commands: p.commands && p.commands.length ? p.commands : INITIAL_COMMANDS,
-        };
-      },
-    }
+    { name: 'altech-commands' }
   )
 );

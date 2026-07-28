@@ -6,19 +6,6 @@ import { getCurrentUsername } from './authStore';
 import { db } from '@/lib/db';
 import { push, swapId } from '@/lib/persist';
 
-export const INITIAL_EXPENSE_CATEGORIES: Category[] = [
-  { id: 'expcat-1', name: 'Transport & Carburant' },
-  { id: 'expcat-2', name: 'Électricité & Énergie' },
-  { id: 'expcat-3', name: 'Maintenance Équipement' },
-  { id: 'expcat-4', name: 'Achats Fournitures & Outillage' },
-];
-
-export const INITIAL_EXPENSES: Expense[] = [
-  { id: 'exp-1', name: 'Carburant camions', categoryName: 'Transport & Carburant', description: 'Carburant pour camions toupies et malaxeurs', amount: 12000, date: '2026-07-23', createdBy: 'admin' },
-  { id: 'exp-2', name: 'Électricité usine', categoryName: 'Électricité & Énergie', description: 'Facture électricité centrale à béton', amount: 35000, date: '2026-07-24', createdBy: 'admin' },
-  { id: 'exp-3', name: 'Vidange & Entretien', categoryName: 'Maintenance Équipement', description: 'Vidange et graissage tapis roulant centralier', amount: 18000, date: '2026-07-26', createdBy: 'admin' },
-];
-
 interface ExpenseState {
   expenses: Expense[];
   categories: Category[];
@@ -32,8 +19,8 @@ interface ExpenseState {
 export const useExpenseStore = create<ExpenseState>()(
   persist(
     (set, get) => ({
-      expenses: INITIAL_EXPENSES,
-      categories: INITIAL_EXPENSE_CATEGORIES,
+      expenses: [],
+      categories: [],
       addExpense: (e) => {
         const expense: Expense = {
           ...e,
@@ -72,17 +59,6 @@ export const useExpenseStore = create<ExpenseState>()(
         push('expenseCategories.delete', () => db.expenseCategories.remove(id));
       },
     }),
-    {
-      name: 'labochimie-expenses',
-      merge: (persisted, current) => {
-        const p = (persisted ?? {}) as Partial<ExpenseState>;
-        return {
-          ...current,
-          ...p,
-          expenses: p.expenses && p.expenses.length ? p.expenses : INITIAL_EXPENSES,
-          categories: p.categories && p.categories.length ? p.categories : INITIAL_EXPENSE_CATEGORIES,
-        };
-      },
-    }
+    { name: 'altech-expenses' }
   )
 );

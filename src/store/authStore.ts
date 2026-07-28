@@ -5,29 +5,6 @@ import { uid } from '@/lib/utils';
 import { useWorkerStore } from './workerStore';
 import { supabase, resolveLoginEmail, fetchProfile } from '@/lib/supabase';
 
-export const DEFAULT_DEMO_ADMIN: User = {
-  id: 'usr-demo-admin',
-  name: 'Administrateur Démo',
-  username: 'demo',
-  email: 'demo@altechproduction.com',
-  password: 'demo123',
-  role: 'admin',
-  permissions: 'all',
-};
-
-export const INITIAL_ADMIN_ACCOUNTS: User[] = [
-  DEFAULT_DEMO_ADMIN,
-  {
-    id: 'usr-admin-master',
-    name: 'Admin Altech Production',
-    username: 'admin',
-    email: 'admin@altechproduction.com',
-    password: 'admin123',
-    role: 'admin',
-    permissions: 'all',
-  },
-];
-
 interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
@@ -36,12 +13,14 @@ interface AuthState {
   /** false when the browser could not reach Supabase (offline fallback mode) */
   isOnline: boolean;
   language: Lang;
+  /** admin accounts created from this browser while Supabase was unreachable */
   registeredAccounts: User[];
   login: (credentials: { identifier: string; password: string }) => Promise<boolean>;
-  loginAsDemo: () => Promise<void>;
   logout: () => Promise<void>;
   restoreSession: () => Promise<void>;
   setLanguage: (lang: Lang) => void;
+  /** true as soon as the store has an administrator (hides the login-page button) */
+  adminExists: () => Promise<boolean>;
   createAccount: (data: CreateAccountData) => Promise<{ ok: boolean; error?: string }>;
   updateMyAccount: (data: Partial<User>) => void;
 }
@@ -75,7 +54,7 @@ export const useAuthStore = create<AuthState>()(
       isBootstrapping: true,
       isOnline: true,
       language: 'fr',
-      registeredAccounts: INITIAL_ADMIN_ACCOUNTS,
+      registeredAccounts: [],
 
       /**
        * Login page — "Se connecter".
@@ -117,11 +96,6 @@ export const useAuthStore = create<AuthState>()(
         return loginLocally(get, set, identifier, password);
       },
 
-      loginAsDemo: async () => {
-        const ok = await get().login({ identifier: 'demo', password: 'demo123' });
-        if (!ok) set({ user: DEFAULT_DEMO_ADMIN, isAuthenticated: true });
-      },
-
       logout: async () => {
         try {
           await supabase.auth.signOut();
@@ -155,6 +129,22 @@ export const useAuthStore = create<AuthState>()(
         document.documentElement.setAttribute('lang', lang);
       },
 
+      /**
+       * Login page — is the "Créer un compte Administrateur" button still needed?
+       * The database answers through `admin_account_exists()`; when it cannot be
+       * reached only the accounts registered from this browser are known.
+       */
+      adminExists: async () => {
+        try {
+          const { data, error } = await supabase.rpc('admin_account_exists');
+          if (!error) return Boolean(data);
+          console.warn('[auth] admin_account_exists indisponible:', error.message);
+        } catch (e) {
+          console.warn('[auth] Supabase injoignable pour admin_account_exists:', e);
+        }
+        return get().registeredAccounts.some((a) => a.role === 'admin');
+      },
+
       /** Login page — "Créer un compte Administrateur" (real row in auth.users). */
       createAccount: async (data) => {
         try {
@@ -165,15 +155,20 @@ export const useAuthStore = create<AuthState>()(
             p_password: data.password,
           });
           if (!error) return { ok: true };
+          // the database refused: the rule is final, no local fallback
+          if (/administrateur existe/i.test(error.message)) {
+            return { ok: false, error: 'Un compte administrateur existe déjà' };
+          }
           if (/existe|already|duplicate/i.test(error.message)) {
             return { ok: false, error: 'Cet utilisateur existe déjà' };
           }
-          console.warn('[auth] création du compte via Supabase impossible:', error.message);
+          return { ok: false, error: error.message };
         } catch (e) {
           console.warn('[auth] Supabase indisponible pour la création du compte:', e);
         }
 
-        // offline fallback — keeps the account locally
+        // Supabase unreachable — the account is kept locally so a fresh offline
+        // installation is not locked out; it is re-created online afterwards.
         const exists = get().registeredAccounts.some(
           (a) =>
             a.email.toLowerCase() === data.email.toLowerCase() ||
@@ -216,7 +211,7 @@ export const useAuthStore = create<AuthState>()(
       },
     }),
     {
-      name: 'labochimie-auth',
+      name: 'altech-auth',
       partialize: (s) => ({
         user: s.user,
         isAuthenticated: s.isAuthenticated,
@@ -229,17 +224,14 @@ export const useAuthStore = create<AuthState>()(
           ...current,
           ...p,
           isBootstrapping: true,
-          registeredAccounts:
-            p.registeredAccounts && p.registeredAccounts.length
-              ? p.registeredAccounts
-              : INITIAL_ADMIN_ACCOUNTS,
+          registeredAccounts: p.registeredAccounts ?? [],
         };
       },
     }
   )
 );
 
-/** Offline fallback: the historical local accounts (admins + workers). */
+/** Offline fallback: accounts registered from this browser (admins + workers). */
 function loginLocally(
   get: () => AuthState,
   set: (partial: Partial<AuthState>) => void,
@@ -248,10 +240,7 @@ function loginLocally(
 ): boolean {
   const id = identifier.trim().toLowerCase();
 
-  const adminAccounts = get().registeredAccounts.length
-    ? get().registeredAccounts
-    : INITIAL_ADMIN_ACCOUNTS;
-  const admin = adminAccounts.find(
+  const admin = get().registeredAccounts.find(
     (a) =>
       (a.email.toLowerCase() === id || a.username.toLowerCase() === id) && a.password === password
   );
@@ -295,5 +284,5 @@ supabase.auth.onAuthStateChange((event) => {
 // Username of the currently logged-in user — stamped on every create operation.
 export function getCurrentUsername(): string {
   const u = useAuthStore.getState().user;
-  return u?.username || u?.name || 'Démo Admin';
+  return u?.username || u?.name || 'system';
 }

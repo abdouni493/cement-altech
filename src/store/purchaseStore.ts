@@ -6,37 +6,6 @@ import { getCurrentUsername } from './authStore';
 import { db, rpc } from '@/lib/db';
 import { push } from '@/lib/persist';
 
-export const INITIAL_PURCHASES: Purchase[] = [
-  {
-    id: 'pur-1',
-    reference: 'ACH-2026-001',
-    date: '2026-07-15',
-    supplierId: 'sup-1',
-    products: [
-      { productId: 'prod-1', productName: 'Ciment Portland CPJ 42.5 (Sac 50kg)', quantity: 500, purchasePrice: 650, minAlertQuantity: 50, expirationDate: null },
-    ],
-    totalAmount: 325000,
-    paidAmount: 325000,
-    restAmount: 0,
-    payments: [],
-    createdBy: 'admin',
-  },
-  {
-    id: 'pur-2',
-    reference: 'ACH-2026-002',
-    date: '2026-07-18',
-    supplierId: 'sup-4',
-    products: [
-      { productId: 'prod-4', productName: 'Sable de Dune Lavé 0/2 (m³)', quantity: 100, purchasePrice: 1800, minAlertQuantity: 40, expirationDate: null },
-    ],
-    totalAmount: 180000,
-    paidAmount: 100000,
-    restAmount: 80000,
-    payments: [{ date: '2026-07-18', amount: 100000, description: 'Acompte initial' }],
-    createdBy: 'admin',
-  },
-];
-
 export type AddPurchaseInput = Omit<Purchase, 'id' | 'reference' | 'date' | 'totalAmount' | 'restAmount' | 'payments'> & {
   date?: string;
   totalAmount?: number;
@@ -74,7 +43,7 @@ export const usePurchaseStore = create<PurchaseState>()(
       };
 
       return {
-        purchases: INITIAL_PURCHASES,
+        purchases: [],
         addPurchase: (p) => {
           const count = get().purchases.length + 1;
           const ref = `ACH-${new Date().getFullYear()}-${String(count).padStart(3, '0')}`;
@@ -137,16 +106,6 @@ export const usePurchaseStore = create<PurchaseState>()(
         },
       };
     },
-    {
-      name: 'labochimie-purchases',
-      merge: (persisted, current) => {
-        const p = (persisted ?? {}) as Partial<PurchaseState>;
-        return {
-          ...current,
-          ...p,
-          purchases: p.purchases && p.purchases.length ? p.purchases : INITIAL_PURCHASES,
-        };
-      },
-    }
+    { name: 'altech-purchases' }
   )
 );

@@ -33,6 +33,6 @@ export const useSettingsStore = create<SettingsState>()(
         push('settings.save', () => db.settings.save(next));
       },
     }),
-    { name: 'cement-settings' }
+    { name: 'altech-settings' }
   )
 );

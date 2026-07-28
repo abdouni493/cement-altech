@@ -7,61 +7,6 @@ import { db, rpc } from '@/lib/db';
 import { push } from '@/lib/persist';
 import { useComptoirStore } from './comptoirStore';
 
-export const INITIAL_SALES: Sale[] = [
-  {
-    id: 'sal-1',
-    reference: 'VNT-2026-001',
-    date: '2026-07-20',
-    clientId: 'cli-1',
-    products: [
-      { productId: 'prod-1', productName: 'Ciment Portland CPJ 42.5 (Sac 50kg)', quantity: 50, sellingPrice: 850 },
-      { productId: 'prod-4', productName: 'Sable de Dune Lavé 0/2 (m³)', quantity: 10, sellingPrice: 2400 },
-    ],
-    totalAmount: 66500,
-    reduction: 1500,
-    finalAmount: 65000,
-    paidAmount: 50000,
-    restAmount: 15000,
-    status: 'debt',
-    payments: [{ date: '2026-07-20', amount: 50000, description: 'Acompte comptoir' }],
-    createdBy: 'admin',
-  },
-  {
-    id: 'sal-2',
-    reference: 'VNT-2026-002',
-    date: '2026-07-22',
-    clientId: 'cli-2',
-    products: [
-      { productId: 'prod-3', productName: 'Béton Prêt à l\'Emploi B25 (m³)', quantity: 15, sellingPrice: 9800 },
-    ],
-    totalAmount: 147000,
-    reduction: 2000,
-    finalAmount: 145000,
-    paidAmount: 145000,
-    restAmount: 0,
-    status: 'paid',
-    payments: [{ date: '2026-07-22', amount: 145000, description: 'Paiement comptant' }],
-    createdBy: 'admin',
-  },
-  {
-    id: 'sal-3',
-    reference: 'VNT-2026-003',
-    date: '2026-07-25',
-    clientId: 'cli-3',
-    products: [
-      { productId: 'prod-6', productName: 'Rond à Béton FeE500 12mm (Tonne)', quantity: 2, sellingPrice: 128000 },
-    ],
-    totalAmount: 256000,
-    reduction: 6000,
-    finalAmount: 250000,
-    paidAmount: 150000,
-    restAmount: 100000,
-    status: 'debt',
-    payments: [{ date: '2026-07-25', amount: 150000, description: 'Acompte par versement' }],
-    createdBy: 'admin',
-  },
-];
-
 export type AddSaleInput = Omit<Sale, 'id' | 'reference' | 'date' | 'totalAmount' | 'finalAmount' | 'restAmount' | 'status' | 'payments'> & {
   date?: string;
   totalAmount?: number;
@@ -81,7 +26,7 @@ interface SalesState {
 export const useSalesStore = create<SalesState>()(
   persist(
     (set, get) => ({
-      sales: INITIAL_SALES,
+      sales: [],
       addSale: (s) => {
         const count = get().sales.length + 1;
         const ref = `VNT-${new Date().getFullYear()}-${String(count).padStart(3, '0')}`;
@@ -172,16 +117,6 @@ export const useSalesStore = create<SalesState>()(
         push('sales.delete', () => db.sales.remove(id));
       },
     }),
-    {
-      name: 'labochimie-sales',
-      merge: (persisted, current) => {
-        const p = (persisted ?? {}) as Partial<SalesState>;
-        return {
-          ...current,
-          ...p,
-          sales: p.sales && p.sales.length ? p.sales : INITIAL_SALES,
-        };
-      },
-    }
+    { name: 'altech-sales' }
   )
 );

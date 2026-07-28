@@ -178,6 +178,6 @@ export const useClientDebtStore = create<ClientDebtState>()(
         });
       },
     }),
-    { name: 'cement-client-debts' }
+    { name: 'altech-client-debts' }
   )
 );

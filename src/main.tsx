@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
+import { purgeLegacyStorage } from './lib/legacyStorage';
 
 // Self-hosted brand fonts (bundled locally — work fully offline, identical design)
 import '@fontsource/playfair-display/400.css';
@@ -19,6 +20,9 @@ import '@fontsource/cairo/600.css';
 import '@fontsource/cairo/700.css';
 
 import './index.css';
+
+// drops the demo data left in the browser by the previous versions
+purgeLegacyStorage();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

@@ -12,14 +12,14 @@ import { downloadJSON } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 
 const STORE_KEYS = [
-  'labochimie-auth', 'labochimie-settings', 'labochimie-stock', 'labochimie-suppliers',
-  'labochimie-clients', 'labochimie-purchases', 'labochimie-comptoir', 'labochimie-productions',
-  'labochimie-sales', 'labochimie-workers', 'labochimie-expenses',
-  'labochimie-caisse', 'labochimie-caisse-reports',
+  'altech-auth', 'altech-settings', 'altech-stock', 'altech-suppliers',
+  'altech-clients', 'altech-client-debts', 'altech-purchases', 'altech-comptoir',
+  'altech-productions', 'altech-fiche-technics', 'altech-sales', 'altech-commands',
+  'altech-workers', 'altech-expenses', 'altech-caisse', 'altech-caisse-reports',
 ];
 
 // Keys that hold business data — wiped on reset, but the admin account/settings are kept.
-const DATA_KEYS = STORE_KEYS.filter((k) => k !== 'labochimie-auth' && k !== 'labochimie-settings');
+const DATA_KEYS = STORE_KEYS.filter((k) => k !== 'altech-auth' && k !== 'altech-settings');
 
 export default function SettingsPage() {
   const { t } = useLanguage();
@@ -53,7 +53,7 @@ export default function SettingsPage() {
   const handleBackup = () => {
     const data: Record<string, unknown> = {};
     STORE_KEYS.forEach((k) => { const v = localStorage.getItem(k); if (v) data[k] = JSON.parse(v); });
-    downloadJSON(data, `labochimie-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    downloadJSON(data, `altech-backup-${new Date().toISOString().slice(0, 10)}.json`);
     toast.success('Sauvegarde téléchargée');
   };
 
@@ -103,7 +103,7 @@ export default function SettingsPage() {
             <Input label={t('name')} value={form.name} onChange={(e) => set('name', e.target.value)} />
             <Input label={t('email')} value={form.email} onChange={(e) => set('email', e.target.value)} />
             <Input label={t('phone')} value={form.phone} onChange={(e) => set('phone', e.target.value)} />
-            <Input label={t('socialMedia')} value={form.socialMedia || ''} onChange={(e) => set('socialMedia', e.target.value)} placeholder="@labochimie_pro" />
+            <Input label={t('socialMedia')} value={form.socialMedia || ''} onChange={(e) => set('socialMedia', e.target.value)} placeholder="@altech_production" />
             <Input label="NIF" value={form.nif} onChange={(e) => set('nif', e.target.value)} />
             <Input label="NIS" value={form.nis} onChange={(e) => set('nis', e.target.value)} />
             <Input label="Article" value={form.article} onChange={(e) => set('article', e.target.value)} />

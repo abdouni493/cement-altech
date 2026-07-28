@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Building2, Truck, Lock, User, Eye, EyeOff, UserPlus, Sun, Moon, Sparkles } from 'lucide-react';
+import { Building2, Truck, Lock, User, Eye, EyeOff, UserPlus, Sun, Moon } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { useThemeStore } from '@/store/themeStore';
@@ -27,8 +27,8 @@ export default function Login() {
   const { language, setLanguage, t } = useLanguage();
   const { theme, toggleTheme } = useThemeStore();
   const login = useAuthStore((s) => s.login);
-  const loginAsDemo = useAuthStore((s) => s.loginAsDemo);
   const createAccount = useAuthStore((s) => s.createAccount);
+  const adminExists = useAuthStore((s) => s.adminExists);
   const store = useSettingsStore((s) => s.settings);
 
   const [identifier, setIdentifier] = useState('');
@@ -43,6 +43,22 @@ export default function Login() {
   const [regUsername, setRegUsername] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
+  const [creating, setCreating] = useState(false);
+  /** null while unknown — the button only appears once we know there is no admin */
+  const [hasAdmin, setHasAdmin] = useState<boolean | null>(null);
+
+  // The store is created empty: the first administrator is registered from here.
+  // As soon as one exists the button disappears — new accounts are then created
+  // from /workers or /settings by an administrator.
+  useEffect(() => {
+    let cancelled = false;
+    adminExists().then((exists) => {
+      if (!cancelled) setHasAdmin(exists);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [adminExists]);
 
   // Signs in against Supabase Auth, then loads every module from the database.
   const handleLogin = async (e: React.FormEvent) => {
@@ -64,18 +80,6 @@ export default function Login() {
     }
   };
 
-  const handleDemoLogin = async () => {
-    setBusy(true);
-    try {
-      await loginAsDemo();
-      await hydrateFromSupabase();
-      toast.success('Bienvenue ! Connecté en tant que Compte Démo Administrateur 🚀');
-      navigate('/dashboard');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleCreateAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!regName || !regUsername || !regEmail || !regPassword) {
@@ -86,23 +90,35 @@ export default function Login() {
       toast.error('Le mot de passe doit contenir au moins 6 caractères');
       return;
     }
-    const res = await createAccount({
-      name: regName,
-      username: regUsername,
-      email: regEmail,
-      password: regPassword,
-    });
-    if (res.ok) {
-      toast.success('Compte Administrateur créé avec succès ! Connectez-vous.');
-      setIdentifier(regUsername);
-      setPassword(regPassword);
-      setIsRegistering(false);
-      setRegName('');
-      setRegUsername('');
-      setRegEmail('');
-      setRegPassword('');
-    } else {
-      toast.error(res.error || 'Erreur lors de la création du compte');
+    setCreating(true);
+    try {
+      const res = await createAccount({
+        name: regName,
+        username: regUsername,
+        email: regEmail,
+        password: regPassword,
+      });
+      if (res.ok) {
+        toast.success('Compte Administrateur créé avec succès ! Connectez-vous.');
+        // the store now has its administrator: the button is not offered again
+        setHasAdmin(true);
+        setIdentifier(regUsername);
+        setPassword(regPassword);
+        setIsRegistering(false);
+        setRegName('');
+        setRegUsername('');
+        setRegEmail('');
+        setRegPassword('');
+      } else {
+        toast.error(res.error || 'Erreur lors de la création du compte');
+        // the database refused because an administrator already exists
+        if (/administrateur existe/i.test(res.error || '')) {
+          setHasAdmin(true);
+          setIsRegistering(false);
+        }
+      }
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -207,31 +223,21 @@ export default function Login() {
             </Button>
           </form>
 
-          {/* Quick Demo Login Button */}
-          <div className="mt-4">
-            <Button
-              type="button"
-              variant="liver"
-              size="lg"
-              disabled={busy}
-              className="w-full font-bold flex items-center justify-center gap-2 shadow-md border border-amber-500/40 hover:scale-[1.01] disabled:opacity-70"
-              onClick={handleDemoLogin}
-            >
-              <Sparkles size={18} className="text-amber-400 animate-pulse" />
-              Connexion avec Compte Démo
-            </Button>
-          </div>
-
-          {/* Create Admin Account Button */}
-          <div className="mt-6 pt-4 border-t border-gold/15 text-center">
-            <button
-              type="button"
-              onClick={() => setIsRegistering(true)}
-              className="text-xs font-semibold text-gold hover:underline inline-flex items-center gap-1.5"
-            >
-              <UserPlus size={14} /> Créer un compte Administrateur
-            </button>
-          </div>
+          {/* Create Admin Account — only while the store has no administrator */}
+          {hasAdmin === false && (
+            <div className="mt-6 pt-4 border-t border-gold/15 text-center">
+              <button
+                type="button"
+                onClick={() => setIsRegistering(true)}
+                className="text-xs font-semibold text-gold hover:underline inline-flex items-center gap-1.5"
+              >
+                <UserPlus size={14} /> Créer un compte Administrateur
+              </button>
+              <p className="mt-1.5 text-[11px] text-text-muted">
+                Première utilisation : créez le compte administrateur du magasin.
+              </p>
+            </div>
+          )}
         </div>
       </motion.div>
 
@@ -270,11 +276,11 @@ export default function Login() {
           />
 
           <div className="flex justify-end gap-2 pt-3 border-t border-gold/10">
-            <Button type="button" variant="secondary" onClick={() => setIsRegistering(false)}>
+            <Button type="button" variant="secondary" onClick={() => setIsRegistering(false)} disabled={creating}>
               Annuler
             </Button>
-            <Button type="submit" variant="gold">
-              Créer Administrateur
+            <Button type="submit" variant="gold" disabled={creating}>
+              {creating ? 'Création…' : 'Créer Administrateur'}
             </Button>
           </div>
         </form>

@@ -27,12 +27,12 @@
 --   16. TRIGGERS      : automatic stock / caisse propagation
 --   17. VIEWS         : dashboard, statistics & reports screens
 --   18. RLS           : row level security mapped on the app permission modules
---   19. AUTH ACCOUNTS : admin account + worker login accounts (auth.users)
---   20. SEED DATA     : reference + demo data of the application
---   21. GRANTS / REALTIME
+--   19. INITIAL CONFIG: empty database — only the two singleton config rows
+--   20. GRANTS / REALTIME
 -- ----------------------------------------------------------------------------
 --  INTERFACE  ->  TABLE / VIEW  MAP
---   /login                 profiles, auth.users, resolve_login_email()
+--   /login                 profiles, auth.users, resolve_login_email(),
+--                          admin_account_exists(), create_admin_account()
 --   /dashboard             v_dashboard_kpis, v_stock_alerts, v_sales_daily
 --   /stock                 products, marques, categories, units
 --   /purchase              purchases, purchase_lines, purchase_payments
@@ -1751,7 +1751,23 @@ end;
 $$;
 grant execute on function public.admin_create_worker_account(uuid, text, text, text) to authenticated;
 
--- Button "Créer un compte Administrateur" (login page / settings)
+-- Login page: tells the client whether the store already has an administrator.
+-- While it returns false the "Créer un compte Administrateur" button is shown;
+-- as soon as the first admin exists the button disappears.
+create or replace function public.admin_account_exists()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (select 1 from public.profiles where role = 'admin' and is_active);
+$$;
+grant execute on function public.admin_account_exists() to anon, authenticated;
+
+-- Button "Créer un compte Administrateur" (login page / settings).
+-- The very first administrator may be created by anyone (fresh installation);
+-- afterwards only a logged-in administrator can create another one.
 create or replace function public.create_admin_account(
   p_name text, p_username text, p_email text, p_password text
 ) returns uuid
@@ -1761,6 +1777,10 @@ set search_path = public
 as $$
 declare v_user_id uuid;
 begin
+  if public.admin_account_exists() and not public.is_admin() then
+    raise exception 'Un compte administrateur existe déjà';
+  end if;
+
   if exists (select 1 from public.profiles where lower(username) = lower(p_username)
                                               and lower(email) <> lower(p_email)) then
     raise exception 'Cet utilisateur existe déjà';
@@ -1921,14 +1941,21 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare v_tx public.caisse_transactions;
+declare
+  v_tx       public.caisse_transactions;
+  v_category uuid;
 begin
   if p_amount is null or p_amount <= 0 then
     raise exception 'Montant invalide';
   end if;
+
+  -- an id coming from another module (or created offline) must not break the
+  -- foreign key: it is only kept when it really is a caisse category
+  select id into v_category from public.caisse_categories where id = p_category_id;
+
   insert into public.caisse_transactions (type, amount, date, description, category_id, category_name, created_by)
   values (p_type, p_amount, coalesce(p_date, current_date), p_description,
-          p_category_id, p_category_name, public.current_username())
+          v_category, p_category_name, public.current_username())
   returning * into v_tx;
   return v_tx;
 end;
@@ -2049,10 +2076,20 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare v_caisse_category uuid;
 begin
+  -- `expenses.category_id` references `expense_categories` while
+  -- `caisse_transactions.category_id` references `caisse_categories`: copying
+  -- the id across violates the foreign key. Only a caisse category carrying the
+  -- same name is linked, otherwise the label alone is kept.
+  select id into v_caisse_category
+    from public.caisse_categories
+   where name = coalesce(new.category_name, 'Dépense')
+   limit 1;
+
   insert into public.caisse_transactions (type, amount, date, description, category_id, category_name, ref_table, ref_id, created_by)
   values ('withdrawal', new.amount, new.date,
-          'Dépense: ' || new.name, new.category_id, coalesce(new.category_name, 'Dépense'),
+          'Dépense: ' || new.name, v_caisse_category, coalesce(new.category_name, 'Dépense'),
           'expenses', new.id, new.created_by)
   on conflict (ref_table, ref_id) do nothing;
   return new;
@@ -2495,346 +2532,34 @@ create policy marques_read_all on public.marques for select to authenticated usi
 
 
 -- ============================================================================
--- 19. AUTH ACCOUNTS — admin + worker logins stored in auth.users
+-- 19. INITIAL CONFIGURATION
 -- ----------------------------------------------------------------------------
---  These accounts can sign in immediately from the /login page,
---  with their EMAIL or with their USERNAME (resolve_login_email()).
+--  The database is delivered EMPTY: no demo account, no demo product, no demo
+--  client, sale, purchase, production or expense. Only the two single-row
+--  configuration tables are created so the application has somewhere to write
+--  its settings.
 --
---   ROLE     USERNAME    EMAIL                            PASSWORD
---   ------   ---------   ------------------------------   -----------
---   admin    admin       admin@altechproduction.com       admin123
---   admin    demo        demo@altechproduction.com        demo123
---   worker   mustapha    mustapha@altechproduction.com    worker123
---   worker   omar        omar@altechproduction.com        worker123
---   worker   youcef      youcef@altechproduction.com      worker123
+--  FIRST LAUNCH
+--   1. open the application on /login,
+--   2. click "Créer un compte Administrateur" and fill the form,
+--   3. the account is created in auth.users and the button disappears:
+--      from that point on only an administrator can create other accounts
+--      (workers are created from /workers > "Compte de connexion").
+--
+--  Every list of the application (unités, marques, catégories, catégories de
+--  dépense, catégories de caisse, rôles) starts empty and is filled from the
+--  interface with the real data of the store.
 -- ============================================================================
 
-do $$
-declare
-  v_role_chef      uuid;
-  v_role_caisse    uuid;
-  v_role_chauffeur uuid;
-  v_w1 uuid; v_w2 uuid; v_w3 uuid;
-  v_u  uuid;
-begin
-  ---------------------------------------------------------------- roles ----
-  insert into public.roles (name) values
-    ('Chef de Chantier & Centralier'),
-    ('Agent Caisse & Comptoir'),
-    ('Chauffeur Toupie Béton'),
-    ('Administrateur')
-  on conflict (name) do nothing;
-
-  select id into v_role_chef      from public.roles where name = 'Chef de Chantier & Centralier';
-  select id into v_role_caisse    from public.roles where name = 'Agent Caisse & Comptoir';
-  select id into v_role_chauffeur from public.roles where name = 'Chauffeur Toupie Béton';
-
-  -------------------------------------------------------------- workers ----
-  insert into public.workers (full_name, birthday, id_card_number, phone, role_id,
-                              payment_enabled, payment_type, payment_amount, start_date,
-                              has_account, email, username, permissions)
-  select 'Mustapha Said', date '1988-04-12', '1029384756', '0550112233', v_role_chef,
-         true, 'monthly', 65000, date '2025-01-10', true,
-         'mustapha@altechproduction.com', 'mustapha',
-         jsonb_build_object(
-           'dashboard',  jsonb_build_object('view', true),
-           'stock',      jsonb_build_object('view', true, 'create', true, 'edit', true, 'delete', true),
-           'purchase',   jsonb_build_object('view', true, 'create', true),
-           'production', jsonb_build_object('view', true, 'create', true, 'edit', true, 'delete', true),
-           'comptoir',   jsonb_build_object('view', true, 'create', true))
-  where not exists (select 1 from public.workers where lower(username) = 'mustapha');
-
-  insert into public.workers (full_name, birthday, id_card_number, phone, role_id,
-                              payment_enabled, payment_type, payment_amount, start_date,
-                              has_account, email, username, permissions)
-  select 'Omar Farouk', date '1992-09-25', '9876543210', '0661223344', v_role_caisse,
-         true, 'monthly', 45000, date '2025-03-15', true,
-         'omar@altechproduction.com', 'omar',
-         jsonb_build_object(
-           'dashboard', jsonb_build_object('view', true),
-           'pos',       jsonb_build_object('view', true, 'create', true, 'pay', true),
-           'sales',     jsonb_build_object('view', true, 'create', true, 'pay', true),
-           'clients',   jsonb_build_object('view', true, 'create', true, 'edit', true),
-           'comptoir',  jsonb_build_object('view', true),
-           'caisse',    jsonb_build_object('view', true, 'create', true))
-  where not exists (select 1 from public.workers where lower(username) = 'omar');
-
-  insert into public.workers (full_name, birthday, id_card_number, phone, role_id,
-                              payment_enabled, payment_type, payment_amount, start_date,
-                              has_account, email, username, permissions)
-  select 'Youcef Toumi', date '1990-11-05', '5647382910', '0770445566', v_role_chauffeur,
-         true, 'monthly', 50000, date '2025-05-01', true,
-         'youcef@altechproduction.com', 'youcef',
-         jsonb_build_object(
-           'dashboard', jsonb_build_object('view', true),
-           'comptoir',  jsonb_build_object('view', true),
-           'sales',     jsonb_build_object('view', true))
-  where not exists (select 1 from public.workers where lower(username) = 'youcef');
-
-  select id into v_w1 from public.workers where lower(username) = 'mustapha';
-  select id into v_w2 from public.workers where lower(username) = 'omar';
-  select id into v_w3 from public.workers where lower(username) = 'youcef';
-
-  ------------------------------------------------------- ADMIN ACCOUNTS ----
-  v_u := public.create_auth_account(
-    'admin@altechproduction.com', 'admin123',
-    jsonb_build_object('role', 'admin', 'full_name', 'Admin Altech Production', 'username', 'admin'));
-
-  v_u := public.create_auth_account(
-    'demo@altechproduction.com', 'demo123',
-    jsonb_build_object('role', 'admin', 'full_name', 'Administrateur Démo', 'username', 'demo'));
-
-  ------------------------------------------------------ WORKER ACCOUNTS ----
-  v_u := public.create_auth_account(
-    'mustapha@altechproduction.com', 'worker123',
-    jsonb_build_object('role', 'worker', 'full_name', 'Mustapha Said', 'username', 'mustapha',
-                       'worker_id', v_w1::text,
-                       'permissions', (select permissions from public.workers where id = v_w1)));
-  update public.workers set user_id = v_u where id = v_w1;
-  update public.profiles set worker_id = v_w1, role = 'worker',
-         permissions = (select permissions from public.workers where id = v_w1) where id = v_u;
-
-  v_u := public.create_auth_account(
-    'omar@altechproduction.com', 'worker123',
-    jsonb_build_object('role', 'worker', 'full_name', 'Omar Farouk', 'username', 'omar',
-                       'worker_id', v_w2::text,
-                       'permissions', (select permissions from public.workers where id = v_w2)));
-  update public.workers set user_id = v_u where id = v_w2;
-  update public.profiles set worker_id = v_w2, role = 'worker',
-         permissions = (select permissions from public.workers where id = v_w2) where id = v_u;
-
-  v_u := public.create_auth_account(
-    'youcef@altechproduction.com', 'worker123',
-    jsonb_build_object('role', 'worker', 'full_name', 'Youcef Toumi', 'username', 'youcef',
-                       'worker_id', v_w3::text,
-                       'permissions', (select permissions from public.workers where id = v_w3)));
-  update public.workers set user_id = v_u where id = v_w3;
-  update public.profiles set worker_id = v_w3, role = 'worker',
-         permissions = (select permissions from public.workers where id = v_w3) where id = v_u;
-end
-$$;
-
-
--- ============================================================================
--- 20. SEED DATA — reference lists + demo data of the application
--- ============================================================================
-
--- ---- store settings & caisse opening balance -------------------------------
-insert into public.store_settings (id, name, description, currency)
-values (true, 'Altech Production', 'Vente & Fabrication de Ciment', 'DA')
+insert into public.store_settings (id) values (true)
 on conflict (id) do nothing;
 
-insert into public.caisse_settings (id, initial_balance)
-values (true, 250000)
+insert into public.caisse_settings (id, initial_balance) values (true, 0)
 on conflict (id) do nothing;
-
--- ---- reference lists -------------------------------------------------------
-insert into public.units (name) values
-  ('m³'), ('Tonne'), ('Sac (50kg)'), ('kg'), ('litre'), ('m')
-on conflict (name) do nothing;
-
-insert into public.marques (name) values
-  ('GICA'), ('Lafarge Holcim'), ('Al-Badr'), ('Sika Algérie'), ('Sider El Hadjar')
-on conflict (name) do nothing;
-
-insert into public.categories (name) values
-  ('Ciments & Liants'), ('Béton & Mortier'), ('Agrégats & Graviers'),
-  ('Fer à Béton & Armatures'), ('Adjuvants & Chimie BTP')
-on conflict (name) do nothing;
-
-insert into public.production_categories (name) values
-  ('Béton & Mortier'), ('Préfabriqué'), ('Mortier Spécial')
-on conflict (name) do nothing;
-
-insert into public.fiche_categories (name) values
-  ('Béton & Mortier'), ('Préfabriqué')
-on conflict (name) do nothing;
-
-insert into public.expense_categories (name) values
-  ('Transport & Carburant'), ('Électricité & Énergie'),
-  ('Maintenance Équipement'), ('Achats Fournitures & Outillage')
-on conflict (name) do nothing;
-
-insert into public.caisse_categories (name) values
-  ('Vente'), ('Commande'), ('Dépense'), ('Achat'), ('Salaires'), ('Dettes Clients')
-on conflict (name) do nothing;
-
--- ---- products --------------------------------------------------------------
-insert into public.products (name, description, barcode, marque_id, category_id,
-                             principal_quantity, current_quantity, min_alert_quantity,
-                             purchase_price, unit_enabled, unit, created_by)
-select v.name, v.description, v.barcode,
-       (select id from public.marques    where name = v.marque),
-       (select id from public.categories where name = v.category),
-       v.qty, v.qty, v.min_alert, v.price, true, v.unit, 'admin'
-  from (values
-    ('Ciment Portland CPJ 42.5 (Sac 50kg)', 'Ciment Portland CPJ 42.5 haute résistance', '6130001001', 'GICA',            'Ciments & Liants',        450::numeric, 50::numeric,  650::numeric,   'Sac (50kg)'),
-    ('Ciment CRS Résistant aux Sulfates (Tonne)', 'Ciment CRS travaux maritimes',        '6130001002', 'Lafarge Holcim',  'Ciments & Liants',         80,          15,           14000,          'Tonne'),
-    ('Béton Prêt à l''Emploi B25 (m³)', 'Béton B25 pour dalles et voiles',               '6130001003', 'Al-Badr',         'Béton & Mortier',         200,          30,           7500,           'm³'),
-    ('Sable de Dune Lavé 0/2 (m³)', 'Sable lavé pour mortier et béton',                  '6130001004', 'Al-Badr',         'Agrégats & Graviers',     350,          40,           1800,           'm³'),
-    ('Gravier Concassé 3/8 (Tonne)', 'Gravier concassé 3/8 pour béton armé',              '6130001005', 'Al-Badr',         'Agrégats & Graviers',     180,          25,           1500,           'Tonne'),
-    ('Rond à Béton FeE500 12mm (Tonne)', 'Fer à béton haute adhérence FeE500 12mm',       '6130001006', 'Sider El Hadjar', 'Fer à Béton & Armatures',  25,           5,           110000,         'Tonne'),
-    ('Adjuvant Plastifiant Béton Sika 20L', 'Plastifiant haut réducteur d''eau',          '6130001007', 'Sika Algérie',    'Adjuvants & Chimie BTP',   40,          10,           4200,           'litre')
-  ) as v(name, description, barcode, marque, category, qty, min_alert, price, unit)
- where not exists (select 1 from public.products p where p.barcode = v.barcode);
-
--- ---- suppliers -------------------------------------------------------------
-insert into public.suppliers (name, phone, address)
-select v.name, v.phone, v.address
-  from (values
-    ('GICA Ciments Algérie',              '021234567', 'Chlef - Fournisseur principal ciment vrac & sacs'),
-    ('Lafarge Holcim Algérie',            '021987654', 'M''Sila - Ciment Portland CPJ 42.5 & Adjuvants'),
-    ('Sacomet Fer & Acier BTP',           '031554433', 'Annaba - Fer à béton FeE500 de 8mm à 20mm'),
-    ('Société Générale des Granulats',    '029887766', 'Blida - Sable de dune lavé et graviers concassés')
-  ) as v(name, phone, address)
- where not exists (select 1 from public.suppliers s where s.name = v.name);
-
--- ---- clients ---------------------------------------------------------------
-insert into public.clients (name, phone, address, note, is_passager)
-select v.name, v.phone, v.address, v.note, v.passager
-  from (values
-    ('Client Passager',                '0550000000', null,                                              null,                                    true),
-    ('Entreprise Benali BTP',          '0555123456', 'Zone Industrielle Oued Smar, Alger',              'Client fidèle grossiste',               false),
-    ('Sarl El Badr Construction',      '0661987654', 'Route Nationale 5, Oran',                         'Livraison béton prêt à l''emploi',      false),
-    ('M. Karim Haddad',                '0770334455', 'Cité 1000 Logements, Constantine',                'Paiement par chèque',                   false),
-    ('Groupe Bâtiment Ouest',          '0560112233', 'Boulevard de la Soummam, Tlemcen',                'Chantier promotion immobilière',        false),
-    ('Société Al-Nour Génie Civil',    '0662445566', 'Zone d''Activité, Sétif',                         'Commandes ciment CRS & granulats',      false)
-  ) as v(name, phone, address, note, passager)
- where not exists (select 1 from public.clients c where c.name = v.name);
-
--- ---- fiche technique -------------------------------------------------------
-do $$
-declare v_fiche uuid;
-begin
-  if not exists (select 1 from public.fiche_technics where name = 'Formule Béton B25 Standard') then
-    insert into public.fiche_technics (name, category_id, category_name, description, sell_by_unit,
-                                       sell_unit, output_quantity, unit_price, total_cost,
-                                       cost_per_unit, total_value, gains_per_unit, total_gains, created_by)
-    values ('Formule Béton B25 Standard',
-            (select id from public.fiche_categories where name = 'Béton & Mortier'),
-            'Béton & Mortier', 'Dosage 350kg/m³ pour dalles, voiles et poteaux',
-            true, 'm³', 1, 9800, 6830, 6830, 9800, 2970, 2970, 'admin')
-    returning id into v_fiche;
-
-    insert into public.fiche_technic_lines (fiche_technic_id, product_id, product_name, quantity_used, unit_cost, line_cost)
-    select v_fiche, p.id, p.name, v.qty, v.cost, v.qty * v.cost
-      from (values
-        ('6130001001', 7::numeric,    650::numeric),
-        ('6130001004', 0.7,           1800),
-        ('6130001005', 0.68,          1500)
-      ) as v(barcode, qty, cost)
-      join public.products p on p.barcode = v.barcode;
-  end if;
-end
-$$;
-
--- ---- one demo purchase, production, comptoir item, sale --------------------
-do $$
-declare
-  v_prod_batch uuid;
-begin
-  ---------------------------------------------------------------- purchase --
-  if not exists (select 1 from public.purchases) then
-    perform public.create_purchase(jsonb_build_object(
-      'supplier_id', (select id from public.suppliers where name = 'GICA Ciments Algérie'),
-      'date', '2026-07-15',
-      'paid_amount', 325000,
-      'products', jsonb_build_array(jsonb_build_object(
-        'product_id',   (select id from public.products where barcode = '6130001001'),
-        'product_name', 'Ciment Portland CPJ 42.5 (Sac 50kg)',
-        'quantity', 500, 'purchase_price', 650, 'min_alert_quantity', 50))
-    ));
-
-    perform public.create_purchase(jsonb_build_object(
-      'supplier_id', (select id from public.suppliers where name = 'Société Générale des Granulats'),
-      'date', '2026-07-18',
-      'paid_amount', 100000,
-      'products', jsonb_build_array(jsonb_build_object(
-        'product_id',   (select id from public.products where barcode = '6130001004'),
-        'product_name', 'Sable de Dune Lavé 0/2 (m³)',
-        'quantity', 100, 'purchase_price', 1800, 'min_alert_quantity', 40))
-    ));
-  end if;
-
-  -------------------------------------------------------------- production --
-  if not exists (select 1 from public.productions) then
-    v_prod_batch := (public.create_production(jsonb_build_object(
-      'name', 'Gâchée Béton B25 - Lot #2026-07',
-      'description', 'Production 50m³ béton prêt à l''emploi pour chantier El Badr',
-      'date', '2026-07-21', 'hour', '08:30',
-      'category_id',   (select id from public.production_categories where name = 'Béton & Mortier'),
-      'category_name', 'Béton & Mortier',
-      'output_quantity', 50, 'unit_price', 9800,
-      'sell_by_unit', true, 'sell_unit', 'm³',
-      'used_products', jsonb_build_array(
-        jsonb_build_object('product_id', (select id from public.products where barcode = '6130001001'),
-                           'product_name', 'Ciment Portland CPJ 42.5 (Sac 50kg)',
-                           'quantity_used', 350, 'unit_cost', 650, 'line_cost', 227500),
-        jsonb_build_object('product_id', (select id from public.products where barcode = '6130001004'),
-                           'product_name', 'Sable de Dune Lavé 0/2 (m³)',
-                           'quantity_used', 35, 'unit_cost', 1800, 'line_cost', 63000),
-        jsonb_build_object('product_id', (select id from public.products where barcode = '6130001005'),
-                           'product_name', 'Gravier Concassé 3/8 (Tonne)',
-                           'quantity_used', 34, 'unit_cost', 1500, 'line_cost', 51000))
-    ))).id;
-
-    perform public.transfer_production_to_comptoir(v_prod_batch, 30);
-  end if;
-
-  -------------------------------------------------------------------- sale --
-  if not exists (select 1 from public.sales) then
-    perform public.create_sale(jsonb_build_object(
-      'client_id', (select id from public.clients where name = 'Entreprise Benali BTP'),
-      'date', '2026-07-20', 'reduction', 1500, 'paid_amount', 50000,
-      'products', jsonb_build_array(
-        jsonb_build_object('product_id', (select id from public.products where barcode = '6130001001'),
-                           'product_name', 'Ciment Portland CPJ 42.5 (Sac 50kg)',
-                           'quantity', 50, 'selling_price', 850),
-        jsonb_build_object('product_id', (select id from public.products where barcode = '6130001004'),
-                           'product_name', 'Sable de Dune Lavé 0/2 (m³)',
-                           'quantity', 10, 'selling_price', 2400))
-    ));
-
-    perform public.create_sale(jsonb_build_object(
-      'client_id', (select id from public.clients where name = 'Sarl El Badr Construction'),
-      'date', '2026-07-22', 'reduction', 2000, 'paid_amount', 145000,
-      'products', jsonb_build_array(
-        jsonb_build_object('product_id', (select id from public.products where barcode = '6130001003'),
-                           'product_name', 'Béton Prêt à l''Emploi B25 (m³)',
-                           'quantity', 15, 'selling_price', 9800))
-    ));
-  end if;
-
-  ---------------------------------------------------------------- commands --
-  if not exists (select 1 from public.commands) then
-    perform public.create_command(jsonb_build_object(
-      'client_id',   (select id from public.clients where name = 'Sarl El Badr Construction'),
-      'client_name', 'Sarl El Badr Construction',
-      'receive_date', '2026-07-30', 'receive_hour', '09', 'receive_minute', '00',
-      'advance_paid', 100000,
-      'items', jsonb_build_array(jsonb_build_object(
-        'product_id',   (select id from public.products where barcode = '6130001003'),
-        'product_name', 'Béton Prêt à l''Emploi B25 (m³)',
-        'quantity', 30, 'unit_price', 9800, 'total_price', 294000))
-    ));
-  end if;
-
-  ----------------------------------------------------------------- expenses --
-  if not exists (select 1 from public.expenses) then
-    insert into public.expenses (name, description, amount, date, category_id, category_name, created_by) values
-      ('Carburant camions', 'Carburant pour camions toupies et malaxeurs', 12000, '2026-07-23',
-       (select id from public.expense_categories where name = 'Transport & Carburant'), 'Transport & Carburant', 'admin'),
-      ('Électricité usine', 'Facture électricité centrale à béton', 35000, '2026-07-24',
-       (select id from public.expense_categories where name = 'Électricité & Énergie'), 'Électricité & Énergie', 'admin'),
-      ('Vidange & Entretien', 'Vidange et graissage tapis roulant centralier', 18000, '2026-07-26',
-       (select id from public.expense_categories where name = 'Maintenance Équipement'), 'Maintenance Équipement', 'admin');
-  end if;
-end
-$$;
 
 
 -- ============================================================================
--- 21. GRANTS & REALTIME
+-- 20. GRANTS & REALTIME
 -- ============================================================================
 
 grant usage on schema public to anon, authenticated, service_role;
@@ -2847,6 +2572,7 @@ grant execute                       on all functions in schema public to authent
 
 -- login helpers must be reachable before authentication
 grant execute on function public.resolve_login_email(text)                       to anon, authenticated;
+grant execute on function public.admin_account_exists()                          to anon, authenticated;
 grant execute on function public.create_admin_account(text, text, text, text)    to anon, authenticated;
 
 -- the raw auth-user writer must NEVER be callable from the browser: accounts can
@@ -2876,8 +2602,9 @@ $$;
 
 -- ============================================================================
 --  END — Altech Production / Ciment Blida
---  Sign in from the application with:
---     admin    / admin123      (or admin@altechproduction.com)
---     demo     / demo123
---     mustapha / worker123     omar / worker123     youcef / worker123
+--
+--  The database contains NO account and NO data: create the first
+--  administrator from the /login page ("Créer un compte Administrateur").
+--  Once it exists the button disappears and further accounts can only be
+--  created by an administrator.
 -- ============================================================================

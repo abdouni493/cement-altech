@@ -58,6 +58,6 @@ export const useCaisseReportStore = create<CaisseReportState>()(
         push('caisseReports.delete', () => db.caisseReports.remove(id));
       },
     }),
-    { name: 'labochimie-caisse-reports' }
+    { name: 'altech-caisse-reports' }
   )
 );
