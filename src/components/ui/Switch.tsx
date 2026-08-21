@@ -47,7 +47,7 @@ export function Checkbox({ checked, onChange, label, className }: CheckboxProps)
         onClick={() => onChange(!checked)}
         className={cn(
           'h-5 w-5 rounded-md border-2 flex items-center justify-center transition-colors shrink-0',
-          checked ? 'bg-gold border-gold' : 'bg-white/60 border-gold/40'
+          checked ? 'bg-gold border-gold' : 'bg-vanilla/50 border-gold/40'
         )}
       >
         {checked && (

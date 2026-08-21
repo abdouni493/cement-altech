@@ -14,8 +14,8 @@ interface CategorySelectProps {
   categories: Category[];
   value: string; // selected categoryId
   onChange: (id: string) => void;
-  onCreate: (name: string) => Category;
-  onDelete: (id: string) => void;
+  onCreate: (name: string) => Category | Promise<Category>;
+  onDelete: (id: string) => void | Promise<void>;
 }
 
 /**
@@ -29,10 +29,10 @@ export function CategorySelect({ label, categories, value, onChange, onCreate, o
   const [newCat, setNewCat] = useState('');
   const [confirmDel, setConfirmDel] = useState<{ id: string; name: string } | null>(null);
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     const name = newCat.trim();
     if (!name) return;
-    const c = onCreate(name);
+    const c = await onCreate(name);
     onChange(c.id);
     setNewCat('');
     setCatModal(false);
@@ -77,7 +77,7 @@ export function CategorySelect({ label, categories, value, onChange, onCreate, o
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
-                handleAdd();
+                void handleAdd();
               }
             }}
           />
@@ -93,11 +93,11 @@ export function CategorySelect({ label, categories, value, onChange, onCreate, o
         open={!!confirmDel}
         onClose={() => setConfirmDel(null)}
         onConfirm={() => {
-          if (confirmDel) {
-            onDelete(confirmDel.id);
+          if (!confirmDel) return;
+          void Promise.resolve(onDelete(confirmDel.id)).then(() => {
             if (value === confirmDel.id) onChange('');
             toast.success(t('delete'));
-          }
+          });
         }}
         title={t('category')}
         message={confirmDel ? `${t('deleteCategoryConfirm')} « ${confirmDel.name} »` : ''}

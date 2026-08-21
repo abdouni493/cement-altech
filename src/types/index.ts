@@ -31,9 +31,10 @@ export interface Product {
   id: string;
   name: string;
   description: string;
-  barcode: string;
-  marqueId: string;
-  categoryId: string;
+  /** Legacy fields — no longer asked for when creating a product. */
+  barcode?: string;
+  marqueId?: string;
+  categoryId?: string;
   principalQuantity: number;
   currentQuantity: number;
   minAlertQuantity: number;
@@ -132,6 +133,10 @@ export interface SaleLine {
   productName?: string;
   quantity: number;
   sellingPrice: number;
+  /** Catalogue price of the comptoir item at the moment of the sale. Lets the
+   *  sale detail show "prix catalogue" vs "prix appliqué" when the cashier
+   *  overrode the unit price. */
+  basePrice?: number;
   // When the production product is sold by unit (g / kg / …)
   sellByUnit?: boolean;
   unit?: string;
@@ -264,6 +269,8 @@ export interface WorkerPaymentRecord {
   period: string;
   amount: number;
   description: string;
+  /** 'salary' (default) or 'overtime' — salaire ou heures supplémentaires */
+  kind?: 'salary' | 'overtime';
 }
 
 export interface Worker {
@@ -285,6 +292,7 @@ export interface Worker {
   acomptes: Acompte[];
   absences: Absence[];
   payments: WorkerPaymentRecord[];
+  overtimes?: WorkerOvertime[];
 }
 
 // ---------- Expenses ----------
@@ -389,3 +397,77 @@ export const PERMISSION_MODULES = [
 ] as const;
 
 export type PermissionModule = (typeof PERMISSION_MODULES)[number];
+
+// ============================================================
+//  MISE À JOUR 2026 — nouvelles entités
+// ============================================================
+
+// ---------- Règlement direct d'une dette fournisseur / client ----------
+export interface PartyPayment {
+  id: string;
+  partyId: string;          // supplierId or clientId
+  partyName?: string;
+  amount: number;
+  date: string;             // YYYY-MM-DD
+  paidAt: string;           // ISO datetime — date AND hour of the payment
+  notes?: string;
+  createdAt?: string;
+  createdBy?: string;
+}
+
+// ---------- Livraison partielle d'une commande ----------
+export interface CommandDeliveryItem {
+  commandItemId?: string;
+  productName: string;
+  quantity: number;
+  sellUnit?: string;
+}
+
+export interface CommandDelivery {
+  id: string;
+  commandId: string;
+  reference: string;
+  date: string;
+  deliveredAt: string;      // ISO datetime
+  notes?: string;
+  items: CommandDeliveryItem[];
+  createdBy?: string;
+}
+
+// ---------- Heures supplémentaires d'un employé ----------
+export interface WorkerOvertime {
+  id: string;
+  workerId: string;
+  date: string;
+  workEndHour: number;
+  workEndMinute: number;
+  overtimeEndHour: number;
+  overtimeEndMinute: number;
+  hours: number;            // decimal hours between the two times
+  hourlyRate: number;
+  amount: number;           // total to pay (auto-computed, editable)
+  description?: string;
+  isPaid: boolean;
+  paidAt?: string | null;
+  paymentId?: string | null;
+  createdBy?: string;
+}
+
+// ---------- Bon de commande (interface Dépenses) ----------
+export interface PurchaseOrderItem {
+  productName: string;
+  description: string;
+  quantity: number;
+  unit?: string;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  reference: string;
+  date: string;
+  supplierName?: string;
+  notes?: string;
+  items: PurchaseOrderItem[];
+  createdAt?: string;
+  createdBy?: string;
+}

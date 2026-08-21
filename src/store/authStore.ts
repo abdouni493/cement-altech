@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { User, CreateAccountData, Lang } from '@/types';
 import { uid } from '@/lib/utils';
-import { useWorkerStore } from './workerStore';
 import { supabase, resolveLoginEmail, fetchProfile } from '@/lib/supabase';
 
 interface AuthState {
@@ -19,6 +18,8 @@ interface AuthState {
   logout: () => Promise<void>;
   restoreSession: () => Promise<void>;
   setLanguage: (lang: Lang) => void;
+  /** Re-reads the permission matrix of the logged-in user from the database. */
+  refreshProfile: () => Promise<void>;
   /** true as soon as the store has an administrator (hides the login-page button) */
   adminExists: () => Promise<boolean>;
   createAccount: (data: CreateAccountData) => Promise<{ ok: boolean; error?: string }>;
@@ -120,6 +121,17 @@ export const useAuthStore = create<AuthState>()(
           set({ isOnline: false });
         } finally {
           set({ isBootstrapping: false });
+        }
+      },
+
+      refreshProfile: async () => {
+        const current = get().user;
+        if (!current) return;
+        try {
+          const profile = await fetchProfile(current.id);
+          if (profile) set({ user: userFromProfile(profile) });
+        } catch {
+          /* offline — keep the permissions loaded at login */
         }
       },
 
@@ -249,28 +261,8 @@ function loginLocally(
     return true;
   }
 
-  const workers = useWorkerStore.getState().workers;
-  const worker = workers.find(
-    (w) =>
-      w.hasAccount &&
-      (w.email.toLowerCase() === id || w.username.toLowerCase() === id) &&
-      w.password === password
-  );
-  if (worker) {
-    set({
-      user: {
-        id: 'wrk-user-' + worker.id,
-        name: worker.fullName,
-        username: worker.username,
-        email: worker.email,
-        role: 'worker',
-        permissions: worker.permissions,
-        workerId: worker.id,
-      },
-      isAuthenticated: true,
-    });
-    return true;
-  }
+  // Employees always sign in through Supabase Auth (their account lives in
+  // `auth.users`): there is no local password copy to fall back on.
   return false;
 }
 

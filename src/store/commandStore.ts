@@ -1,14 +1,16 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import { uid } from '@/lib/utils';
-import { getCurrentUsername } from './authStore';
+import type { CommandDelivery, CommandDeliveryItem } from '@/types';
 import { db, rpc } from '@/lib/db';
-import { push } from '@/lib/persist';
+import { save } from '@/lib/persist';
 
 export interface CommandItem {
+  /** database id of the line — needed to attribute a delivery to it */
+  id?: string;
   productId?: string;
   productName: string;
   quantity: number;
+  /** quantity already delivered across every "Livraison" of the command */
+  deliveredQuantity?: number;
   unitPrice: number;
   totalPrice: number;
   sellByUnit?: boolean;
@@ -38,109 +40,189 @@ export interface Command {
   createdBy: string;
 }
 
-export type AddCommandInput = Omit<Command, 'id' | 'reference' | 'createdAt' | 'paidAmount' | 'restAmount' | 'status' | 'createdBy' | 'advancePaid'> & {
+export type AddCommandInput = Omit<
+  Command,
+  'id' | 'reference' | 'createdAt' | 'paidAmount' | 'restAmount' | 'status' | 'createdBy' | 'advancePaid'
+> & {
   createdBy?: string;
   advancePaid?: number;
+  paidAmount?: number;
 };
+
+/** Ordered vs delivered summary of a command — drives the card alert. */
+export function deliveryStatus(cmd: Command) {
+  const ordered = cmd.items.reduce((s, i) => s + i.quantity, 0);
+  const delivered = cmd.items.reduce((s, i) => s + (i.deliveredQuantity ?? 0), 0);
+  const remaining = Math.max(0, ordered - delivered);
+  return {
+    ordered,
+    delivered,
+    remaining,
+    isFull: ordered > 0 && remaining <= 0.0001,
+    isPartial: delivered > 0 && remaining > 0.0001,
+    percent: ordered > 0 ? Math.min(100, (delivered / ordered) * 100) : 0,
+  };
+}
 
 interface CommandState {
   commands: Command[];
-  addCommand: (c: AddCommandInput) => Command;
-  updateCommand: (id: string, data: Partial<Command>) => void;
-  finaliseCommand: (id: string) => void;
-  payDebt: (commandId: string, amount: number, date?: string) => void;
-  updateStatus: (commandId: string, status: Command['status']) => void;
-  deleteCommand: (id: string) => void;
+  deliveries: CommandDelivery[];
+  load: () => Promise<void>;
+  addCommand: (c: AddCommandInput) => Promise<Command>;
+  /** Returns false when the product lines were kept because a delivery exists. */
+  updateCommand: (id: string, data: Partial<Command>) => Promise<boolean>;
+  payDebt: (commandId: string, amount: number, date?: string) => Promise<void>;
+  updateStatus: (commandId: string, status: Command['status']) => Promise<void>;
+  deleteCommand: (id: string) => Promise<void>;
+  // ---- livraisons ----
+  addDelivery: (
+    commandId: string,
+    items: CommandDeliveryItem[],
+    deliveredAt: string,
+    notes?: string
+  ) => Promise<CommandDelivery>;
+  updateDelivery: (
+    id: string,
+    items: CommandDeliveryItem[],
+    deliveredAt: string,
+    notes?: string
+  ) => Promise<void>;
+  deleteDelivery: (id: string) => Promise<void>;
 }
 
-export const useCommandStore = create<CommandState>()(
-  persist(
-    (set, get) => ({
-      commands: [],
-      addCommand: (data) => {
-        const count = get().commands.length + 1;
-        const ref = `CMD-${new Date().getFullYear()}-${String(count).padStart(3, '0')}`;
-        const advance = data.advancePaid ?? (data as any).paidAmount ?? 0;
-        const restAmount = Math.max(0, data.totalAmount - advance);
-        const cmd: Command = {
-          ...data,
-          id: uid('cmd'),
-          reference: ref,
-          createdAt: new Date().toISOString(),
-          advancePaid: advance,
-          paidAmount: advance,
-          restAmount,
-          status: 'pending',
-          createdBy: data.createdBy || getCurrentUsername(),
-        };
-        set({ commands: [cmd, ...get().commands] });
+const itemPayload = (i: CommandItem) => ({
+  product_id: i.productId ?? null,
+  fiche_technic_id: i.ficheTechnicId ?? null,
+  product_name: i.productName,
+  quantity: i.quantity,
+  unit_price: i.unitPrice,
+  total_price: i.totalPrice,
+  sell_by_unit: i.sellByUnit ?? false,
+  sell_unit: i.sellUnit ?? null,
+});
 
-        push(
-          'commands.create',
-          () =>
-            rpc.createCommand({
-              client_id: cmd.clientId,
-              client_name: cmd.clientName,
-              client_phone: cmd.clientPhone ?? null,
-              receive_date: cmd.receiveDate || null,
-              receive_hour: cmd.receiveHour,
-              receive_minute: cmd.receiveMinute,
-              total_amount: cmd.totalAmount,
-              advance_paid: cmd.advancePaid,
-              notes: cmd.notes ?? null,
-              items: cmd.items.map((i) => ({
-                product_id: i.productId ?? null,
-                fiche_technic_id: i.ficheTechnicId ?? null,
-                product_name: i.productName,
-                quantity: i.quantity,
-                unit_price: i.unitPrice,
-                total_price: i.totalPrice,
-                sell_by_unit: i.sellByUnit ?? false,
-                sell_unit: i.sellUnit ?? null,
-              })),
-            }),
-          (row: { id: string; reference: string }) =>
-            set({
-              commands: get().commands.map((c) =>
-                c.id === cmd.id ? { ...c, id: row.id, reference: row.reference || c.reference } : c
-              ),
-            })
-        );
-        return cmd;
-      },
+const deliveryItemPayload = (i: CommandDeliveryItem) => ({
+  command_item_id: i.commandItemId ?? null,
+  product_name: i.productName,
+  quantity: i.quantity,
+  sell_unit: i.sellUnit ?? null,
+});
 
-      updateCommand: (id, data) =>
-        set({ commands: get().commands.map((c) => (c.id === id ? { ...c, ...data } : c)) }),
+export const useCommandStore = create<CommandState>()((set, get) => ({
+  commands: [],
+  deliveries: [],
 
-      finaliseCommand: (id) => {
-        push('commands.finalise', () => rpc.setCommandStatus(id, 'finalised'));
-        set({ commands: get().commands.map((c) => (c.id === id ? { ...c, status: 'finalised' } : c)) });
-      },
+  load: async () => {
+    const [commands, deliveries] = await Promise.all([
+      db.commands.list(), db.commandDeliveries.list(),
+    ]);
+    set({ commands, deliveries });
+  },
 
-      payDebt: (commandId, amount) => {
-        push('commands.pay', () => rpc.payCommand(commandId, amount));
-        set({
-          commands: get().commands.map((cmd) => {
-            if (cmd.id !== commandId) return cmd;
-            const newPaid = Math.min(cmd.totalAmount, cmd.paidAmount + amount);
-            const newRest = Math.max(0, cmd.totalAmount - newPaid);
-            return { ...cmd, paidAmount: newPaid, restAmount: newRest };
-          }),
-        });
-      },
+  addCommand: async (data) => {
+    const advance = data.advancePaid ?? data.paidAmount ?? 0;
+    const row = await save('commands.create', () =>
+      rpc.createCommand({
+        client_id: data.clientId,
+        client_name: data.clientName,
+        client_phone: data.clientPhone ?? null,
+        receive_date: data.receiveDate || null,
+        receive_hour: data.receiveHour,
+        receive_minute: data.receiveMinute,
+        total_amount: data.totalAmount,
+        advance_paid: advance,
+        notes: data.notes ?? null,
+        items: data.items.map(itemPayload),
+      })
+    );
+    const commands = await db.commands.list();
+    set({ commands });
+    return commands.find((c) => c.id === row.id) as Command;
+  },
 
-      updateStatus: (commandId, status) => {
-        push('commands.status', () => rpc.setCommandStatus(commandId, status));
-        set({
-          commands: get().commands.map((c) => (c.id === commandId ? { ...c, status } : c)),
-        });
-      },
+  updateCommand: async (id, data) => {
+    // header
+    await save('commands.update', () =>
+      db.commands.update(id, {
+        client_id: data.clientId,
+        client_name: data.clientName,
+        client_phone: data.clientPhone ?? null,
+        receive_date: data.receiveDate || null,
+        receive_hour: data.receiveHour,
+        receive_minute: data.receiveMinute,
+        total_amount: data.totalAmount,
+        notes: data.notes ?? null,
+      })
+    );
+    // Lines are replaced (delete + insert) so they must NOT be touched once a
+    // delivery references them — otherwise the delivered quantities would be
+    // orphaned and the command would wrongly go back to "non livrée".
+    const hasDeliveries = get().deliveries.some((d) => d.commandId === id);
+    if (data.items && !hasDeliveries) {
+      await save('commands.updateItems', () =>
+        db.commands.replaceItems(id, data.items!.map(itemPayload))
+      );
+    }
+    const [commands, deliveries] = await Promise.all([
+      db.commands.list(), db.commandDeliveries.list(),
+    ]);
+    set({ commands, deliveries });
+    return !hasDeliveries;
+  },
 
-      deleteCommand: (id) => {
-        set({ commands: get().commands.filter((c) => c.id !== id) });
-        push('commands.delete', () => db.commands.remove(id));
-      },
-    }),
-    { name: 'altech-commands' }
-  )
-);
+  payDebt: async (commandId, amount, date) => {
+    await save('commands.pay', () => rpc.payCommand(commandId, amount, date));
+    set({ commands: await db.commands.list() });
+  },
+
+  updateStatus: async (commandId, status) => {
+    await save('commands.status', () => rpc.setCommandStatus(commandId, status));
+    set({ commands: await db.commands.list() });
+  },
+
+  deleteCommand: async (id) => {
+    await save('commands.delete', () => db.commands.remove(id));
+    set({
+      commands: get().commands.filter((c) => c.id !== id),
+      deliveries: get().deliveries.filter((d) => d.commandId !== id),
+    });
+  },
+
+  addDelivery: async (commandId, items, deliveredAt, notes = '') => {
+    const row = await save('commands.deliver', () =>
+      rpc.createCommandDelivery({
+        command_id: commandId,
+        delivered_at: deliveredAt,
+        notes,
+        items: items.map(deliveryItemPayload),
+      })
+    );
+    const [commands, deliveries] = await Promise.all([
+      db.commands.list(), db.commandDeliveries.list(),
+    ]);
+    set({ commands, deliveries });
+    return deliveries.find((d) => d.id === row.id) as CommandDelivery;
+  },
+
+  updateDelivery: async (id, items, deliveredAt, notes = '') => {
+    await save('commands.delivery.update', () =>
+      rpc.updateCommandDelivery(id, {
+        delivered_at: deliveredAt,
+        notes,
+        items: items.map(deliveryItemPayload),
+      })
+    );
+    const [commands, deliveries] = await Promise.all([
+      db.commands.list(), db.commandDeliveries.list(),
+    ]);
+    set({ commands, deliveries });
+  },
+
+  deleteDelivery: async (id) => {
+    await save('commands.delivery.delete', () => rpc.deleteCommandDelivery(id));
+    const [commands, deliveries] = await Promise.all([
+      db.commands.list(), db.commandDeliveries.list(),
+    ]);
+    set({ commands, deliveries });
+  },
+}));

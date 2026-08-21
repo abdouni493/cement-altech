@@ -28,13 +28,14 @@ export default function PurchasePage() {
   const { purchases, payDebt, deletePurchase } = usePurchaseStore();
   const suppliers = useSupplierStore((s) => s.suppliers);
   const settings = useSettingsStore((s) => s.settings);
-  const { products: stockProducts, categories: stockCategories } = useStockStore();
+  const stockProducts = useStockStore((s) => s.products);
+  const units = useStockStore((s) => s.units);
 
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState<DateFilter | 'period'>('all');
   const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
   const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 10));
-  const [categoryFilter, setCategoryFilter] = useState('');
+  const [unitFilter, setUnitFilter] = useState('');
 
   const [createOpen, setCreateOpen] = useState(false);
   const [viewing, setViewing] = useState<Purchase | null>(null);
@@ -51,14 +52,14 @@ export default function PurchasePage() {
         ? isWithinRange(p.date, startDate, endDate)
         : matchesDateFilter(p.date, dateFilter as DateFilter);
 
-      const matchCategory = !categoryFilter || p.products.some((line) => {
+      const matchUnit = !unitFilter || p.products.some((line) => {
         const prod = stockProducts.find((sp) => sp.id === line.productId);
-        return prod && prod.categoryId === categoryFilter;
+        return (line.unit || prod?.unit) === unitFilter;
       });
 
-      return matchSearch && matchDate && matchCategory;
+      return matchSearch && matchDate && matchUnit;
     });
-  }, [purchases, search, dateFilter, startDate, endDate, categoryFilter, stockProducts, suppliers]);
+  }, [purchases, search, dateFilter, startDate, endDate, unitFilter, stockProducts, suppliers]);
 
   // Statistics calculation for the filtered purchases
   const stats = useMemo(() => {
@@ -73,13 +74,12 @@ export default function PurchasePage() {
     return { totalPurchases, totalPaid, totalDebt };
   }, [filtered]);
 
-  const getPurchaseCategories = (purchase: Purchase) => {
-    const cats = purchase.products.map((line) => {
-      const prod = stockProducts.find((sp) => sp.id === line.productId);
-      if (!prod) return null;
-      return stockCategories.find((c) => c.id === prod.categoryId)?.name || null;
-    }).filter(Boolean) as string[];
-    return Array.from(new Set(cats));
+  /** Units involved in an invoice — displayed as badges on the card. */
+  const getPurchaseUnits = (purchase: Purchase) => {
+    const list = purchase.products
+      .map((line) => line.unit || stockProducts.find((sp) => sp.id === line.productId)?.unit || null)
+      .filter(Boolean) as string[];
+    return Array.from(new Set(list));
   };
 
   const handlePrint = (p: Purchase) => {
@@ -137,14 +137,14 @@ export default function PurchasePage() {
           <SearchBar value={search} onChange={setSearch} placeholder={`${t('search')} ${t('supplier')} ou Réf.`} />
         </div>
         
-        {/* Category filtering */}
+        {/* Unit filtering */}
         <div className="w-[180px] flex items-center gap-2">
           <Folder size={16} className="text-gold-dark shrink-0" />
-          <Select 
-            value={categoryFilter} 
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            placeholder="Toutes Catégories"
-            options={stockCategories.map((c) => ({ value: c.id, label: c.name }))} 
+          <Select
+            value={unitFilter}
+            onChange={(e) => setUnitFilter(e.target.value)}
+            placeholder="Toutes unités"
+            options={units.map((u) => ({ value: u.name, label: u.name }))}
             className="w-full"
           />
         </div>
@@ -168,7 +168,7 @@ export default function PurchasePage() {
 
         {/* Period inputs */}
         {dateFilter === 'period' && (
-          <div className="flex items-center gap-2 animate-fadeIn bg-white/50 px-3 py-1.5 rounded-xl border border-gold/10">
+          <div className="flex items-center gap-2 animate-fadeIn bg-vanilla/40 px-3 py-1.5 rounded-xl border border-gold/10">
             <input 
               type="date" 
               value={startDate} 
@@ -189,7 +189,7 @@ export default function PurchasePage() {
       {filtered.length === 0 ? <EmptyState message={t('noData')} /> : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 animate-fadeIn">
           {filtered.map((p, i) => {
-            const cats = getPurchaseCategories(p);
+            const cats = getPurchaseUnits(p);
             return (
               <Card key={p.id} index={i} hoverable className="flex flex-col border border-gold/10 hover:border-gold/30 transition-all duration-300">
                 <div className="flex justify-between items-start mb-2">
@@ -249,7 +249,7 @@ export default function PurchasePage() {
       )}
 
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title={t('newPurchase')} size="lg">
-        <CreatePurchase onClose={() => setCreateOpen(false)} />
+        <CreatePurchase onClose={() => setCreateOpen(false)} onCreated={(pur) => setViewing(pur)} />
       </Modal>
 
       <Modal open={!!viewing} onClose={() => setViewing(null)} title={viewing?.reference} size="md">
@@ -281,10 +281,10 @@ export default function PurchasePage() {
 
       {paying && (
         <PayDebtModal open={!!paying} onClose={() => setPaying(null)} reference={paying.reference} partyName={supplierName(paying.supplierId)}
-          total={paying.totalAmount} paid={paying.paidAmount} onPay={(amount, desc) => payDebt(paying.id, amount, desc)} />
+          total={paying.totalAmount} paid={paying.paidAmount} onPay={(amount, _desc, paidAt) => { void payDebt(paying.id, amount, (paidAt || new Date().toISOString()).slice(0, 10)); }} />
       )}
 
-      <ConfirmDialog open={!!deleteId} onClose={() => setDeleteId(null)} onConfirm={() => { if (deleteId) { deletePurchase(deleteId); toast.success('Facture supprimée'); } }} />
+      <ConfirmDialog open={!!deleteId} onClose={() => setDeleteId(null)} onConfirm={() => { if (deleteId) { void deletePurchase(deleteId).then(() => toast.success('Facture supprimée')); } }} />
     </div>
   );
 }

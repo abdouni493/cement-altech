@@ -5,7 +5,7 @@ import {
   Wallet, Plus, Minus, ArrowDownLeft, ArrowUpRight, TrendingUp, TrendingDown,
   ShoppingCart, Banknote, Receipt, HardHat, FlaskConical, Beaker, Package,
   Pencil, Trash2, Calendar, PiggyBank, Coins, ArrowRightLeft, FileText,
-  ChevronDown, ChevronUp, Tag
+  ChevronDown, ChevronUp, Tag, Clock
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -147,6 +147,28 @@ export default function CaissePage() {
         w.acomptes.filter((p) => inPeriod(p.date)).reduce((a, p) => a + p.amount, 0),
       0
     );
+    // Salaires / heures supplémentaires / acomptes détaillés sur la période
+    const salaryPaid = workers.reduce(
+      (s, w) => s + w.payments.filter((p) => inPeriod(p.date) && p.kind !== 'overtime').reduce((a, p) => a + p.amount, 0),
+      0
+    );
+    const overtimePaid = workers.reduce(
+      (s, w) => s + w.payments.filter((p) => inPeriod(p.date) && p.kind === 'overtime').reduce((a, p) => a + p.amount, 0),
+      0
+    );
+    const acomptesPaid = workers.reduce(
+      (s, w) => s + w.acomptes.filter((p) => inPeriod(p.date)).reduce((a, p) => a + p.amount, 0),
+      0
+    );
+    // Dette sociale : heures supplémentaires enregistrées mais pas encore réglées
+    const overtimeUnpaid = workers.reduce(
+      (s, w) => s + (w.overtimes ?? []).filter((o) => !o.isPaid).reduce((a, o) => a + o.amount, 0),
+      0
+    );
+    const overtimeHoursUnpaid = workers.reduce(
+      (s, w) => s + (w.overtimes ?? []).filter((o) => !o.isPaid).reduce((a, o) => a + o.hours, 0),
+      0
+    );
     const depositsP = pTx.filter((x) => x.type === 'deposit').reduce((s, x) => s + x.amount, 0);
     const withdrawalsP = pTx.filter((x) => x.type === 'withdrawal').reduce((s, x) => s + x.amount, 0);
 
@@ -220,7 +242,8 @@ export default function CaissePage() {
       balance, depositsAll, withdrawalsAll, salesCashAll, inAll, outAll,
       comptoirQty, comptoirValue, stockValue, treasury,
       salesTotal, salesPaid, purchasesTotal, purchasesPaid, expensesTotal,
-      productionValue, workerPayments, depositsP, withdrawalsP,
+      productionValue, workerPayments, salaryPaid, overtimePaid, acomptesPaid,
+      overtimeUnpaid, overtimeHoursUnpaid, depositsP, withdrawalsP,
       periodIn, periodOut, periodNet, productSales, restItems,
       purchasesByCategory, periodProductions: pProd,
       depositCats, withdrawalCats,
@@ -408,6 +431,37 @@ export default function CaissePage() {
         <CategoryTotalsCard index={1} title={t('withdrawalsByCategory')} icon={<ArrowUpRight size={18} />} tone="rose" cats={c.withdrawalCats} total={c.withdrawalsP} activeId={catFilter} onPick={(id) => setCatFilter(catFilter === id ? '' : id)} emptyLabel={t('noData')} />
       </div>
 
+      {/* ===== Social liability: unpaid overtime ===== */}
+      {c.overtimeUnpaid > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-caramel/40 bg-caramel/10 px-4 py-3.5"
+        >
+          <div className="flex items-center gap-3 text-caramel">
+            <motion.div
+              animate={{ scale: [1, 1.12, 1] }}
+              transition={{ duration: 2, repeat: Infinity }}
+              className="h-9 w-9 rounded-xl bg-caramel/20 flex items-center justify-center"
+            >
+              <Clock size={17} />
+            </motion.div>
+            <div>
+              <p className="text-sm font-bold">Heures supplémentaires non payées</p>
+              <p className="text-xs opacity-90">
+                {c.overtimeHoursUnpaid.toFixed(2)} h enregistrées et non réglées — sortie de caisse à prévoir.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-xl font-bold tabular text-caramel">{formatCurrency(c.overtimeUnpaid)}</span>
+            <Button size="sm" variant="secondary" onClick={() => navigate('/workers')}>
+              Voir les employés
+            </Button>
+          </div>
+        </motion.div>
+      )}
+
       {/* ===== Detailed store calculations ===== */}
       <h3 className="font-display font-semibold text-text-primary mb-3 flex items-center gap-2">
         <Receipt size={18} className="text-gold-dark" /> {t('details')}
@@ -416,11 +470,14 @@ export default function CaissePage() {
         <StatCard index={0} label={t('totalSales')} value={c.salesTotal} icon={<Receipt size={18} />} format="currency" accent="pistachio" />
         <StatCard index={1} label={t('totalPurchasesAmount')} value={c.purchasesTotal} icon={<ShoppingCart size={18} />} format="currency" accent="caramel" />
         <StatCard index={2} label={t('totalExpenses')} value={c.expensesTotal} icon={<Banknote size={18} />} format="currency" accent="rose" />
-        <StatCard index={3} label={t('workerSalaries')} value={c.workerPayments} icon={<HardHat size={18} />} format="currency" accent="lavender" />
-        <StatCard index={4} label={t('productionValue')} value={c.productionValue} icon={<FlaskConical size={18} />} format="currency" accent="gold" />
-        <StatCard index={5} label={t('comptoirProducts')} value={c.comptoirQty} icon={<Beaker size={18} />} format="number" accent="caramel" />
-        <StatCard index={6} label={t('comptoirValue')} value={c.comptoirValue} icon={<Coins size={18} />} format="currency" accent="pistachio" />
-        <StatCard index={7} label={t('stockValue')} value={c.stockValue} icon={<Package size={18} />} format="currency" accent="gold" />
+        <StatCard index={3} label="Salaires versés" value={c.salaryPaid} icon={<HardHat size={18} />} format="currency" accent="lavender" />
+        <StatCard index={4} label="Heures sup. payées" value={c.overtimePaid} icon={<Clock size={18} />} format="currency" accent="caramel" />
+        <StatCard index={5} label="Acomptes versés" value={c.acomptesPaid} icon={<Coins size={18} />} format="currency" accent="lavender" />
+        <StatCard index={6} label={t('productionValue')} value={c.productionValue} icon={<FlaskConical size={18} />} format="currency" accent="gold" />
+        <StatCard index={7} label={t('comptoirProducts')} value={c.comptoirQty} icon={<Beaker size={18} />} format="number" accent="caramel" />
+        <StatCard index={8} label={t('comptoirValue')} value={c.comptoirValue} icon={<Coins size={18} />} format="currency" accent="pistachio" />
+        <StatCard index={9} label={t('stockValue')} value={c.stockValue} icon={<Package size={18} />} format="currency" accent="gold" />
+        <StatCard index={10} label="Heures sup. à payer" value={c.overtimeUnpaid} icon={<Clock size={18} />} format="currency" accent="rose" />
       </div>
 
       {/* ===== Per-product sales (period) + comptoir rest (now) ===== */}
@@ -527,7 +584,7 @@ export default function CaissePage() {
                         initial={{ height: 0 }}
                         animate={{ height: 'auto' }}
                         exit={{ height: 0 }}
-                        className="overflow-hidden border-t border-gold/10 bg-white/70"
+                        className="overflow-hidden border-t border-gold/10 bg-vanilla/50"
                       >
                         <div className="p-3">
                           <table className="w-full text-xs">
@@ -590,7 +647,7 @@ export default function CaissePage() {
                         initial={{ height: 0 }}
                         animate={{ height: 'auto' }}
                         exit={{ height: 0 }}
-                        className="overflow-hidden border-t border-gold/10 bg-white/70"
+                        className="overflow-hidden border-t border-gold/10 bg-vanilla/50"
                       >
                         <div className="p-3">
                           <table className="w-full text-xs">
@@ -646,7 +703,9 @@ export default function CaissePage() {
               items={[
                 { label: t('purchase'), value: c.purchasesPaid, color: 'from-[#FFD08A] to-[#F2944A]' },
                 { label: t('expenses'), value: c.expensesTotal, color: 'from-[#FFB0CB] to-[#F2547D]' },
-                { label: t('workers'), value: c.workerPayments, color: 'from-[#CDB0F5] to-[#9B7ED8]' },
+                { label: 'Salaires', value: c.salaryPaid, color: 'from-[#CDB0F5] to-[#9B7ED8]' },
+                { label: 'Heures sup.', value: c.overtimePaid, color: 'from-[#FFD08A] to-[#F2944A]' },
+                { label: 'Acomptes', value: c.acomptesPaid, color: 'from-[#A6E9CE] to-[#3FB591]' },
                 { label: t('withdrawal'), value: c.withdrawalsP, color: 'from-[#FF9CC0] to-[#E5547F]' },
               ]}
             />
@@ -819,7 +878,7 @@ function CategoryTotalsCard({ index, title, icon, tone, cats, total, activeId, o
                   <span className={`text-sm font-bold tabular shrink-0 ${text}`}>{formatCurrency(cat.total)}</span>
                 </div>
                 <div className="flex items-center gap-2 mt-1.5">
-                  <div className="h-1.5 flex-1 rounded-full bg-white/70 overflow-hidden">
+                  <div className="h-1.5 flex-1 rounded-full bg-vanilla/50 overflow-hidden">
                     <div className={`h-full rounded-full bg-gradient-to-r ${grad}`} style={{ width: `${(cat.total / max) * 100}%` }} />
                   </div>
                   <span className="text-[10px] text-text-muted shrink-0">{cat.count} op.</span>

@@ -1,19 +1,18 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import type { Product, Marque, Category, Unit } from '@/types';
-import { uid } from '@/lib/utils';
-import { getCurrentUsername } from './authStore';
 import { db } from '@/lib/db';
-import { push, swapId } from '@/lib/persist';
+import { save } from '@/lib/persist';
 
 interface StockState {
   products: Product[];
   marques: Marque[];
   categories: Category[];
   units: Unit[];
-  addProduct: (p: Omit<Product, 'id' | 'createdAt'>) => Product;
-  updateProduct: (id: string, data: Partial<Product>) => void;
-  deleteProduct: (id: string) => void;
+  load: () => Promise<void>;
+  addProduct: (p: Omit<Product, 'id' | 'createdAt'>) => Promise<Product>;
+  updateProduct: (id: string, data: Partial<Product>) => Promise<void>;
+  deleteProduct: (id: string) => Promise<void>;
+  /** Local mirror of the SQL trigger that feeds the stock after a purchase. */
   applyPurchaseToStock: (
     productId: string,
     qty: number,
@@ -23,119 +22,105 @@ interface StockState {
     unitInfo?: { unitEnabled?: boolean; unit?: string }
   ) => void;
   consumeStock: (productId: string, qty: number) => void;
-  addMarque: (name: string) => Marque;
-  addCategory: (name: string) => Category;
-  deleteMarque: (id: string) => void;
-  deleteCategory: (id: string) => void;
-  addUnit: (name: string) => Unit;
-  deleteUnit: (id: string) => void;
+  addMarque: (name: string) => Promise<Marque>;
+  addCategory: (name: string) => Promise<Category>;
+  deleteMarque: (id: string) => Promise<void>;
+  deleteCategory: (id: string) => Promise<void>;
+  addUnit: (name: string) => Promise<Unit>;
+  deleteUnit: (id: string) => Promise<void>;
 }
 
-export const useStockStore = create<StockState>()(
-  persist(
-    (set, get) => ({
-      products: [],
-      marques: [],
-      categories: [],
-      units: [],
+export const useStockStore = create<StockState>()((set, get) => ({
+  products: [],
+  marques: [],
+  categories: [],
+  units: [],
 
-      addProduct: (p) => {
-        const product: Product = {
-          ...p,
-          id: uid('prod'),
-          createdAt: new Date().toISOString().slice(0, 10),
-          createdBy: p.createdBy || getCurrentUsername(),
-        };
-        set({ products: [product, ...get().products] });
-        push('products.create', () => db.products.create(p), (row) =>
-          set({ products: swapId(get().products, product.id, row.id) })
-        );
-        return product;
-      },
+  load: async () => {
+    const [products, marques, categories, units] = await Promise.all([
+      db.products.list(), db.marques.list(), db.categories.list(), db.units.list(),
+    ]);
+    set({ products, marques, categories, units });
+  },
 
-      updateProduct: (id, data) => {
-        set({ products: get().products.map((p) => (p.id === id ? { ...p, ...data } : p)) });
-        const merged = get().products.find((p) => p.id === id);
-        if (merged) push('products.update', () => db.products.update(id, merged));
-      },
+  addProduct: async (p) => {
+    const row = await save('products.create', () => db.products.create(p));
+    set({ products: [row, ...get().products] });
+    return row;
+  },
 
-      deleteProduct: (id) => {
-        set({ products: get().products.filter((p) => p.id !== id) });
-        push('products.delete', () => db.products.remove(id));
-      },
+  updateProduct: async (id, data) => {
+    const row = await save('products.update', () => db.products.update(id, data));
+    set({ products: get().products.map((p) => (p.id === id ? row : p)) });
+  },
 
-      applyPurchaseToStock: (productId, qty, minAlert, purchasePrice, expirationDate, unitInfo) =>
-        set({
-          products: get().products.map((p) =>
-            p.id === productId
-              ? {
-                  ...p,
-                  currentQuantity: p.currentQuantity + qty,
-                  principalQuantity: (p.principalQuantity || 0) + qty,
-                  minAlertQuantity: minAlert || p.minAlertQuantity,
-                  purchasePrice: purchasePrice || p.purchasePrice,
-                  expirationDate: expirationDate ?? p.expirationDate,
-                  expirationEnabled: expirationDate ? true : p.expirationEnabled,
-                  unitEnabled: unitInfo?.unitEnabled ?? p.unitEnabled,
-                  unit: unitInfo?.unitEnabled ? (unitInfo.unit || p.unit) : p.unit,
-                }
-              : p
-          ),
-        }),
+  deleteProduct: async (id) => {
+    await save('products.delete', () => db.products.remove(id));
+    set({ products: get().products.filter((p) => p.id !== id) });
+  },
 
-      consumeStock: (productId, qty) =>
-        set({
-          products: get().products.map((p) =>
-            p.id === productId
-              ? { ...p, currentQuantity: Math.max(0, p.currentQuantity - qty) }
-              : p
-          ),
-        }),
-
-      addMarque: (name) => {
-        const m: Marque = { id: uid('mq'), name };
-        set({ marques: [...get().marques, m] });
-        push('marques.create', () => db.marques.create(name), (row) =>
-          set({ marques: swapId(get().marques, m.id, row.id) })
-        );
-        return m;
-      },
-
-      addCategory: (name) => {
-        const c: Category = { id: uid('cat'), name };
-        set({ categories: [...get().categories, c] });
-        push('categories.create', () => db.categories.create(name), (row) =>
-          set({ categories: swapId(get().categories, c.id, row.id) })
-        );
-        return c;
-      },
-
-      deleteMarque: (id) => {
-        set({ marques: get().marques.filter((m) => m.id !== id) });
-        push('marques.delete', () => db.marques.remove(id));
-      },
-
-      deleteCategory: (id) => {
-        set({ categories: get().categories.filter((c) => c.id !== id) });
-        push('categories.delete', () => db.categories.remove(id));
-      },
-
-      addUnit: (name) => {
-        const existing = get().units.find((u) => u.name.toLowerCase() === name.toLowerCase());
-        if (existing) return existing;
-        const u: Unit = { id: uid('unit'), name };
-        set({ units: [...get().units, u] });
-        push('units.create', () => db.units.create(name), (row) =>
-          set({ units: swapId(get().units, u.id, row.id) })
-        );
-        return u;
-      },
-
-      deleteUnit: (id) => {
-        set({ units: get().units.filter((u) => u.id !== id) });
-        push('units.delete', () => db.units.remove(id));
-      },
+  applyPurchaseToStock: (productId, qty, minAlert, purchasePrice, expirationDate, unitInfo) =>
+    set({
+      products: get().products.map((p) =>
+        p.id === productId
+          ? {
+              ...p,
+              currentQuantity: p.currentQuantity + qty,
+              principalQuantity: (p.principalQuantity || 0) + qty,
+              minAlertQuantity: minAlert || p.minAlertQuantity,
+              purchasePrice: purchasePrice || p.purchasePrice,
+              expirationDate: expirationDate ?? p.expirationDate,
+              expirationEnabled: expirationDate ? true : p.expirationEnabled,
+              unitEnabled: unitInfo?.unitEnabled ?? p.unitEnabled,
+              unit: unitInfo?.unitEnabled ? (unitInfo.unit || p.unit) : p.unit,
+            }
+          : p
+      ),
     }),
-    { name: 'altech-stock' }
-  )
-);
+
+  consumeStock: (productId, qty) =>
+    set({
+      products: get().products.map((p) =>
+        p.id === productId ? { ...p, currentQuantity: Math.max(0, p.currentQuantity - qty) } : p
+      ),
+    }),
+
+  addMarque: async (name) => {
+    const existing = get().marques.find((m) => m.name.toLowerCase() === name.toLowerCase());
+    if (existing) return existing;
+    const row = await save('marques.create', () => db.marques.create(name));
+    set({ marques: [...get().marques, row] });
+    return row;
+  },
+
+  addCategory: async (name) => {
+    const existing = get().categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (existing) return existing;
+    const row = await save('categories.create', () => db.categories.create(name));
+    set({ categories: [...get().categories, row] });
+    return row;
+  },
+
+  deleteMarque: async (id) => {
+    await save('marques.delete', () => db.marques.remove(id));
+    set({ marques: get().marques.filter((m) => m.id !== id) });
+  },
+
+  deleteCategory: async (id) => {
+    await save('categories.delete', () => db.categories.remove(id));
+    set({ categories: get().categories.filter((c) => c.id !== id) });
+  },
+
+  addUnit: async (name) => {
+    const existing = get().units.find((u) => u.name.toLowerCase() === name.toLowerCase());
+    if (existing) return existing;
+    const row = await save('units.create', () => db.units.create(name));
+    set({ units: [...get().units, row] });
+    return row;
+  },
+
+  deleteUnit: async (id) => {
+    await save('units.delete', () => db.units.remove(id));
+    set({ units: get().units.filter((u) => u.id !== id) });
+  },
+}));

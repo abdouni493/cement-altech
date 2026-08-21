@@ -1,184 +1,138 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import type { Production, UsedProduct, Category } from '@/types';
-import { uid } from '@/lib/utils';
+import { db, rpc } from '@/lib/db';
+import { save } from '@/lib/persist';
 import { useStockStore } from './stockStore';
 import { useComptoirStore } from './comptoirStore';
-import { getCurrentUsername } from './authStore';
-import { db, rpc } from '@/lib/db';
-import { push, swapId } from '@/lib/persist';
+
+export interface AddProductionInput {
+  name: string;
+  description: string;
+  date: string;
+  hour: string;
+  categoryId?: string;
+  categoryName?: string;
+  usedProducts: UsedProduct[];
+  outputQuantity: number;
+  unitPrice: number;
+  sellByUnit?: boolean;
+  sellUnit?: string;
+  hasLoss?: boolean;
+  expectedQuantity?: number;
+  lossQuantity?: number;
+  lossDescription?: string;
+  lossValue?: number;
+}
 
 interface ProductionState {
   productions: Production[];
   categories: Category[];
-  addProduction: (data: {
-    name: string;
-    description: string;
-    date: string;
-    hour: string;
-    categoryId?: string;
-    categoryName?: string;
-    usedProducts: UsedProduct[];
-    outputQuantity: number;
-    unitPrice: number;
-    sellByUnit?: boolean;
-    sellUnit?: string;
-    hasLoss?: boolean;
-    expectedQuantity?: number;
-    lossQuantity?: number;
-    lossDescription?: string;
-    lossValue?: number;
-  }) => Production;
-  updateProduction: (id: string, data: Partial<Production>) => void;
-  deleteProduction: (id: string) => void;
-  transferToComptoir: (id: string, qty: number) => void;
-  addCategory: (name: string) => Category;
-  deleteCategory: (id: string) => void;
+  load: () => Promise<void>;
+  addProduction: (data: AddProductionInput) => Promise<Production>;
+  updateProduction: (id: string, data: Partial<Production>) => Promise<void>;
+  deleteProduction: (id: string) => Promise<void>;
+  transferToComptoir: (id: string, qty: number) => Promise<void>;
+  addCategory: (name: string) => Promise<Category>;
+  deleteCategory: (id: string) => Promise<void>;
 }
 
-export const useProductionStore = create<ProductionState>()(
-  persist(
-    (set, get) => ({
-      productions: [],
-      categories: [],
+export const useProductionStore = create<ProductionState>()((set, get) => ({
+  productions: [],
+  categories: [],
 
-      addProduction: ({ name, description, date, hour, categoryId, categoryName, usedProducts, outputQuantity, unitPrice, sellByUnit, sellUnit, hasLoss, expectedQuantity, lossQuantity, lossDescription, lossValue }) => {
-        const totalValue = outputQuantity * unitPrice;
-        const totalCost = usedProducts.reduce((s, u) => s + (u.lineCost ?? 0), 0);
-        const createdBy = getCurrentUsername();
-        const production: Production = {
-          id: uid('prod-batch'),
-          name,
-          description,
-          date,
-          hour,
-          categoryId,
-          categoryName,
-          usedProducts,
-          totalCost,
-          outputQuantity,
-          unitPrice,
-          totalValue,
-          sellByUnit,
-          sellUnit,
-          createdBy,
-          sentToComptoir: 0,
-          hasLoss,
-          expectedQuantity,
-          lossQuantity,
-          lossDescription,
-          lossValue,
-        };
-        const stock = useStockStore.getState();
-        usedProducts
-          .filter((u) => u.sourceType !== 'fiche')
-          .forEach((u) => stock.consumeStock(u.productId, u.quantityUsed));
-        
-        set({ productions: [production, ...get().productions] });
+  load: async () => {
+    const [productions, categories] = await Promise.all([
+      db.productions.list(), db.productionCategories.list(),
+    ]);
+    set({ productions, categories });
+  },
 
-        // create_production() writes the batch, its ingredients and consumes the stock
-        push(
-          'productions.create',
-          () =>
-            rpc.createProduction({
-              name, description, date, hour,
-              category_id: categoryId ?? null,
-              category_name: categoryName ?? null,
-              output_quantity: outputQuantity,
-              unit_price: unitPrice,
-              sell_by_unit: sellByUnit ?? false,
-              sell_unit: sellUnit ?? null,
-              has_loss: hasLoss ?? false,
-              expected_quantity: expectedQuantity ?? null,
-              loss_quantity: lossQuantity ?? 0,
-              loss_description: lossDescription ?? null,
-              loss_value: lossValue ?? 0,
-              used_products: usedProducts.map((u) => ({
-                product_id: u.productId,
-                product_name: u.productName,
-                quantity_used: u.quantityUsed,
-                source_type: u.sourceType ?? 'stock',
-                unit: u.unit ?? null,
-                unit_cost: u.unitCost ?? 0,
-                line_cost: u.lineCost ?? 0,
-              })),
-            }),
-          (row: { id: string }) =>
-            set({
-              productions: get().productions.map((p) =>
-                p.id === production.id ? { ...p, id: row.id } : p
-              ),
-            })
-        );
-        return production;
-      },
+  addProduction: async (data) => {
+    const {
+      name, description, date, hour, categoryId, categoryName, usedProducts,
+      outputQuantity, unitPrice, sellByUnit, sellUnit,
+      hasLoss, expectedQuantity, lossQuantity, lossDescription, lossValue,
+    } = data;
 
-      updateProduction: (id, data) =>
-        set({
-          productions: get().productions.map((p) => {
-            if (p.id !== id) return p;
-            const usedProducts = data.usedProducts ?? p.usedProducts;
-            return {
-              ...p,
-              ...data,
-              totalCost: usedProducts.reduce((s, u) => s + (u.lineCost ?? 0), 0),
-              totalValue:
-                (data.outputQuantity ?? p.outputQuantity) * (data.unitPrice ?? p.unitPrice),
-            };
-          }),
-        }),
+    // create_production() writes the batch, its ingredients and consumes the stock
+    const row = await save('productions.create', () =>
+      rpc.createProduction({
+        name, description, date, hour,
+        category_id: categoryId ?? null,
+        category_name: categoryName ?? null,
+        output_quantity: outputQuantity,
+        unit_price: unitPrice,
+        sell_by_unit: sellByUnit ?? false,
+        sell_unit: sellUnit ?? null,
+        has_loss: hasLoss ?? false,
+        expected_quantity: expectedQuantity ?? null,
+        loss_quantity: lossQuantity ?? 0,
+        loss_description: lossDescription ?? null,
+        loss_value: lossValue ?? 0,
+        used_products: usedProducts.map((u) => ({
+          product_id: u.productId,
+          product_name: u.productName,
+          quantity_used: u.quantityUsed,
+          source_type: u.sourceType ?? 'stock',
+          unit: u.unit ?? null,
+          unit_cost: u.unitCost ?? 0,
+          line_cost: u.lineCost ?? 0,
+        })),
+      })
+    );
 
-      deleteProduction: (id) => {
-        set({ productions: get().productions.filter((p) => p.id !== id) });
-        push('productions.delete', () => db.productions.remove(id));
-      },
+    // ingredients left the stock → both screens reload from the database
+    const [productions] = await Promise.all([db.productions.list(), useStockStore.getState().load()]);
+    set({ productions });
+    return productions.find((p) => p.id === row.id) as Production;
+  },
 
-      transferToComptoir: (id, qty) => {
-        const prod = get().productions.find((p) => p.id === id);
-        if (!prod) return;
-        const currentSent = prod.sentToComptoir ?? 0;
-        const newSent = currentSent + qty;
-        if (newSent > prod.outputQuantity) {
-          throw new Error('Quantity exceeds production quantity');
-        }
-        set({
-          productions: get().productions.map((p) =>
-            p.id === id ? { ...p, sentToComptoir: newSent } : p
-          ),
-        });
-        push('productions.transferToComptoir', () => rpc.transferToComptoir(prod.id, qty));
+  updateProduction: async (id, data) => {
+    await save('productions.update', () =>
+      db.productions.update(id, {
+        name: data.name,
+        description: data.description,
+        date: data.date,
+        hour: data.hour,
+        output_quantity: data.outputQuantity,
+        unit_price: data.unitPrice,
+        total_value:
+          (data.outputQuantity ?? 0) * (data.unitPrice ?? 0) || undefined,
+        sell_by_unit: data.sellByUnit,
+        sell_unit: data.sellUnit ?? null,
+      })
+    );
+    set({ productions: await db.productions.list() });
+  },
 
-        useComptoirStore.getState().addComptoirItem({
-          productionId: prod.id,
-          productName: prod.name,
-          description: prod.description,
-          quantity: qty,
-          unitPrice: prod.unitPrice,
-          date: new Date().toISOString().slice(0, 10),
-          categoryId: prod.categoryId,
-          categoryName: prod.categoryName,
-          sellByUnit: prod.sellByUnit,
-          unit: prod.sellByUnit ? prod.sellUnit : undefined,
-          createdBy: getCurrentUsername(),
-        });
-      },
+  deleteProduction: async (id) => {
+    await save('productions.delete', () => db.productions.remove(id));
+    set({ productions: get().productions.filter((p) => p.id !== id) });
+  },
 
-      addCategory: (name) => {
-        const existing = get().categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
-        if (existing) return existing;
-        const c: Category = { id: uid('pcat'), name };
-        set({ categories: [...get().categories, c] });
-        push('productionCategories.create', () => db.productionCategories.create(name), (row) =>
-          set({ categories: swapId(get().categories, c.id, row.id) })
-        );
-        return c;
-      },
+  transferToComptoir: async (id, qty) => {
+    const prod = get().productions.find((p) => p.id === id);
+    if (!prod) return;
+    if ((prod.sentToComptoir ?? 0) + qty > prod.outputQuantity) {
+      throw new Error('La quantité dépasse le reste en stock de production');
+    }
+    await save('productions.transferToComptoir', () => rpc.transferToComptoir(id, qty));
+    const [productions] = await Promise.all([
+      db.productions.list(), useComptoirStore.getState().load(),
+    ]);
+    set({ productions });
+  },
 
-      deleteCategory: (id) => {
-        set({ categories: get().categories.filter((c) => c.id !== id) });
-        push('productionCategories.delete', () => db.productionCategories.remove(id));
-      },
-    }),
-    { name: 'altech-productions' }
-  )
-);
+  addCategory: async (name) => {
+    const existing = get().categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (existing) return existing;
+    const row = await save('productionCategories.create', () => db.productionCategories.create(name));
+    set({ categories: [...get().categories, row] });
+    return row;
+  },
+
+  deleteCategory: async (id) => {
+    await save('productionCategories.delete', () => db.productionCategories.remove(id));
+    set({ categories: get().categories.filter((c) => c.id !== id) });
+  },
+}));

@@ -4,7 +4,7 @@ import {
   TrendingUp, FileText, Printer, Wallet, ShoppingCart, Banknote, Package,
   Receipt, AlertTriangle, Flame, HardHat, Truck, Users, FlaskConical, Beaker,
   ArrowDownLeft, ArrowUpRight, Scale, ChevronRight, Coins, Trophy, TrendingDown,
-  ChevronDown, ChevronUp, Tag
+  ChevronDown, ChevronUp, Tag, Clock
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -52,8 +52,7 @@ export default function ReportsPage() {
   const destructions = useComptoirStore((s) => s.destructions);
   const comptoirItems = useComptoirStore((s) => s.items);
   const products = useStockStore((s) => s.products);
-  const marques = useStockStore((s) => s.marques);
-  const categories = useStockStore((s) => s.categories);
+  const units = useStockStore((s) => s.units);
   const clients = useClientStore((s) => s.clients);
   const suppliers = useSupplierStore((s) => s.suppliers);
   const workers = useWorkerStore((s) => s.workers);
@@ -87,6 +86,23 @@ export default function ReportsPage() {
 
     const workerPayments = workers.reduce((s, w) => s + w.payments.filter((p) => inRange(p.date)).reduce((a, p) => a + p.amount, 0), 0);
     const workerAcomptes = workers.reduce((s, w) => s + w.acomptes.filter((a) => inRange(a.date)).reduce((x, a) => x + a.amount, 0), 0);
+    // Heures supplémentaires : payées sur la période, et dette restante
+    const workerSalaries = workers.reduce(
+      (s, w) => s + w.payments.filter((p) => inRange(p.date) && p.kind !== 'overtime').reduce((a, p) => a + p.amount, 0),
+      0
+    );
+    const overtimePaid = workers.reduce(
+      (s, w) => s + w.payments.filter((p) => inRange(p.date) && p.kind === 'overtime').reduce((a, p) => a + p.amount, 0),
+      0
+    );
+    const rOvertimes = workers.flatMap((w) =>
+      (w.overtimes ?? []).filter((o) => inRange(o.date)).map((o) => ({ ...o, workerName: w.fullName }))
+    );
+    const overtimeHours = rOvertimes.reduce((s, o) => s + o.hours, 0);
+    const overtimeUnpaid = workers.reduce(
+      (s, w) => s + (w.overtimes ?? []).filter((o) => !o.isPaid).reduce((a, o) => a + o.amount, 0),
+      0
+    );
     const destroyedValue = rDestructions.reduce((s, d) => s + d.value, 0);
     const netProfit = totalSales - totalPurchases - totalExpenses - workerPayments - destroyedValue;
 
@@ -126,12 +142,12 @@ export default function ReportsPage() {
       .map((i) => ({ name: i.productName, quantity: i.quantity, value: i.quantity * i.unitPrice, unit: i.sellByUnit ? i.unit : undefined }))
       .sort((a, b) => b.value - a.value);
 
-    // ---- Group purchases by category ----
+    // ---- Group purchases by unit (sac / tonne / m³ …) ----
     const purchasesCatMap = new Map<string, { categoryName: string; totalAmount: number; products: { [name: string]: { name: string; quantity: number; unit?: string; totalCost: number } } }>();
     rPurchases.forEach(pur => {
       pur.products.forEach(line => {
         const prod = products.find(p => p.id === line.productId);
-        const catName = prod ? (categories.find(c => c.id === prod.categoryId)?.name || 'Sans Catégorie') : 'Sans Catégorie';
+        const catName = line.unit || prod?.unit || 'Sans unité';
         
         if (!purchasesCatMap.has(catName)) {
           purchasesCatMap.set(catName, { categoryName: catName, totalAmount: 0, products: {} });
@@ -190,6 +206,7 @@ export default function ReportsPage() {
     return {
       rSales, rPurchases, rExpenses, rProductions, rDestructions, rTx,
       totalSales, totalPurchases, totalExpenses, workerPayments, workerAcomptes,
+      workerSalaries, overtimePaid, overtimeUnpaid, overtimeHours, rOvertimes,
       destroyedValue, netProfit, clientDebts, supplierDebts, totalClientDebt, totalSupplierDebt,
       stockValue, lowStock, comptoirValue, deposits, withdrawals, depositsTotal, withdrawalsTotal,
       reportCalcs, totalDecalage, soldRanked, productSalesRevenue, restItems,
@@ -197,12 +214,12 @@ export default function ReportsPage() {
       lossProductions, totalLossQty, totalLossValue,
       expensesByCategory, depositsByCategory, withdrawalsByCategory,
     };
-  }, [generated, from, to, sales, purchases, expenses, productions, destructions, comptoirItems, products, categories, clients, suppliers, workers, transactions, caisseReports, t]);
+  }, [generated, from, to, sales, purchases, expenses, productions, destructions, comptoirItems, products, units, clients, suppliers, workers, transactions, caisseReports, t]);
 
   const clientName = (id: string | null) => (id ? clients.find((c) => c.id === id)?.name || '—' : t('walkIn'));
   const supplierName = (id: string) => suppliers.find((s) => s.id === id)?.name || '—';
-  const marqueName = (id: string) => marques.find((m) => m.id === id)?.name || '—';
-  const categoryName = (id: string) => categories.find((c) => c.id === id)?.name || '—';
+  /** Products are now described by their unit, not by a marque/category. */
+  const unitLabel = (unit?: string) => unit || '—';
 
   const handlePrint = () => {
     if (!report) return;
@@ -249,7 +266,7 @@ export default function ReportsPage() {
       rows: [
         ...stockSorted.map(({ p, value }): PrintRow => ({
           cells: [
-            p.name, marqueName(p.marqueId), categoryName(p.categoryId),
+            p.name, unitLabel(p.unit),
             `${p.currentQuantity}${p.unit ? ' ' + p.unit : ''}`,
             `${p.minAlertQuantity}${p.unit ? ' ' + p.unit : ''}`,
             money(p.purchasePrice), money(value),
@@ -269,7 +286,7 @@ export default function ReportsPage() {
         { label: t('currentStock'), align: 'right' }, { label: t('minAlert'), align: 'right' },
       ],
       rows: report.lowStock.map((p): PrintRow => ({
-        cells: [p.name, categoryName(p.categoryId), `${p.currentQuantity}${p.unit ? ' ' + p.unit : ''}`, `${p.minAlertQuantity}${p.unit ? ' ' + p.unit : ''}`],
+        cells: [p.name, unitLabel(p.unit), `${p.currentQuantity}${p.unit ? ' ' + p.unit : ''}`, `${p.minAlertQuantity}${p.unit ? ' ' + p.unit : ''}`],
         tone: 'neg',
       })),
       emptyLabel: t('noData'),
@@ -425,10 +442,36 @@ export default function ReportsPage() {
       });
     });
     if (workerRows.length) workerRows.push(totalRow(t('total'), money(report.workerPayments + report.workerAcomptes), 'neg'));
+
+    // ---- 11 bis. Heures supplémentaires détaillées ----
+    const overtimeRows: PrintRow[] = report.rOvertimes.map((o): PrintRow => ({
+      cells: [
+        o.workerName,
+        formatDate(o.date, language),
+        `${String(o.workEndHour).padStart(2, '0')}:${String(o.workEndMinute).padStart(2, '0')} → ${String(o.overtimeEndHour).padStart(2, '0')}:${String(o.overtimeEndMinute).padStart(2, '0')}`,
+        `${o.hours.toFixed(2)} h`,
+        money(o.hourlyRate),
+        money(o.amount),
+        o.isPaid ? 'Payée' : 'Non payée',
+      ],
+      tone: o.isPaid ? 'accent' : 'neg',
+    }));
+    if (overtimeRows.length) overtimeRows.push(totalRow(t('total'), money(report.rOvertimes.reduce((s, o) => s + o.amount, 0)), 'neg'));
     sections.push({
       title: t('workerPaymentsDetail'), icon: '👷', headerTotal: money(report.workerPayments + report.workerAcomptes),
       cols: [{ label: t('workers') }, { label: t('operationType') }, { label: t('description') }, { label: t('date') }, { label: t('amount'), align: 'right' }],
       rows: workerRows, emptyLabel: t('noData'),
+    });
+
+    sections.push({
+      title: 'Heures supplémentaires', icon: '⏱️',
+      headerTotal: `${report.overtimeHours.toFixed(2)} h · ${money(report.rOvertimes.reduce((s, o) => s + o.amount, 0))}`,
+      cols: [
+        { label: t('workers') }, { label: t('date') }, { label: 'Horaire' },
+        { label: 'Durée', align: 'right' }, { label: 'Taux horaire', align: 'right' },
+        { label: t('amount'), align: 'right' }, { label: t('status') },
+      ],
+      rows: overtimeRows, emptyLabel: t('noData'),
     });
 
     // ---- 12. Dépôts de caisse (par catégorie) ----
@@ -571,7 +614,7 @@ export default function ReportsPage() {
           <SectionTitle icon={<Package size={18} />} title={t('stockReport')} />
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <DrillCard icon={<Package size={20} />} accent="gold" label={t('stockValue')} value={report.stockValue} count={products.length}
-              onClick={() => setDrill({ title: t('stock'), rows: products.map((p) => ({ title: p.name, sub: `${marqueName(p.marqueId)} · ${categoryName(p.categoryId)} · Stock: ${p.currentQuantity}`, value: p.currentQuantity * p.purchasePrice })) })} />
+              onClick={() => setDrill({ title: t('stock'), rows: products.map((p) => ({ title: p.name, sub: `${unitLabel(p.unit)} · Stock: ${p.currentQuantity}`, value: p.currentQuantity * p.purchasePrice })) })} />
             <DrillCard icon={<AlertTriangle size={20} />} accent="rose" label={t('stockAlertsCount')} value={report.lowStock.length} isCount count={report.lowStock.length}
               onClick={() => setDrill({ title: t('stockAlertsCount'), rows: report.lowStock.map((p) => ({ title: p.name, sub: `Stock: ${p.currentQuantity} / Min: ${p.minAlertQuantity}`, value: p.currentQuantity, danger: true })) })} />
             <DrillCard icon={<Beaker size={20} />} accent="pistachio" label={t('comptoirValue')} value={report.comptoirValue} count={comptoirItems.length}
@@ -612,7 +655,7 @@ export default function ReportsPage() {
                             initial={{ height: 0 }}
                             animate={{ height: 'auto' }}
                             exit={{ height: 0 }}
-                            className="overflow-hidden border-t border-gold/10 bg-white/70"
+                            className="overflow-hidden border-t border-gold/10 bg-vanilla/50"
                           >
                             <div className="p-3">
                               <table className="w-full text-xs">
@@ -675,7 +718,7 @@ export default function ReportsPage() {
                             initial={{ height: 0 }}
                             animate={{ height: 'auto' }}
                             exit={{ height: 0 }}
-                            className="overflow-hidden border-t border-gold/10 bg-white/70"
+                            className="overflow-hidden border-t border-gold/10 bg-vanilla/50"
                           >
                             <div className="p-3">
                               <table className="w-full text-xs">
@@ -817,6 +860,10 @@ export default function ReportsPage() {
               onClick={() => setDrill({ title: t('expenses'), rows: report.rExpenses.map((e) => ({ title: e.name, sub: `${e.description} · ${formatDate(e.date, language)}`, value: e.amount })) })} />
             <DrillCard icon={<HardHat size={20} />} accent="lavender" label={t('workerSalaries')} value={report.workerPayments} count={workers.length}
               onClick={() => setDrill({ title: t('workerSalaries'), rows: workers.flatMap((w) => w.payments.filter((p) => isWithinRange(p.date, from, to)).map((p) => ({ title: w.fullName, sub: `${p.period || ''} · ${formatDate(p.date, language)}`, value: p.amount }))) })} />
+            <DrillCard icon={<Clock size={20} />} accent="caramel" label="Heures sup. payées" value={report.overtimePaid} count={report.rOvertimes.length}
+              onClick={() => setDrill({ title: 'Heures supplémentaires payées', rows: report.rOvertimes.filter((o) => o.isPaid).map((o) => ({ title: o.workerName, sub: `${formatDate(o.date, language)} · ${o.hours.toFixed(2)} h`, value: o.amount })) })} />
+            <DrillCard icon={<Clock size={20} />} accent="rose" label="Heures sup. à payer" value={report.overtimeUnpaid} count={report.rOvertimes.filter((o) => !o.isPaid).length}
+              onClick={() => setDrill({ title: 'Heures supplémentaires non payées', rows: report.rOvertimes.filter((o) => !o.isPaid).map((o) => ({ title: o.workerName, sub: `${formatDate(o.date, language)} · ${o.hours.toFixed(2)} h`, value: o.amount, danger: true })) })} />
             <DrillCard icon={<Coins size={20} />} accent="caramel" label={t('acomptes')} value={report.workerAcomptes} count={workers.length}
               onClick={() => setDrill({ title: t('acomptes'), rows: workers.flatMap((w) => w.acomptes.filter((a) => isWithinRange(a.date, from, to)).map((a) => ({ title: w.fullName, sub: `${a.description || ''} · ${formatDate(a.date, language)}`, value: a.amount }))) })} />
             <DrillCard icon={<Users size={20} />} accent="pistachio" label={t('activeWorkers')} value={workers.length} isCount count={workers.length}
@@ -873,7 +920,7 @@ function CategorySummaryCard({ title, icon, cats, total, tone, emptyLabel }: {
                 <span className={`text-sm font-bold tabular shrink-0 ${text}`}>{formatCurrency(cat.total)}</span>
               </div>
               <div className="flex items-center gap-2 mt-1.5">
-                <div className="h-1.5 flex-1 rounded-full bg-white/70 overflow-hidden">
+                <div className="h-1.5 flex-1 rounded-full bg-vanilla/50 overflow-hidden">
                   <div className={`h-full rounded-full bg-gradient-to-r ${grad}`} style={{ width: `${(cat.total / max) * 100}%` }} />
                 </div>
                 <span className="text-[10px] text-text-muted shrink-0">{cat.items.length}</span>

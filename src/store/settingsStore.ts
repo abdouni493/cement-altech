@@ -1,12 +1,12 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import type { StoreSettings } from '@/types';
 import { db } from '@/lib/db';
-import { push } from '@/lib/persist';
+import { save } from '@/lib/persist';
 
 interface SettingsState {
   settings: StoreSettings;
-  updateSettings: (data: Partial<StoreSettings>) => void;
+  load: () => Promise<void>;
+  updateSettings: (data: Partial<StoreSettings>) => Promise<void>;
 }
 
 const defaultSettings: StoreSettings = {
@@ -23,16 +23,17 @@ const defaultSettings: StoreSettings = {
   rc: '',
 };
 
-export const useSettingsStore = create<SettingsState>()(
-  persist(
-    (set, get) => ({
-      settings: defaultSettings,
-      updateSettings: (data) => {
-        const next = { ...get().settings, ...data };
-        set({ settings: next });
-        push('settings.save', () => db.settings.save(next));
-      },
-    }),
-    { name: 'altech-settings' }
-  )
-);
+export const useSettingsStore = create<SettingsState>()((set, get) => ({
+  settings: defaultSettings,
+
+  load: async () => {
+    const settings = await db.settings.get();
+    if (settings) set({ settings });
+  },
+
+  updateSettings: async (data) => {
+    const next = { ...get().settings, ...data };
+    await save('settings.save', () => db.settings.save(next));
+    set({ settings: next });
+  },
+}));

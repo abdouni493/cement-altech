@@ -61,7 +61,7 @@ export function VirtualKeyboard({ value, onChange, onClose }: VirtualKeyboardPro
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: 20 }}
       transition={{ duration: 0.25, ease: 'easeOut' }}
-      className="w-full bg-white/95 backdrop-blur border border-gold/25 shadow-hover rounded-2xl p-4 mt-3"
+      className="w-full bg-[--surface-dropdown]/95 backdrop-blur border border-gold/25 shadow-hover rounded-2xl p-4 mt-3"
       dir={isRTL ? 'rtl' : 'ltr'}
     >
       {/* Keyboard Header */}
@@ -105,7 +105,7 @@ export function VirtualKeyboard({ value, onChange, onClose }: VirtualKeyboardPro
                 type="button"
                 onMouseDown={(e) => e.preventDefault()} // Crucial: prevent input blur
                 onClick={() => handleKeyClick(key)}
-                className="flex-1 min-w-[28px] h-10 sm:h-12 bg-white hover:bg-gold/10 active:bg-gold/20 border border-gold/15 text-text-primary rounded-xl flex items-center justify-center text-sm font-semibold transition-all shadow-sm active:scale-95"
+                className="flex-1 min-w-[28px] h-10 sm:h-12 bg-[--surface-input] hover:bg-gold/10 active:bg-gold/20 border border-gold/15 text-text-primary rounded-xl flex items-center justify-center text-sm font-semibold transition-all shadow-sm active:scale-95"
               >
                 {key}
               </button>
@@ -131,7 +131,7 @@ export function VirtualKeyboard({ value, onChange, onClose }: VirtualKeyboardPro
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => handleKeyClick('SPACE')}
-            className="flex-[2] h-11 bg-white hover:bg-gold/10 active:bg-gold/20 border border-gold/15 text-text-primary rounded-xl flex items-center justify-center text-sm font-semibold transition-all shadow-sm active:scale-95"
+            className="flex-[2] h-11 bg-[--surface-input] hover:bg-gold/10 active:bg-gold/20 border border-gold/15 text-text-primary rounded-xl flex items-center justify-center text-sm font-semibold transition-all shadow-sm active:scale-95"
           >
             {layout === 'fr' ? 'Espace' : 'مسافة'}
           </button>

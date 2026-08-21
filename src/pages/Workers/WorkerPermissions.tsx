@@ -4,7 +4,6 @@ import { Checkbox } from '@/components/ui/Switch';
 import { useWorkerStore } from '@/store/workerStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { toast } from '@/components/ui/Toast';
-import { rpc } from '@/lib/db';
 import { PERMISSION_MODULES, type Worker, type WorkerPermissions as PermsType } from '@/types';
 import type { TranslationKey } from '@/lib/i18n';
 
@@ -19,13 +18,13 @@ const moduleActions: Record<string, Array<'view' | 'create' | 'edit' | 'delete' 
   stock: ['view', 'create', 'edit', 'delete'],
   purchase: ['view', 'create', 'edit', 'delete', 'pay'],
   production: ['view', 'create', 'edit', 'delete'],
-  comptoir: ['view', 'delete'],
   pos: ['view', 'create'],
   sales: ['view', 'create', 'edit', 'delete', 'pay'],
-  clients: ['view', 'create', 'edit', 'delete'],
-  suppliers: ['view', 'create', 'edit', 'delete'],
-  workers: ['view', 'create', 'edit', 'delete'],
+  clients: ['view', 'create', 'edit', 'delete', 'pay'],
+  suppliers: ['view', 'create', 'edit', 'delete', 'pay'],
+  workers: ['view', 'create', 'edit', 'delete', 'pay'],
   expenses: ['view', 'create', 'edit', 'delete'],
+  comptoir: ['view', 'create', 'edit', 'delete'],
   caisse: ['view', 'create', 'edit', 'delete'],
   reports: ['view'],
   settings: ['view'],
@@ -52,23 +51,30 @@ export function WorkerPermissions({ worker, onClose }: WorkerPermissionsProps) {
     });
   };
 
-  // Saves locally then pushes the matrix to Supabase (workers + profiles rows),
-  // so the worker gets the new rights on his next login.
+  const [saving, setSaving] = useState(false);
+
+  /**
+   * Écrit la matrice dans `workers` ET dans `profiles` (via set_worker_permissions)
+   * : à sa prochaine connexion l'employé ne verra QUE les interfaces cochées, et
+   * seuls les boutons d'action autorisés lui seront proposés.
+   */
   const handleSave = async () => {
-    setPermissions(worker.id, perms);
+    setSaving(true);
     try {
-      await rpc.setWorkerPermissions(worker.id, perms);
+      await setPermissions(worker.id, perms);
       toast.success('Permissions enregistrées');
-    } catch (e) {
-      console.warn('[workers] permissions non synchronisées:', (e as Error).message);
-      toast.success('Permissions enregistrées localement');
+      onClose();
+    } finally {
+      setSaving(false);
     }
-    onClose();
   };
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-text-muted">Sélectionnez les interfaces accessibles pour <strong>{worker.fullName}</strong></p>
+      <p className="text-sm text-text-muted">
+        Sélectionnez les interfaces accessibles pour <strong>{worker.fullName}</strong>.
+        La barre latérale et les boutons d'action de l'employé s'adaptent automatiquement.
+      </p>
       <div className="space-y-2 max-h-[55vh] overflow-y-auto pr-1">
         {PERMISSION_MODULES.map((module) => {
           const actions = moduleActions[module] || ['view'];
@@ -92,7 +98,9 @@ export function WorkerPermissions({ worker, onClose }: WorkerPermissionsProps) {
       </div>
       <div className="flex justify-end gap-3 pt-2">
         <Button variant="secondary" onClick={onClose}>{t('cancel')}</Button>
-        <Button variant="gold" onClick={handleSave}>{t('save')}</Button>
+        <Button variant="gold" onClick={handleSave} disabled={saving}>
+          {saving ? 'Enregistrement…' : t('save')}
+        </Button>
       </div>
     </div>
   );

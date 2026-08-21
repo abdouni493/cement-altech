@@ -41,7 +41,7 @@ export default function SettingsPage() {
     reader.readAsDataURL(file);
   };
 
-  const saveStore = () => { updateSettings(form); toast.success('Informations enregistrées'); };
+  const saveStore = async () => { await updateSettings(form); toast.success('Informations enregistrées'); };
 
   const saveAccount = () => {
     if (account.newPwd && account.newPwd !== account.confirmPwd) { toast.error('Les mots de passe ne correspondent pas'); return; }

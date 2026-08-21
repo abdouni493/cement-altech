@@ -18,9 +18,9 @@ export function WorkerAcompte({ worker }: { worker: Worker }) {
   const [amount, setAmount] = useState<number>(0);
   const [description, setDescription] = useState('');
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     if (amount <= 0) { toast.error('Montant invalide'); return; }
-    addAcompte(worker.id, { date, amount: Number(amount), description });
+    await addAcompte(worker.id, { date, amount: Number(amount), description });
     toast.success('Acompte enregistré');
     setAmount(0); setDescription('');
   };

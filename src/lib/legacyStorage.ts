@@ -1,11 +1,13 @@
 /**
- * One-time clean-up of the previous local storage.
+ * Clean-up of every local data cache.
  *
- * Older versions of the application shipped with demo data (produits, clients,
- * ventes, comptes de démonstration…) persisted under the `labochimie-*` keys.
- * The store now starts empty and reads its real data from Supabase, so those
- * entries are removed: they are never read again and would only keep the demo
- * rows alive in the browsers where the application was already opened.
+ * The application used to mirror its business data in localStorage, which is
+ * exactly what made a page refresh display outdated rows. Every screen now
+ * reads from Supabase only, so these keys are deleted on each start: nothing
+ * stale can survive an update.
+ *
+ * Only two keys are kept on purpose: `altech-auth` (session + language) and
+ * `altech-theme` (light/dark choice).
  */
 const LEGACY_KEYS = [
   'labochimie-auth',
@@ -26,6 +28,24 @@ const LEGACY_KEYS = [
   'labochimie-caisse-reports',
   'cement-settings',
   'cement-client-debts',
+  'cement-theme-store',
+  // v1 caches: the business data used to be mirrored in localStorage, which is
+  // what made a refresh show outdated rows. Everything now comes from Supabase.
+  'altech-stock',
+  'altech-suppliers',
+  'altech-clients',
+  'altech-purchases',
+  'altech-sales',
+  'altech-commands',
+  'altech-productions',
+  'altech-fiche-technics',
+  'altech-comptoir',
+  'altech-workers',
+  'altech-expenses',
+  'altech-client-debts',
+  'altech-caisse',
+  'altech-caisse-reports',
+  'altech-settings',
 ];
 
 export function purgeLegacyStorage(): void {

@@ -1,13 +1,12 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import type { CaisseReport, CaisseReportType } from '@/types';
-import { uid, todayISO, nowTime } from '@/lib/utils';
-import { getCurrentUsername } from './authStore';
+import { todayISO, nowTime } from '@/lib/utils';
 import { db, rpc } from '@/lib/db';
-import { push, swapId } from '@/lib/persist';
+import { save } from '@/lib/persist';
 
 interface CaisseReportState {
   reports: CaisseReport[];
+  load: () => Promise<void>;
   addReport: (data: {
     description: string;
     declaredAmount: number;
@@ -15,49 +14,36 @@ interface CaisseReportState {
     date?: string;
     endDate?: string;
     hour?: string;
-  }) => CaisseReport;
-  updateReport: (id: string, data: Partial<CaisseReport>) => void;
-  deleteReport: (id: string) => void;
+  }) => Promise<CaisseReport>;
+  deleteReport: (id: string) => Promise<void>;
 }
 
-export const useCaisseReportStore = create<CaisseReportState>()(
-  persist(
-    (set, get) => ({
-      reports: [],
+export const useCaisseReportStore = create<CaisseReportState>()((set, get) => ({
+  reports: [],
 
-      addReport: ({ description, declaredAmount, reportType, date, endDate, hour }) => {
-        const type: CaisseReportType = reportType || 'day';
-        const report: CaisseReport = {
-          id: uid('crep'),
-          reportType: type,
-          date: date || todayISO(),
-          endDate: type === 'period' ? (endDate || date || todayISO()) : undefined,
-          hour: hour || nowTime(),
-          description,
-          declaredAmount,
-          createdAt: new Date().toISOString(),
-          createdBy: getCurrentUsername(),
-        };
-        set({ reports: [report, ...get().reports] });
-        push(
-          'caisseReports.create',
-          () =>
-            rpc.createCaisseReport(
-              report.declaredAmount, report.description, type, report.date, report.endDate
-            ),
-          (row: { id: string }) => set({ reports: swapId(get().reports, report.id, row.id) })
-        );
-        return report;
-      },
+  load: async () => set({ reports: await db.caisseReports.list() }),
 
-      updateReport: (id, data) =>
-        set({ reports: get().reports.map((r) => (r.id === id ? { ...r, ...data } : r)) }),
+  addReport: async ({ description, declaredAmount, reportType, date, endDate }) => {
+    const type: CaisseReportType = reportType || 'day';
+    const day = date || todayISO();
+    const row = await save('caisseReports.create', () =>
+      rpc.createCaisseReport(
+        declaredAmount, description, type, day,
+        type === 'period' ? (endDate || day) : undefined
+      )
+    );
+    const reports = await db.caisseReports.list();
+    set({ reports });
+    return (
+      reports.find((r) => r.id === row.id) ?? {
+        id: row.id, reportType: type, date: day, endDate, hour: nowTime(),
+        description, declaredAmount, createdAt: new Date().toISOString(),
+      }
+    );
+  },
 
-      deleteReport: (id) => {
-        set({ reports: get().reports.filter((r) => r.id !== id) });
-        push('caisseReports.delete', () => db.caisseReports.remove(id));
-      },
-    }),
-    { name: 'altech-caisse-reports' }
-  )
-);
+  deleteReport: async (id) => {
+    await save('caisseReports.delete', () => db.caisseReports.remove(id));
+    set({ reports: get().reports.filter((r) => r.id !== id) });
+  },
+}));

@@ -18,8 +18,8 @@ export function WorkerAbsence({ worker }: { worker: Worker }) {
   const [description, setDescription] = useState('');
   const [cost, setCost] = useState<number>(0);
 
-  const handleAdd = () => {
-    addAbsence(worker.id, { date, description, cost: Number(cost) });
+  const handleAdd = async () => {
+    await addAbsence(worker.id, { date, description, cost: Number(cost) });
     toast.success('Absence enregistrée');
     setDescription(''); setCost(0);
   };

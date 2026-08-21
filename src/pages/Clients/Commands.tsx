@@ -2,9 +2,9 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  ShoppingCart, Plus, Search, Calendar, Clock, CreditCard, ChevronRight,
-  Eye, Pencil, Trash2, CheckCircle2, AlertTriangle, Printer, UserPlus, X, Coins,
-  User, Phone, Check, Receipt, Truck, FileText, PackageCheck
+  ShoppingCart, Plus, Search, Calendar, Clock, Eye, Pencil, Trash2, CheckCircle2,
+  AlertTriangle, Printer, UserPlus, X, Coins, User, Phone, Receipt, Truck,
+  PackageCheck, History, ClipboardList,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -15,30 +15,35 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 import { SearchBar } from '@/components/ui/SearchBar';
+import { StatCard } from '@/components/shared/StatCard';
 import { toast } from '@/components/ui/Toast';
-import { useCommandStore, type Command, type CommandLine } from '@/store/commandStore';
+import { DeliveryModal } from './DeliveryModal';
+import { useCommandStore, deliveryStatus, type Command, type CommandLine } from '@/store/commandStore';
 import { useClientStore } from '@/store/clientStore';
 import { useFicheTechnicStore } from '@/store/ficheTechnicStore';
-import { useComptoirStore } from '@/store/comptoirStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
-import { formatCurrency, formatDate, todayISO } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, todayISO } from '@/lib/utils';
 import { printDocument } from '@/lib/print';
+import { printDeliveryNote } from '@/lib/documents';
 import { cardVariants } from '@/lib/animations';
+import type { CommandDelivery } from '@/types';
 
 type DateFilter = 'today' | 'week' | 'month' | 'period' | 'all';
-type StatusFilter = 'all' | 'paid' | 'debt' | 'pending' | 'finalised';
+type StatusFilter = 'all' | 'paid' | 'debt' | 'undelivered' | 'partial' | 'delivered';
 
 export default function CommandsPage() {
-  const { t, language } = useLanguage();
+  const { language } = useLanguage();
   const { can } = usePermissions();
   const navigate = useNavigate();
 
-  const { commands, addCommand, updateCommand, deleteCommand, payDebt, finaliseCommand } = useCommandStore();
+  const {
+    commands, deliveries, addCommand, updateCommand, deleteCommand, payDebt,
+    addDelivery, updateDelivery, deleteDelivery,
+  } = useCommandStore();
   const { clients, addClient } = useClientStore();
   const { ficheTechnics } = useFicheTechnicStore();
-  const comptoirItems = useComptoirStore((s) => s.items);
   const settings = useSettingsStore((s) => s.settings);
 
   // Filters
@@ -48,18 +53,14 @@ export default function CommandsPage() {
   const [from, setFrom] = useState(todayISO());
   const [to, setTo] = useState(todayISO());
 
-  // Form states
+  // Create / edit form
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
-  
-  // Client selection / creation inline
   const [clientSearch, setClientSearch] = useState('');
   const [selectedClient, setSelectedClient] = useState<{ id: string; name: string; phone?: string } | null>(null);
   const [showNewClientForm, setShowNewClientForm] = useState(false);
   const [newClientName, setNewClientName] = useState('');
   const [newClientPhone, setNewClientPhone] = useState('');
-
-  // Item builder states
   const [recipeSearch, setRecipeSearch] = useState('');
   const [selectedItems, setSelectedItems] = useState<CommandLine[]>([]);
   const [receiveDate, setReceiveDate] = useState(todayISO());
@@ -67,44 +68,45 @@ export default function CommandsPage() {
   const [receiveMinute, setReceiveMinute] = useState('30');
   const [customTotal, setCustomTotal] = useState<number | null>(null);
   const [versement, setVersement] = useState(0);
+  const [saving, setSaving] = useState(false);
 
   // Interaction modals
   const [viewingCmd, setViewingCmd] = useState<Command | null>(null);
-  const [finaliseCmd, setFinaliseCmd] = useState<Command | null>(null);
+  const [deliverCmd, setDeliverCmd] = useState<Command | null>(null);
+  const [editingDelivery, setEditingDelivery] = useState<CommandDelivery | null>(null);
+  const [historyCmd, setHistoryCmd] = useState<Command | null>(null);
   const [payCmd, setPayCmd] = useState<Command | null>(null);
   const [payAmount, setPayAmount] = useState(0);
-  const [payDescription, setPayDescription] = useState('Paiement acompte commande');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteDeliveryId, setDeleteDeliveryId] = useState<string | null>(null);
+  const [printPrompt, setPrintPrompt] = useState<
+    { kind: 'command'; cmd: Command } | { kind: 'delivery'; cmd: Command; delivery: CommandDelivery } | null
+  >(null);
 
-  // Print prompt modal
-  const [printPromptCmd, setPrintPromptCmd] = useState<Command | null>(null);
-  const [printPromptType, setPrintPromptType] = useState<'bon_commande' | 'bon_livraison'>('bon_commande');
+  const deliveriesOf = (commandId: string) =>
+    deliveries.filter((d) => d.commandId === commandId).sort((a, b) => b.deliveredAt.localeCompare(a.deliveredAt));
 
-  // Comptoir stock helper
-  const getComptoirStock = (productName: string) => {
-    return comptoirItems
-      .filter((i) => i.productName.toLowerCase() === productName.toLowerCase())
-      .reduce((sum, i) => sum + i.quantity, 0);
-  };
-
-  // Filter logic
+  /* --------------------------------------------------------------- filters */
   const filteredCommands = useMemo(() => {
     return commands.filter((c) => {
-      const matchesSearch = c.clientName.toLowerCase().includes(search.toLowerCase()) || 
+      const matchesSearch =
+        c.clientName.toLowerCase().includes(search.toLowerCase()) ||
+        c.reference.toLowerCase().includes(search.toLowerCase()) ||
         (c.clientPhone && c.clientPhone.includes(search));
-      
+
+      const d = deliveryStatus(c);
       let matchesStatus = true;
       if (statusFilter === 'paid') matchesStatus = c.restAmount <= 0;
       else if (statusFilter === 'debt') matchesStatus = c.restAmount > 0;
-      else if (statusFilter === 'pending') matchesStatus = c.status === 'pending';
-      else if (statusFilter === 'finalised') matchesStatus = c.status === 'finalised';
+      else if (statusFilter === 'undelivered') matchesStatus = d.delivered <= 0;
+      else if (statusFilter === 'partial') matchesStatus = d.isPartial;
+      else if (statusFilter === 'delivered') matchesStatus = d.isFull;
 
       let matchesDate = true;
       const cmdTime = new Date(c.createdAt).getTime();
-      
       if (dateFilter === 'today') {
-        const start = new Date(); start.setHours(0,0,0,0);
-        const end = new Date(); end.setHours(23,59,59,999);
+        const start = new Date(); start.setHours(0, 0, 0, 0);
+        const end = new Date(); end.setHours(23, 59, 59, 999);
         matchesDate = cmdTime >= start.getTime() && cmdTime <= end.getTime();
       } else if (dateFilter === 'week') {
         const start = new Date(); start.setDate(start.getDate() - 7);
@@ -113,7 +115,7 @@ export default function CommandsPage() {
         const start = new Date(); start.setDate(start.getDate() - 30);
         matchesDate = cmdTime >= start.getTime();
       } else if (dateFilter === 'period') {
-        const start = new Date(from); start.setHours(0,0,0,0);
+        const start = new Date(from); start.setHours(0, 0, 0, 0);
         const end = new Date(to + 'T23:59:59');
         matchesDate = cmdTime >= start.getTime() && cmdTime <= end.getTime();
       }
@@ -122,399 +124,312 @@ export default function CommandsPage() {
     });
   }, [commands, search, statusFilter, dateFilter, from, to]);
 
-  // Statistics
   const stats = useMemo(() => {
-    const totalPaid = filteredCommands.reduce((sum, c) => sum + c.paidAmount, 0);
-    const totalRest = filteredCommands.reduce((sum, c) => sum + c.restAmount, 0);
-    const totalValue = filteredCommands.reduce((sum, c) => sum + c.totalAmount, 0);
-    return { totalPaid, totalRest, totalValue };
+    const totalPaid = filteredCommands.reduce((s, c) => s + c.paidAmount, 0);
+    const totalRest = filteredCommands.reduce((s, c) => s + c.restAmount, 0);
+    const totalValue = filteredCommands.reduce((s, c) => s + c.totalAmount, 0);
+    const pendingDelivery = filteredCommands.filter((c) => !deliveryStatus(c).isFull).length;
+    return { totalPaid, totalRest, totalValue, pendingDelivery };
   }, [filteredCommands]);
 
-  // Client search results
-  const clientSearchResults = useMemo(() => {
-    if (!clientSearch) return [];
-    return clients.filter((c) =>
-      c.name.toLowerCase().includes(clientSearch.toLowerCase()) || c.phone.includes(clientSearch)
-    );
-  }, [clients, clientSearch]);
+  const clientSearchResults = useMemo(
+    () =>
+      clientSearch
+        ? clients.filter(
+            (c) =>
+              c.name.toLowerCase().includes(clientSearch.toLowerCase()) ||
+              (c.phone || '').includes(clientSearch)
+          )
+        : [],
+    [clients, clientSearch]
+  );
 
-  // Fiche techniques search results
-  const recipeSearchResults = useMemo(() => {
-    if (!recipeSearch) return [];
-    return ficheTechnics.filter((ft) =>
-      ft.name.toLowerCase().includes(recipeSearch.toLowerCase())
-    );
-  }, [ficheTechnics, recipeSearch]);
+  const recipeSearchResults = useMemo(
+    () => (recipeSearch ? ficheTechnics.filter((ft) => ft.name.toLowerCase().includes(recipeSearch.toLowerCase())) : []),
+    [ficheTechnics, recipeSearch]
+  );
 
-  const handleCreateClientInline = () => {
+  /* ---------------------------------------------------------------- form */
+  const handleCreateClientInline = async () => {
     if (!newClientName.trim()) { toast.error('Nom du client requis'); return; }
-    const newCli = addClient({ name: newClientName.trim(), phone: newClientPhone.trim() });
+    const newCli = await addClient({ name: newClientName.trim(), phone: newClientPhone.trim() });
     setSelectedClient(newCli);
-    setNewClientName('');
-    setNewClientPhone('');
-    setShowNewClientForm(false);
+    setNewClientName(''); setNewClientPhone(''); setShowNewClientForm(false);
     toast.success('Client créé et sélectionné');
   };
 
-  const handleAddRecipeLine = (ft: typeof ficheTechnics[0]) => {
-    const exists = selectedItems.find((item) => item.ficheTechnicId === ft.id);
-    if (exists) {
-      toast.error('Ce produit est déjà ajouté à la commande');
+  const handleAddRecipeLine = (ft: (typeof ficheTechnics)[0]) => {
+    if (selectedItems.find((item) => item.ficheTechnicId === ft.id)) {
+      toast.error('Ce produit est déjà dans la commande');
       return;
     }
-    const newLine: CommandLine = {
-      ficheTechnicId: ft.id,
-      productName: ft.name,
-      quantity: 1,
-      unitPrice: ft.unitPrice,
-      totalPrice: ft.unitPrice,
-      sellByUnit: ft.sellByUnit,
-      sellUnit: ft.sellUnit,
-    };
-    setSelectedItems([...selectedItems, newLine]);
+    setSelectedItems([
+      ...selectedItems,
+      {
+        ficheTechnicId: ft.id,
+        productName: ft.name,
+        quantity: 1,
+        unitPrice: ft.unitPrice,
+        totalPrice: ft.unitPrice,
+        sellByUnit: ft.sellByUnit,
+        sellUnit: ft.sellUnit,
+      },
+    ]);
     setRecipeSearch('');
-    toast.success('Produit ajouté');
   };
 
-  const handleUpdateItemQty = (index: number, qty: number) => {
-    setSelectedItems(
-      selectedItems.map((item, idx) => {
-        if (idx !== index) return item;
-        return {
-          ...item,
-          quantity: qty,
-          totalPrice: qty * item.unitPrice,
-        };
-      })
-    );
-  };
-
-  const handleUpdateItemPrice = (index: number, price: number) => {
-    setSelectedItems(
-      selectedItems.map((item, idx) => {
-        if (idx !== index) return item;
-        return {
-          ...item,
-          unitPrice: price,
-          totalPrice: item.quantity * price,
-        };
-      })
-    );
-  };
-
-  const handleRemoveItem = (index: number) => {
-    setSelectedItems(selectedItems.filter((_, idx) => idx !== index));
-  };
+  const handleUpdateItemQty = (index: number, qty: number) =>
+    setSelectedItems(selectedItems.map((it, i) => (i === index ? { ...it, quantity: qty, totalPrice: qty * it.unitPrice } : it)));
+  const handleUpdateItemPrice = (index: number, price: number) =>
+    setSelectedItems(selectedItems.map((it, i) => (i === index ? { ...it, unitPrice: price, totalPrice: it.quantity * price } : it)));
+  const handleRemoveItem = (index: number) => setSelectedItems(selectedItems.filter((_, i) => i !== index));
 
   const computedTotalSum = selectedItems.reduce((sum, item) => sum + item.totalPrice, 0);
   const finalTotalAmount = customTotal !== null ? customTotal : computedTotalSum;
 
   const handleOpenCreateForm = () => {
-    setEditingId(null);
-    setSelectedClient(null);
-    setSelectedItems([]);
-    setReceiveDate(todayISO());
-    setReceiveHour('14');
-    setReceiveMinute('30');
-    setCustomTotal(null);
-    setVersement(0);
-    setClientSearch('');
-    setRecipeSearch('');
-    setShowNewClientForm(false);
-    setFormOpen(true);
+    setEditingId(null); setSelectedClient(null); setSelectedItems([]);
+    setReceiveDate(todayISO()); setReceiveHour('14'); setReceiveMinute('30');
+    setCustomTotal(null); setVersement(0); setClientSearch(''); setRecipeSearch('');
+    setShowNewClientForm(false); setFormOpen(true);
   };
 
   const handleOpenEditForm = (cmd: Command) => {
     setEditingId(cmd.id);
     setSelectedClient({ id: cmd.clientId, name: cmd.clientName, phone: cmd.clientPhone });
     setSelectedItems(cmd.items);
-    setReceiveDate(cmd.receiveDate);
-    setReceiveHour(cmd.receiveHour);
-    setReceiveMinute(cmd.receiveMinute);
-    setCustomTotal(cmd.totalAmount);
-    setVersement(cmd.paidAmount);
-    setFormOpen(true);
+    setReceiveDate(cmd.receiveDate); setReceiveHour(cmd.receiveHour); setReceiveMinute(cmd.receiveMinute);
+    setCustomTotal(cmd.totalAmount); setVersement(cmd.paidAmount); setFormOpen(true);
   };
 
-  const handleSaveCommand = () => {
+  const handleSaveCommand = async () => {
     if (!selectedClient) { toast.error('Veuillez sélectionner un client'); return; }
-    if (selectedItems.length === 0) { toast.error('Ajoutez au moins un produit à la commande'); return; }
+    if (selectedItems.length === 0) { toast.error('Ajoutez au moins un produit'); return; }
     if (versement < 0) { toast.error('Le versement ne peut pas être négatif'); return; }
 
-    const cmdData = {
-      clientId: selectedClient.id,
-      clientName: selectedClient.name,
-      clientPhone: selectedClient.phone,
-      receiveDate,
-      receiveHour,
-      receiveMinute,
-      items: selectedItems,
-      totalAmount: finalTotalAmount,
-      paidAmount: versement,
-    };
+    setSaving(true);
+    try {
+      const cmdData = {
+        clientId: selectedClient.id,
+        clientName: selectedClient.name,
+        clientPhone: selectedClient.phone,
+        receiveDate, receiveHour, receiveMinute,
+        items: selectedItems,
+        totalAmount: finalTotalAmount,
+        advancePaid: versement,
+        paidAmount: versement,
+      };
 
-    if (editingId) {
-      updateCommand(editingId, cmdData);
-      toast.success('Commande modifiée avec succès');
-      const updatedCmd = useCommandStore.getState().commands.find((c) => c.id === editingId);
-      if (updatedCmd) promptPrint(updatedCmd, 'bon_commande');
-    } else {
-      const newCmd = addCommand(cmdData);
-      toast.success('Commande créée avec succès !');
-      promptPrint(newCmd, 'bon_commande');
+      if (editingId) {
+        const linesUpdated = await updateCommand(editingId, cmdData);
+        if (linesUpdated) toast.success('Commande modifiée');
+        else toast.warning('Commande modifiée — les produits sont figés car une livraison existe déjà');
+        const updated = useCommandStore.getState().commands.find((c) => c.id === editingId);
+        if (updated) setPrintPrompt({ kind: 'command', cmd: updated });
+      } else {
+        const newCmd = await addCommand(cmdData);
+        toast.success('Commande créée');
+        if (newCmd) setPrintPrompt({ kind: 'command', cmd: newCmd });
+      }
+      setFormOpen(false);
+    } finally {
+      setSaving(false);
     }
-    setFormOpen(false);
   };
 
-  const promptPrint = (cmd: Command, type: 'bon_commande' | 'bon_livraison' = 'bon_commande') => {
-    setPrintPromptCmd(cmd);
-    setPrintPromptType(type);
+  /* ---------------------------------------------------------- deliveries */
+  const handleSaveDelivery = async (
+    items: Parameters<typeof addDelivery>[1],
+    deliveredAt: string,
+    notes: string
+  ) => {
+    if (!deliverCmd) return;
+    if (editingDelivery) {
+      await updateDelivery(editingDelivery.id, items, deliveredAt, notes);
+      toast.success('Livraison modifiée');
+      setEditingDelivery(null);
+      setDeliverCmd(null);
+      return;
+    }
+    const delivery = await addDelivery(deliverCmd.id, items, deliveredAt, notes);
+    const refreshed = useCommandStore.getState().commands.find((c) => c.id === deliverCmd.id) ?? deliverCmd;
+    toast.success('Livraison enregistrée');
+    setDeliverCmd(null);
+    if (delivery) setPrintPrompt({ kind: 'delivery', cmd: refreshed, delivery });
   };
 
-  // Print Bon de Commande
-  const printBonDeCommande = (cmd: Command) => {
-    const rows = cmd.items
-      .map(
-        (l) => `<tr>
-        <td style="padding: 10px; border-bottom: 1px solid #ddd; font-weight: bold;">${l.productName}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: center;">${l.quantity}${l.sellByUnit && l.sellUnit ? ` ${l.sellUnit}` : ''}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right;">${formatCurrency(l.unitPrice)}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: right; font-weight: bold;">${formatCurrency(l.totalPrice)}</td>
-      </tr>`
-      )
-      .join('');
-
-    const logoHtml = settings.logo
-      ? `<img src="${settings.logo}" style="max-height: 70px; margin-bottom: 5px;" />`
-      : `<div style="font-size: 32px; font-weight: bold; color: #d97706;">🏗️ ${settings.name || 'ALTECH PRODUCTION'}</div>`;
-
-    const htmlContent = `
-      <div style="font-family: Arial, sans-serif; color: #000; padding: 25px; max-width: 800px; margin: 0 auto; border: 2px solid #000; border-radius: 8px;">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px;">
-          <div>
-            ${logoHtml}
-            <h2 style="margin: 5px 0 2px 0; font-size: 20px; font-weight: bold;">${settings.name || 'ALTECH PRODUCTION'}</h2>
-            <p style="margin: 2px 0; font-size: 12px;">📍 ${settings.address || 'Adresse non spécifiée'}</p>
-            <p style="margin: 2px 0; font-size: 12px;">📞 Tel: ${settings.phone || 'N/A'}</p>
-            ${settings.nif ? `<p style="margin: 2px 0; font-size: 11px;">NIF: ${settings.nif} | NIS: ${settings.nis || ''} | RC: ${settings.rc || ''}</p>` : ''}
-          </div>
-          <div style="text-align: right;">
-            <h1 style="margin: 0; font-size: 22px; font-weight: bold; background: #000; color: #fff; padding: 6px 16px; border-radius: 4px; display: inline-block;">BON DE COMMANDE</h1>
-            <p style="margin: 8px 0 2px 0; font-size: 14px; font-weight: bold;">Réf: ${cmd.reference}</p>
-            <p style="margin: 2px 0; font-size: 12px;">Date: ${formatDate(cmd.createdAt.slice(0, 10), 'fr')}</p>
-            <p style="margin: 2px 0; font-size: 12px; font-weight: bold; color: #b45309;">Livraison prévue: ${formatDate(cmd.receiveDate, 'fr')} à ${cmd.receiveHour}h${cmd.receiveMinute}</p>
-          </div>
-        </div>
-
-        <div style="background: #f8f9fa; border: 1px solid #ddd; padding: 12px 15px; border-radius: 6px; margin-bottom: 20px; font-size: 13px;">
-          <p style="margin: 0 0 4px 0;"><strong>CLIENT :</strong> ${cmd.clientName}</p>
-          ${cmd.clientPhone ? `<p style="margin: 0;"><strong>TÉLÉPHONE :</strong> ${cmd.clientPhone}</p>` : ''}
-        </div>
-
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px;">
-          <thead>
-            <tr style="background-color: #f2f2f2;">
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">Désignation Produit / Ciment</th>
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: center;">Quantité</th>
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: right;">Prix Unitaire</th>
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: right;">Total (DA)</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows}
-          </tbody>
-        </table>
-
-        <div style="display: flex; justify-content: flex-end; margin-bottom: 30px;">
-          <div style="width: 300px; border: 1px solid #000; border-radius: 6px; overflow: hidden; font-size: 13px;">
-            <div style="display: flex; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #ddd;">
-              <span>Total Commande:</span>
-              <strong style="font-size: 14px;">${formatCurrency(cmd.totalAmount)}</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #ddd; background: #e6fffa;">
-              <span>Acompte Versé:</span>
-              <strong style="color: #047857;">${formatCurrency(cmd.paidAmount)}</strong>
-            </div>
-            <div style="display: flex; justify-content: space-between; padding: 10px 12px; background: #fff1f2; font-weight: bold;">
-              <span>Reste à Payer:</span>
-              <strong style="color: #be123c; font-size: 15px;">${formatCurrency(cmd.restAmount)}</strong>
-            </div>
-          </div>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; text-align: center; font-size: 12px; margin-top: 40px;">
-          <div style="width: 45%; border: 1px solid #000; padding: 15px; height: 90px; border-radius: 6px;">
-            <p style="margin: 0 0 50px 0; font-weight: bold;">Signature Client</p>
-          </div>
-          <div style="width: 45%; border: 1px solid #000; padding: 15px; height: 90px; border-radius: 6px;">
-            <p style="margin: 0 0 50px 0; font-weight: bold;">Cachet &amp; Signature Entreprise</p>
-          </div>
-        </div>
-      </div>
-    `;
-
-    printDocument(htmlContent, `Bon_de_Commande_${cmd.reference}`);
+  const doPrintDelivery = (cmd: Command, delivery: CommandDelivery) => {
+    printDeliveryNote(
+      {
+        reference: delivery.reference,
+        commandReference: cmd.reference,
+        clientName: cmd.clientName,
+        clientPhone: cmd.clientPhone,
+        deliveredAt: delivery.deliveredAt,
+        notes: delivery.notes,
+        lines: cmd.items.map((it) => {
+          const line = delivery.items.find(
+            (l) => (l.commandItemId && l.commandItemId === it.id) || l.productName === it.productName
+          );
+          return {
+            productName: it.productName,
+            ordered: it.quantity,
+            deliveredNow: line?.quantity ?? 0,
+            deliveredTotal: it.deliveredQuantity ?? 0,
+            unit: it.sellUnit,
+          };
+        }),
+      },
+      settings
+    );
   };
 
-  // Print Bon de Livraison
-  const printBonDeLivraison = (cmd: Command) => {
-    const rows = cmd.items
-      .map(
-        (l) => `<tr>
-        <td style="padding: 10px; border-bottom: 1px solid #ddd; font-weight: bold;">${l.productName}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: center; font-size: 14px; font-weight: bold;">${l.quantity}${l.sellByUnit && l.sellUnit ? ` ${l.sellUnit}` : ''}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #ddd; text-align: center;">Conforme ✅</td>
-      </tr>`
-      )
-      .join('');
-
-    const logoHtml = settings.logo
-      ? `<img src="${settings.logo}" style="max-height: 70px; margin-bottom: 5px;" />`
-      : `<div style="font-size: 32px; font-weight: bold; color: #d97706;">🚚 ${settings.name || 'CEMENT STORE'}</div>`;
-
-    const htmlContent = `
-      <div style="font-family: Arial, sans-serif; color: #000; padding: 25px; max-width: 800px; margin: 0 auto; border: 2px solid #000; border-radius: 8px;">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #000; padding-bottom: 15px; margin-bottom: 20px;">
-          <div>
-            ${logoHtml}
-            <h2 style="margin: 5px 0 2px 0; font-size: 20px; font-weight: bold;">${settings.name || 'CEMENT STORE'}</h2>
-            <p style="margin: 2px 0; font-size: 12px;">📍 ${settings.address || 'Adresse non spécifiée'}</p>
-            <p style="margin: 2px 0; font-size: 12px;">📞 Tel: ${settings.phone || 'N/A'}</p>
-          </div>
-          <div style="text-align: right;">
-            <h1 style="margin: 0; font-size: 22px; font-weight: bold; background: #000; color: #fff; padding: 6px 16px; border-radius: 4px; display: inline-block;">BON DE LIVRAISON</h1>
-            <p style="margin: 8px 0 2px 0; font-size: 14px; font-weight: bold;">Réf Commande: ${cmd.reference}</p>
-            <p style="margin: 2px 0; font-size: 12px; font-weight: bold;">Date de Livraison: ${formatDate(cmd.receiveDate, 'fr')} à ${cmd.receiveHour}h${cmd.receiveMinute}</p>
-          </div>
-        </div>
-
-        <div style="background: #f8f9fa; border: 1px solid #ddd; padding: 12px 15px; border-radius: 6px; margin-bottom: 20px; font-size: 13px;">
-          <p style="margin: 0 0 4px 0;"><strong>DESTINATAIRE (CLIENT) :</strong> ${cmd.clientName}</p>
-          ${cmd.clientPhone ? `<p style="margin: 0;"><strong>TÉLÉPHONE :</strong> ${cmd.clientPhone}</p>` : ''}
-        </div>
-
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 13px;">
-          <thead>
-            <tr style="background-color: #f2f2f2;">
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: left;">Désignation Matériau / Produit Livré</th>
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: center;">Quantité Livrée</th>
-              <th style="border: 1px solid #ddd; padding: 10px; text-align: center;">État de Réception</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows}
-          </tbody>
-        </table>
-
-        <div style="background: #fdf2f8; border: 1px solid #fbcfe8; padding: 10px 15px; border-radius: 6px; margin-bottom: 30px; font-size: 12px; text-align: center;">
-          <p style="margin: 0; font-weight: bold; color: #9d174d;">Attestation de livraison : Le client reconnaît avoir reçu les marchandises ci-dessus en parfait état.</p>
-        </div>
-
-        <div style="display: flex; justify-content: space-between; text-align: center; font-size: 12px; margin-top: 40px;">
-          <div style="width: 45%; border: 1px solid #000; padding: 15px; height: 100px; border-radius: 6px;">
-            <p style="margin: 0 0 55px 0; font-weight: bold;">Signature &amp; Bon pour Réception (Client)</p>
-          </div>
-          <div style="width: 45%; border: 1px solid #000; padding: 15px; height: 100px; border-radius: 6px;">
-            <p style="margin: 0 0 55px 0; font-weight: bold;">Cachet &amp; Signature Expéditeur (Magasin)</p>
-          </div>
-        </div>
-      </div>
-    `;
-
-    printDocument(htmlContent, `Bon_de_Livraison_${cmd.reference}`);
-  };
-
-  const handleConfirmFinalise = () => {
-    if (!finaliseCmd) return;
-    const cmdSnapshot = finaliseCmd;
-    finaliseCommand(finaliseCmd.id);
-    toast.success('Livraison confirmée ! Commande finalisée et stock comptoir mis à jour.');
-    setFinaliseCmd(null);
-    promptPrint(cmdSnapshot, 'bon_livraison');
-  };
-
-  const handlePayDebt = () => {
+  /* ------------------------------------------------------------ payments */
+  const handlePayDebt = async () => {
     if (!payCmd) return;
     if (payAmount <= 0) { toast.error('Montant invalide'); return; }
     if (payAmount > payCmd.restAmount) { toast.error('Le montant dépasse la dette restante'); return; }
-
-    payDebt(payCmd.id, payAmount, payDescription);
-    toast.success('Paiement enregistré avec succès !');
+    await payDebt(payCmd.id, payAmount);
+    toast.success('Paiement enregistré');
     setPayCmd(null);
     setPayAmount(0);
+  };
+
+  /* -------------------------------------------------- printing (command) */
+  const printBonDeCommande = (cmd: Command) => {
+    const rows = cmd.items
+      .map((l) => {
+        const delivered = l.deliveredQuantity ?? 0;
+        const u = l.sellByUnit && l.sellUnit ? ` ${l.sellUnit}` : '';
+        return `<tr>
+          <td style="padding:9px;border:1px solid #ddd;font-weight:bold;">${l.productName}</td>
+          <td style="padding:9px;border:1px solid #ddd;text-align:center;">${l.quantity}${u}</td>
+          <td style="padding:9px;border:1px solid #ddd;text-align:center;">${delivered}${u}</td>
+          <td style="padding:9px;border:1px solid #ddd;text-align:right;">${formatCurrency(l.unitPrice)}</td>
+          <td style="padding:9px;border:1px solid #ddd;text-align:right;font-weight:bold;">${formatCurrency(l.totalPrice)}</td>
+        </tr>`;
+      })
+      .join('');
+
+    const logoHtml = settings.logo
+      ? `<img src="${settings.logo}" style="max-height:70px;margin-bottom:5px;" />`
+      : `<div style="font-size:30px;font-weight:bold;">🏗️ ${settings.name || 'ALTECH PRODUCTION'}</div>`;
+
+    const d = deliveryStatus(cmd);
+
+    printDocument(
+      `<div style="font-family:Arial,sans-serif;color:#000;padding:24px;max-width:800px;margin:0 auto;border:2px solid #000;border-radius:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #000;padding-bottom:14px;margin-bottom:18px;">
+          <div>
+            ${logoHtml}
+            <h2 style="margin:5px 0 2px 0;font-size:19px;">${settings.name || 'ALTECH PRODUCTION'}</h2>
+            <p style="margin:2px 0;font-size:12px;">📍 ${settings.address || '—'}</p>
+            <p style="margin:2px 0;font-size:12px;">📞 ${settings.phone || '—'}</p>
+            ${settings.nif ? `<p style="margin:2px 0;font-size:11px;">NIF: ${settings.nif} | NIS: ${settings.nis || ''} | RC: ${settings.rc || ''}</p>` : ''}
+          </div>
+          <div style="text-align:right;">
+            <h1 style="margin:0;font-size:20px;background:#000;color:#fff;padding:6px 16px;border-radius:4px;display:inline-block;">BON DE COMMANDE</h1>
+            <p style="margin:8px 0 2px 0;font-size:14px;font-weight:bold;">Réf: ${cmd.reference}</p>
+            <p style="margin:2px 0;font-size:12px;">Créée le: ${formatDate(cmd.createdAt.slice(0, 10), 'fr')}</p>
+            <p style="margin:2px 0;font-size:12px;font-weight:bold;">Livraison prévue: ${formatDate(cmd.receiveDate, 'fr')} à ${cmd.receiveHour}h${cmd.receiveMinute}</p>
+          </div>
+        </div>
+
+        <div style="background:#f8f9fa;border:1px solid #ddd;padding:11px 14px;border-radius:6px;margin-bottom:18px;font-size:13px;">
+          <p style="margin:0 0 4px 0;"><strong>CLIENT :</strong> ${cmd.clientName}</p>
+          ${cmd.clientPhone ? `<p style="margin:0;"><strong>TÉLÉPHONE :</strong> ${cmd.clientPhone}</p>` : ''}
+        </div>
+
+        <table style="width:100%;border-collapse:collapse;margin-bottom:18px;font-size:12.5px;">
+          <thead><tr style="background:#efefef;">
+            <th style="border:1px solid #ddd;padding:9px;text-align:left;">Désignation</th>
+            <th style="border:1px solid #ddd;padding:9px;text-align:center;">Commandé</th>
+            <th style="border:1px solid #ddd;padding:9px;text-align:center;">Livré</th>
+            <th style="border:1px solid #ddd;padding:9px;text-align:right;">P.U.</th>
+            <th style="border:1px solid #ddd;padding:9px;text-align:right;">Total</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;">
+          <div style="border:2px solid ${d.isFull ? '#0a7d43' : '#b45309'};color:${d.isFull ? '#0a7d43' : '#b45309'};border-radius:6px;padding:6px 14px;font-weight:bold;font-size:13px;">
+            ${d.isFull ? 'COMMANDE ENTIÈREMENT LIVRÉE' : d.isPartial ? `LIVRAISON PARTIELLE — ${d.percent.toFixed(0)}%` : 'NON LIVRÉE'}
+          </div>
+          <div style="width:300px;border:1px solid #000;border-radius:6px;overflow:hidden;font-size:13px;">
+            <div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid #ddd;"><span>Total Commande:</span><strong>${formatCurrency(cmd.totalAmount)}</strong></div>
+            <div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid #ddd;background:#e9f7ef;"><span>Acompte Versé:</span><strong>${formatCurrency(cmd.paidAmount)}</strong></div>
+            <div style="display:flex;justify-content:space-between;padding:9px 12px;background:#fdecef;font-weight:bold;"><span>Reste à Payer:</span><strong>${formatCurrency(cmd.restAmount)}</strong></div>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;text-align:center;font-size:12px;margin-top:36px;">
+          <div style="width:45%;border:1px solid #000;padding:14px;height:90px;border-radius:6px;"><p style="margin:0 0 50px 0;font-weight:bold;">Signature Client</p></div>
+          <div style="width:45%;border:1px solid #000;padding:14px;height:90px;border-radius:6px;"><p style="margin:0 0 50px 0;font-weight:bold;">Cachet &amp; Signature Entreprise</p></div>
+        </div>
+      </div>`,
+      `Bon_de_Commande_${cmd.reference}`
+    );
   };
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Commandes Clients"
-        icon={<ShoppingCart size={24} className="text-gold" />}
-        subtitle={`${filteredCommands.length} commandes enregistrées`}
+        title="Commandes clients"
+        icon={<ShoppingCart size={24} />}
+        subtitle={`${filteredCommands.length} commande(s) · ${stats.pendingDelivery} en attente de livraison`}
         actions={
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => navigate('/clients')}>
-              <User size={18} /> Retour aux Clients
+              <User size={18} /> Clients
             </Button>
             {can('clients', 'create') && (
               <Button variant="gold" onClick={handleOpenCreateForm}>
-                <Plus size={18} /> Nouvelle Commande
+                <Plus size={18} /> Nouvelle commande
               </Button>
             )}
           </div>
         }
       />
 
-      {/* ===== Statistics Cards ===== */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card index={0} className="relative overflow-hidden border border-gold/15">
-          <p className="text-xs text-text-muted mb-1">Total Commandes</p>
-          <p className="text-2xl font-bold tabular text-gold">{formatCurrency(stats.totalValue)}</p>
-        </Card>
-        <Card index={1} className="relative overflow-hidden border border-gold/15">
-          <p className="text-xs text-text-muted mb-1">Total Versé (Acomptes)</p>
-          <p className="text-2xl font-bold tabular text-emerald-400">{formatCurrency(stats.totalPaid)}</p>
-        </Card>
-        <Card index={2} className="relative overflow-hidden border border-gold/15">
-          <p className="text-xs text-text-muted mb-1">Total Dettes Restantes</p>
-          <p className="text-2xl font-bold tabular text-rose-400">{formatCurrency(stats.totalRest)}</p>
-        </Card>
+      {/* Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatCard label="Total commandes" value={stats.totalValue} format="currency" icon={<Receipt size={22} />} index={0} accent="gold" />
+        <StatCard label="Total versé" value={stats.totalPaid} format="currency" icon={<CheckCircle2 size={22} />} index={1} accent="pistachio" />
+        <StatCard label="Dettes restantes" value={stats.totalRest} format="currency" icon={<Coins size={22} />} index={2} accent="rose" />
+        <StatCard label="À livrer" value={stats.pendingDelivery} icon={<Truck size={22} />} index={3} accent="caramel" />
       </div>
 
-      {/* ===== Search & Filter Controls ===== */}
+      {/* Filters */}
       <Card index={3}>
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div className="md:col-span-2">
-              <SearchBar value={search} onChange={setSearch} placeholder="Rechercher par nom de client ou téléphone..." />
+              <SearchBar value={search} onChange={setSearch} placeholder="Rechercher par client, téléphone ou référence…" />
             </div>
-            <div>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-                className="w-full h-11 px-4 rounded-xl border border-gold/20 bg-vanilla/40 text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
-              >
-                <option value="all">Tous les statuts</option>
-                <option value="pending">En attente (Non livrées)</option>
-                <option value="finalised">Livrées / Finalisées</option>
-                <option value="paid">Totalement Payées</option>
-                <option value="debt">Avec Dette</option>
-              </select>
-            </div>
-            <div>
-              <select
-                value={dateFilter}
-                onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-                className="w-full h-11 px-4 rounded-xl border border-gold/20 bg-vanilla/40 text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
-              >
-                <option value="all">Toutes les dates</option>
-                <option value="today">Aujourd'hui</option>
-                <option value="week">7 derniers jours</option>
-                <option value="month">30 derniers jours</option>
-                <option value="period">Par période</option>
-              </select>
-            </div>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+              className="w-full h-11 px-4 rounded-xl border border-gold/20 bg-[--surface-input] text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
+            >
+              <option value="all">Tous les statuts</option>
+              <option value="undelivered">Non livrées</option>
+              <option value="partial">Partiellement livrées</option>
+              <option value="delivered">Entièrement livrées</option>
+              <option value="paid">Totalement payées</option>
+              <option value="debt">Avec dette</option>
+            </select>
+            <select
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value as DateFilter)}
+              className="w-full h-11 px-4 rounded-xl border border-gold/20 bg-[--surface-input] text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
+            >
+              <option value="all">Toutes les dates</option>
+              <option value="today">Aujourd'hui</option>
+              <option value="week">7 derniers jours</option>
+              <option value="month">30 derniers jours</option>
+              <option value="period">Par période</option>
+            </select>
           </div>
-
           <AnimatePresence>
             {dateFilter === 'period' && (
               <motion.div
@@ -531,13 +446,14 @@ export default function CommandsPage() {
         </div>
       </Card>
 
-      {/* ===== Commands Cards Grid ===== */}
+      {/* Cards */}
       {filteredCommands.length === 0 ? (
-        <EmptyState message="Aucune commande enregistrée pour ces filtres" icon={<ShoppingCart size={36} />} />
+        <EmptyState message="Aucune commande pour ces filtres" icon={<ShoppingCart size={36} />} />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {filteredCommands.map((cmd, i) => {
-            const isFinalised = cmd.status === 'finalised';
+            const d = deliveryStatus(cmd);
+            const cmdDeliveries = deliveriesOf(cmd.id);
             return (
               <motion.div
                 key={cmd.id}
@@ -545,12 +461,40 @@ export default function CommandsPage() {
                 variants={cardVariants}
                 initial="hidden"
                 animate="visible"
-                className="flex flex-col border border-gold/20 rounded-2xl bg-gradient-card p-5 shadow-card hover:border-gold/50 transition-all relative justify-between"
+                className={`flex flex-col rounded-2xl bg-gradient-card p-0 overflow-hidden shadow-card transition-all border ${
+                  d.isFull ? 'border-pistachio/35' : d.isPartial ? 'border-caramel/45' : 'border-rose-deep/35'
+                }`}
               >
-                <div>
-                  {/* Header info */}
+                {/* Delivery alert band */}
+                <div
+                  className={`px-4 py-2 flex items-center gap-2 text-xs font-bold ${
+                    d.isFull
+                      ? 'bg-pistachio/15 text-pistachio'
+                      : d.isPartial
+                      ? 'bg-caramel/15 text-caramel'
+                      : 'bg-rose-deep/15 text-rose-deep'
+                  }`}
+                >
+                  {d.isFull ? (
+                    <><PackageCheck size={14} /> Entièrement livrée</>
+                  ) : (
+                    <motion.span
+                      className="flex items-center gap-2"
+                      animate={{ opacity: [1, 0.55, 1] }}
+                      transition={{ duration: 1.8, repeat: Infinity }}
+                    >
+                      <AlertTriangle size={14} />
+                      {d.isPartial
+                        ? `Livraison incomplète — reste ${d.remaining} article(s)`
+                        : `Non livrée — ${d.ordered} article(s) à livrer`}
+                    </motion.span>
+                  )}
+                  <span className="ml-auto tabular">{d.percent.toFixed(0)}%</span>
+                </div>
+
+                <div className="p-4 flex-1 flex flex-col">
                   <div className="flex justify-between items-start mb-3 gap-2">
-                    <div>
+                    <div className="min-w-0">
                       <span className="text-xs font-bold text-gold">{cmd.reference}</span>
                       <h3 className="font-display font-semibold text-text-primary text-base truncate">{cmd.clientName}</h3>
                       {cmd.clientPhone && (
@@ -559,103 +503,123 @@ export default function CommandsPage() {
                         </p>
                       )}
                     </div>
-                    <Badge variant={isFinalised ? 'success' : 'warning'}>
-                      {isFinalised ? 'Livrée' : 'En attente'}
+                    <Badge variant={cmd.restAmount > 0 ? 'danger' : 'success'}>
+                      {cmd.restAmount > 0 ? 'Dette' : 'Payée'}
                     </Badge>
                   </div>
 
-                  {/* Dates info */}
+                  {/* Delivery gauge */}
+                  <div className="mb-3">
+                    <div className="flex justify-between text-[10px] text-text-muted mb-1">
+                      <span>Livré {d.delivered} / {d.ordered}</span>
+                      <span>{cmdDeliveries.length} livraison(s)</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-vanilla overflow-hidden border border-gold/10">
+                      <motion.div
+                        initial={{ width: 0 }}
+                        animate={{ width: `${d.percent}%` }}
+                        transition={{ delay: i * 0.05, duration: 0.8 }}
+                        className={`h-full rounded-full ${d.isFull ? 'bg-gradient-mint' : 'bg-gradient-button'}`}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Dates */}
                   <div className="bg-vanilla/50 rounded-xl p-3 text-xs space-y-1 border border-gold/10 mb-3">
                     <div className="flex justify-between items-center text-text-muted">
-                      <span className="flex items-center gap-1"><Calendar size={11} /> Créée le :</span>
+                      <span className="flex items-center gap-1"><Calendar size={11} /> Créée le</span>
                       <span className="font-semibold text-text-primary">{formatDate(cmd.createdAt.slice(0, 10), language)}</span>
                     </div>
-                    <div className="flex justify-between items-center text-amber-400 font-semibold">
-                      <span className="flex items-center gap-1"><Clock size={11} /> Date Livraison :</span>
+                    <div className="flex justify-between items-center text-gold-dark font-semibold">
+                      <span className="flex items-center gap-1"><Clock size={11} /> Livraison prévue</span>
                       <span>{formatDate(cmd.receiveDate, language)} à {cmd.receiveHour}h{cmd.receiveMinute}</span>
                     </div>
                   </div>
 
-                  {/* Items preview list */}
+                  {/* Items */}
                   <div className="mb-3">
-                    <h4 className="text-[11px] font-bold text-text-muted uppercase tracking-wider mb-1.5">Produits ({cmd.items.length})</h4>
-                    <div className="space-y-1 max-h-[120px] overflow-y-auto pr-1">
-                      {cmd.items.map((item, idx) => (
-                        <div key={idx} className="flex justify-between text-xs py-1 border-b border-gold/5 last:border-b-0">
-                          <span className="text-text-primary truncate max-w-[150px]">{item.productName}</span>
-                          <span className="text-text-muted font-mono">{item.quantity}{item.sellByUnit && item.sellUnit ? ` ${item.sellUnit}` : ''} × {formatCurrency(item.unitPrice)}</span>
-                        </div>
-                      ))}
+                    <h4 className="text-[11px] font-bold text-text-muted uppercase tracking-wider mb-1.5">
+                      Produits ({cmd.items.length})
+                    </h4>
+                    <div className="space-y-1 max-h-[110px] overflow-y-auto pr-1">
+                      {cmd.items.map((item, idx) => {
+                        const done = (item.deliveredQuantity ?? 0) >= item.quantity;
+                        return (
+                          <div key={idx} className="flex justify-between text-xs py-1 border-b border-gold/5 last:border-b-0">
+                            <span className="text-text-primary truncate max-w-[140px] flex items-center gap-1">
+                              {done ? <CheckCircle2 size={11} className="text-pistachio shrink-0" /> : <span className="w-[11px]" />}
+                              {item.productName}
+                            </span>
+                            <span className="text-text-muted tabular">
+                              {item.deliveredQuantity ?? 0}/{item.quantity}
+                              {item.sellByUnit && item.sellUnit ? ` ${item.sellUnit}` : ''}
+                            </span>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
-                  {/* Pricing info */}
-                  <div className="border-t border-gold/10 pt-3 space-y-1 text-xs bg-vanilla/30 p-2.5 rounded-xl">
+                  {/* Money */}
+                  <div className="border-t border-gold/10 pt-3 space-y-1 text-xs bg-vanilla/30 p-2.5 rounded-xl mb-3">
                     <div className="flex justify-between text-text-muted">
-                      <span>Total Commande:</span>
-                      <span className="font-bold text-text-primary">{formatCurrency(cmd.totalAmount)}</span>
+                      <span>Total</span><span className="font-bold text-text-primary">{formatCurrency(cmd.totalAmount)}</span>
                     </div>
                     <div className="flex justify-between text-text-muted">
-                      <span>Acompte Versé:</span>
-                      <span className="font-semibold text-emerald-400">{formatCurrency(cmd.paidAmount)}</span>
+                      <span>Versé</span><span className="font-semibold text-pistachio">{formatCurrency(cmd.paidAmount)}</span>
                     </div>
-                    <div className="flex justify-between font-bold text-xs pt-1 border-t border-gold/10">
-                      <span>Reste à Payer:</span>
-                      <span className={cmd.restAmount > 0 ? 'text-rose-400 font-extrabold' : 'text-emerald-400'}>
+                    <div className="flex justify-between font-bold pt-1 border-t border-gold/10">
+                      <span>Reste</span>
+                      <span className={cmd.restAmount > 0 ? 'text-rose-deep' : 'text-pistachio'}>
                         {formatCurrency(cmd.restAmount)}
                       </span>
                     </div>
                   </div>
-                </div>
 
-                {/* Actions Grid */}
-                <div className="space-y-2 mt-4 pt-3 border-t border-gold/15">
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button size="sm" variant="secondary" className="text-xs" onClick={() => setViewingCmd(cmd)}>
-                      <Eye size={13} /> Voir détails
-                    </Button>
-                    {!isFinalised ? (
-                      <Button size="sm" variant="gold" className="text-xs font-bold" onClick={() => setFinaliseCmd(cmd)}>
-                        <Truck size={13} /> Livraison
+                  {/* Actions */}
+                  <div className="space-y-2 mt-auto pt-2 border-t border-gold/15">
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button size="sm" variant="secondary" className="text-xs" onClick={() => setViewingCmd(cmd)}>
+                        <Eye size={13} /> Détails
                       </Button>
-                    ) : (
-                      <Button size="sm" variant="secondary" className="text-xs text-emerald-400" onClick={() => printBonDeLivraison(cmd)}>
-                        <Printer size={13} /> Bon Livraison
-                      </Button>
-                    )}
-                  </div>
-
-                  <div className="flex gap-1.5">
-                    <Button size="sm" variant="secondary" className="flex-1 text-[11px]" onClick={() => printBonDeCommande(cmd)}>
-                      <Printer size={12} /> Bon Commande
-                    </Button>
-
-                    {can('clients', 'edit') && (
-                      <Button size="sm" variant="secondary" onClick={() => handleOpenEditForm(cmd)} title="Modifier">
-                        <Pencil size={13} />
-                      </Button>
-                    )}
-
-                    {cmd.restAmount > 0 && (
                       <Button
                         size="sm"
-                        variant="gold"
-                        title="Payer acompte"
-                        onClick={() => {
-                          setPayCmd(cmd);
-                          setPayAmount(cmd.restAmount);
-                          setPayDescription(`Versement acompte pour commande ${cmd.reference}`);
-                        }}
+                        variant={d.isFull ? 'secondary' : 'gold'}
+                        className="text-xs font-bold"
+                        disabled={d.isFull}
+                        onClick={() => { setEditingDelivery(null); setDeliverCmd(cmd); }}
                       >
-                        <Coins size={13} />
+                        <Truck size={13} /> {d.isFull ? 'Livrée' : 'Livraison'}
                       </Button>
-                    )}
-
-                    {can('clients', 'delete') && (
-                      <Button size="sm" variant="ghost" onClick={() => setDeleteId(cmd.id)} className="hover:bg-rose-500/20 text-rose-400" title="Supprimer">
-                        <Trash2 size={13} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button size="sm" variant="secondary" className="text-xs" onClick={() => setHistoryCmd(cmd)}>
+                        <History size={13} /> Livraisons ({cmdDeliveries.length})
                       </Button>
-                    )}
+                      <Button size="sm" variant="secondary" className="text-xs" onClick={() => printBonDeCommande(cmd)}>
+                        <Printer size={13} /> Bon commande
+                      </Button>
+                    </div>
+                    <div className="flex gap-1.5">
+                      {cmd.restAmount > 0 && can('clients', 'pay') && (
+                        <Button
+                          size="sm" variant="gold" className="flex-1 text-xs"
+                          onClick={() => { setPayCmd(cmd); setPayAmount(cmd.restAmount); }}
+                        >
+                          <Coins size={13} /> Payer
+                        </Button>
+                      )}
+                      {can('clients', 'edit') && (
+                        <Button size="sm" variant="secondary" onClick={() => handleOpenEditForm(cmd)} title="Modifier">
+                          <Pencil size={13} />
+                        </Button>
+                      )}
+                      {can('clients', 'delete') && (
+                        <Button size="sm" variant="ghost" onClick={() => setDeleteId(cmd.id)} title="Supprimer">
+                          <Trash2 size={13} className="text-rose-deep" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </motion.div>
@@ -664,25 +628,24 @@ export default function CommandsPage() {
         </div>
       )}
 
-      {/* ===== Create / Edit Command Modal ===== */}
+      {/* ================= Create / edit ================= */}
       <Modal
         open={formOpen}
         onClose={() => setFormOpen(false)}
-        title={editingId ? 'Modifier la commande' : 'Créer une nouvelle commande'}
+        title={editingId ? 'Modifier la commande' : 'Nouvelle commande'}
         size="lg"
       >
         <div className="space-y-4">
-          {/* Client Selection Row */}
+          {/* Client */}
           <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40 relative">
             <h3 className="text-xs font-bold text-gold uppercase tracking-wider mb-3 flex items-center gap-2">
-              <User size={15} /> 1. Sélectionner ou créer le client
+              <User size={15} /> 1. Client
             </h3>
-            
             {selectedClient ? (
               <div className="flex items-center justify-between p-3 rounded-xl bg-vanilla/60 border border-gold/30">
                 <div>
                   <p className="font-bold text-sm text-text-primary">{selectedClient.name}</p>
-                  {selectedClient.phone && <p className="text-xs text-text-muted">📞 Tel: {selectedClient.phone}</p>}
+                  {selectedClient.phone && <p className="text-xs text-text-muted">📞 {selectedClient.phone}</p>}
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => setSelectedClient(null)}>
                   <X size={14} /> Changer
@@ -694,18 +657,16 @@ export default function CommandsPage() {
                   <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" size={16} />
                     <Input
-                      placeholder="Rechercher client par nom ou téléphone..."
+                      placeholder="Rechercher un client…"
                       value={clientSearch}
                       onChange={(e) => setClientSearch(e.target.value)}
                       className="pl-10"
                     />
                   </div>
-                  <Button variant="secondary" onClick={() => setShowNewClientForm(!showNewClientForm)} title="Créer un client">
+                  <Button variant="secondary" onClick={() => setShowNewClientForm(!showNewClientForm)}>
                     <UserPlus size={16} /> Client
                   </Button>
                 </div>
-
-                {/* Inline Client Creation */}
                 <AnimatePresence>
                   {showNewClientForm && (
                     <motion.div
@@ -714,27 +675,24 @@ export default function CommandsPage() {
                       exit={{ opacity: 0, height: 0 }}
                       className="p-3 border border-gold/30 rounded-xl bg-vanilla/80 space-y-3"
                     >
-                      <p className="text-xs font-bold text-gold">Créer et Sélectionner un Client</p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         <Input placeholder="Nom du client *" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} />
                         <Input placeholder="Téléphone" value={newClientPhone} onChange={(e) => setNewClientPhone(e.target.value)} />
                       </div>
                       <div className="flex justify-end gap-2">
                         <Button size="sm" variant="secondary" onClick={() => setShowNewClientForm(false)}>Annuler</Button>
-                        <Button size="sm" variant="gold" onClick={handleCreateClientInline}>Créer &amp; Sélectionner</Button>
+                        <Button size="sm" variant="gold" onClick={handleCreateClientInline}>Créer &amp; sélectionner</Button>
                       </div>
                     </motion.div>
                   )}
                 </AnimatePresence>
-
-                {/* Search Results List */}
                 {clientSearch && clientSearchResults.length > 0 && (
                   <div className="border border-gold/30 rounded-xl bg-[--surface-dropdown] max-h-[160px] overflow-y-auto shadow-xl">
                     {clientSearchResults.map((cli) => (
                       <button
                         key={cli.id}
                         onClick={() => { setSelectedClient(cli); setClientSearch(''); }}
-                        className="w-full text-left p-3 hover:bg-gold/20 border-b border-gold/10 last:border-b-0 text-xs text-text-primary transition-colors flex items-center justify-between"
+                        className="w-full text-left p-3 hover:bg-gold/20 border-b border-gold/10 last:border-b-0 text-xs text-text-primary flex items-center justify-between"
                       >
                         <span className="font-bold">{cli.name}</span>
                         {cli.phone && <span className="text-text-muted">📞 {cli.phone}</span>}
@@ -746,19 +704,19 @@ export default function CommandsPage() {
             )}
           </div>
 
-          {/* Dates & Hours Row */}
+          {/* Delivery date */}
           <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40">
             <h3 className="text-xs font-bold text-gold uppercase tracking-wider mb-3 flex items-center gap-2">
-              <Calendar size={15} /> 2. Date et heure de livraison
+              <Calendar size={15} /> 2. Date et heure de livraison prévue
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Input label="Date de livraison *" type="date" value={receiveDate} onChange={(e) => setReceiveDate(e.target.value)} />
               <div>
-                <label className="block text-xs font-semibold text-text-secondary mb-1">Heure (00-23)</label>
+                <label className="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-1.5">Heure</label>
                 <select
                   value={receiveHour}
                   onChange={(e) => setReceiveHour(e.target.value)}
-                  className="w-full h-11 px-4 rounded-xl border border-gold/20 bg-vanilla/40 text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
+                  className="w-full h-10 px-4 rounded-xl border border-gold/20 bg-[--surface-input] text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
                 >
                   {Array.from({ length: 24 }).map((_, h) => {
                     const val = String(h).padStart(2, '0');
@@ -767,52 +725,59 @@ export default function CommandsPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-text-secondary mb-1">Minute (00-59)</label>
+                <label className="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-1.5">Minute</label>
                 <select
                   value={receiveMinute}
                   onChange={(e) => setReceiveMinute(e.target.value)}
-                  className="w-full h-11 px-4 rounded-xl border border-gold/20 bg-vanilla/40 text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
+                  className="w-full h-10 px-4 rounded-xl border border-gold/20 bg-[--surface-input] text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
                 >
-                  {['00', '15', '30', '45'].map((m) => (
-                    <option key={m} value={m}>{m}</option>
-                  ))}
+                  {['00', '15', '30', '45'].map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
               </div>
             </div>
           </div>
 
-          {/* Products Select & List */}
+          {/* Products */}
           <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40 space-y-3">
             <h3 className="text-xs font-bold text-gold uppercase tracking-wider mb-2 flex items-center gap-2">
-              <Receipt size={15} /> 3. Sélectionner les produits (Sélection Multiple)
+              <Receipt size={15} /> 3. Produits commandés
             </h3>
-
+            {editingId && deliveriesOf(editingId).length > 0 && (
+              <div className="flex items-start gap-2 rounded-xl border border-caramel/40 bg-caramel/10 px-3 py-2.5 text-xs text-caramel">
+                <AlertTriangle size={15} className="shrink-0 mt-0.5" />
+                <span>
+                  Cette commande a déjà été livrée : la liste des produits ne peut plus être
+                  modifiée (les quantités livrées y sont rattachées). Vous pouvez toujours
+                  changer la date de livraison prévue et le total.
+                </span>
+              </div>
+            )}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" size={16} />
               <Input
-                placeholder="Rechercher une Formule ou Fiche Technique à ajouter..."
+                placeholder="Rechercher une fiche technique / formule…"
                 value={recipeSearch}
                 onChange={(e) => setRecipeSearch(e.target.value)}
                 className="pl-10"
               />
             </div>
-
             {recipeSearch && recipeSearchResults.length > 0 && (
               <div className="border border-gold/30 rounded-xl bg-[--surface-dropdown] max-h-[160px] overflow-y-auto shadow-xl">
                 {recipeSearchResults.map((ft) => (
                   <button
                     key={ft.id}
                     onClick={() => handleAddRecipeLine(ft)}
-                    className="w-full text-left p-3 hover:bg-gold/20 border-b border-gold/10 last:border-b-0 text-xs text-text-primary transition-colors flex items-center justify-between"
+                    className="w-full text-left p-3 hover:bg-gold/20 border-b border-gold/10 last:border-b-0 text-xs text-text-primary flex items-center justify-between"
                   >
                     <span className="font-bold">{ft.name}</span>
-                    <span className="text-gold font-mono">{formatCurrency(ft.unitPrice)}</span>
+                    <span className="text-gold tabular">
+                      {formatCurrency(ft.unitPrice)}{ft.sellByUnit && ft.sellUnit ? `/${ft.sellUnit}` : ''}
+                    </span>
                   </button>
                 ))}
               </div>
             )}
 
-            {/* Selected Items Table */}
             {selectedItems.length > 0 ? (
               <div className="overflow-x-auto border border-gold/15 rounded-xl bg-vanilla/40">
                 <table className="w-full text-xs">
@@ -821,7 +786,7 @@ export default function CommandsPage() {
                       <th className="text-left px-3 py-2">Produit</th>
                       <th className="text-right px-3 py-2">Quantité</th>
                       <th className="text-right px-3 py-2">P.U (DA)</th>
-                      <th className="text-right px-3 py-2">Total (DA)</th>
+                      <th className="text-right px-3 py-2">Total</th>
                       <th className="text-center px-3 py-2">Action</th>
                     </tr>
                   </thead>
@@ -831,10 +796,7 @@ export default function CommandsPage() {
                         <td className="px-3 py-2 font-semibold text-text-primary">{item.productName}</td>
                         <td className="px-3 py-2 text-right">
                           <input
-                            type="number"
-                            min={0.01}
-                            step="any"
-                            value={item.quantity}
+                            type="number" min={0.01} step="any" value={item.quantity}
                             onChange={(e) => handleUpdateItemQty(idx, Number(e.target.value))}
                             className="w-20 px-2 py-1 text-right bg-[--surface-input] border border-gold/30 rounded-lg text-text-primary text-xs"
                           />
@@ -842,19 +804,14 @@ export default function CommandsPage() {
                         </td>
                         <td className="px-3 py-2 text-right">
                           <input
-                            type="number"
-                            min={0}
-                            step="any"
-                            value={item.unitPrice}
+                            type="number" min={0} step="any" value={item.unitPrice}
                             onChange={(e) => handleUpdateItemPrice(idx, Number(e.target.value))}
                             className="w-24 px-2 py-1 text-right bg-[--surface-input] border border-gold/30 rounded-lg text-text-primary text-xs"
                           />
                         </td>
-                        <td className="px-3 py-2 text-right font-bold tabular text-gold">
-                          {formatCurrency(item.totalPrice)}
-                        </td>
+                        <td className="px-3 py-2 text-right font-bold tabular text-gold">{formatCurrency(item.totalPrice)}</td>
                         <td className="px-3 py-2 text-center">
-                          <button onClick={() => handleRemoveItem(idx)} className="p-1 rounded-lg text-rose-400 hover:bg-rose-500/20">
+                          <button onClick={() => handleRemoveItem(idx)} className="p-1 rounded-lg text-rose-deep hover:bg-rose-deep/10">
                             <X size={14} />
                           </button>
                         </td>
@@ -865,180 +822,231 @@ export default function CommandsPage() {
               </div>
             ) : (
               <p className="text-xs text-center text-text-muted py-4 italic border border-dashed border-gold/15 rounded-xl">
-                Aucun produit sélectionné. Recherchez une formule ci-dessus pour l'ajouter.
+                Aucun produit sélectionné.
               </p>
             )}
           </div>
 
-          {/* Pricing calculations */}
+          {/* Pricing */}
           <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40 grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-semibold text-text-secondary mb-1">Total calculé</label>
-              <div className="w-full h-11 px-4 flex items-center rounded-xl border border-gold/20 bg-vanilla/60 text-gold font-bold text-sm">
+              <label className="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-1.5">Total calculé</label>
+              <div className="w-full h-10 px-4 flex items-center rounded-xl border border-gold/20 bg-vanilla/60 text-gold font-bold text-sm tabular">
                 {formatCurrency(computedTotalSum)}
               </div>
             </div>
             <Input
-              label="Ajuster le total final (DA)"
-              type="number"
+              label="Ajuster le total (DA)" type="number"
               value={customTotal !== null ? customTotal : ''}
               placeholder={String(computedTotalSum)}
               onChange={(e) => setCustomTotal(e.target.value ? Number(e.target.value) : null)}
             />
             <Input
-              label="Acompte / Versement (DA)"
-              type="number"
-              value={versement}
-              onChange={(e) => setVersement(Number(e.target.value))}
+              label="Acompte / versement (DA)" type="number"
+              value={versement} onChange={(e) => setVersement(Number(e.target.value))}
             />
           </div>
 
-          {/* Balance Preview */}
-          <div className="flex justify-between items-center p-3 rounded-xl bg-gold/10 border border-gold/30 text-gold font-bold text-xs">
-            <span>Reste à payer (Dette enregistrée) :</span>
-            <span className="text-sm font-mono text-rose-400">{formatCurrency(Math.max(0, finalTotalAmount - versement))}</span>
+          <div className="flex justify-between items-center p-3 rounded-xl bg-gold/10 border border-gold/30 text-gold-dark font-bold text-xs">
+            <span>Reste à payer (dette enregistrée)</span>
+            <span className="text-sm tabular text-rose-deep">{formatCurrency(Math.max(0, finalTotalAmount - versement))}</span>
           </div>
 
-          {/* Footer buttons */}
           <div className="flex justify-end gap-2 pt-2 border-t border-gold/10">
-            <Button variant="secondary" onClick={() => setFormOpen(false)}>Annuler</Button>
-            <Button variant="gold" onClick={handleSaveCommand}>Enregistrer Commande</Button>
+            <Button variant="secondary" onClick={() => setFormOpen(false)} disabled={saving}>Annuler</Button>
+            <Button variant="gold" onClick={handleSaveCommand} disabled={saving}>
+              {saving ? 'Enregistrement…' : 'Enregistrer la commande'}
+            </Button>
           </div>
         </div>
       </Modal>
 
-      {/* ===== Voir Détails Modal ===== */}
-      <Modal open={!!viewingCmd} onClose={() => setViewingCmd(null)} title={`Détails Commande ${viewingCmd?.reference}`} size="md">
-        {viewingCmd && (
-          <div className="space-y-4">
-            <div className="bg-vanilla/50 p-3 rounded-xl border border-gold/20 space-y-1 text-xs">
-              <div className="flex justify-between">
-                <span className="text-text-muted">Client:</span>
-                <span className="font-bold text-text-primary">{viewingCmd.clientName}</span>
+      {/* ================= Details ================= */}
+      <Modal open={!!viewingCmd} onClose={() => setViewingCmd(null)} title={`Commande ${viewingCmd?.reference ?? ''}`} size="md">
+        {viewingCmd && (() => {
+          const d = deliveryStatus(viewingCmd);
+          return (
+            <div className="space-y-4">
+              <div className="bg-vanilla/50 p-3 rounded-xl border border-gold/20 space-y-1 text-xs">
+                <Row label="Client" value={viewingCmd.clientName} strong />
+                {viewingCmd.clientPhone && <Row label="Téléphone" value={viewingCmd.clientPhone} />}
+                <Row
+                  label="Livraison prévue"
+                  value={`${formatDate(viewingCmd.receiveDate, 'fr')} à ${viewingCmd.receiveHour}h${viewingCmd.receiveMinute}`}
+                />
+                <Row label="Créée par" value={viewingCmd.createdBy || '—'} />
               </div>
-              {viewingCmd.clientPhone && (
-                <div className="flex justify-between">
-                  <span className="text-text-muted">Téléphone:</span>
-                  <span>{viewingCmd.clientPhone}</span>
-                </div>
-              )}
-              <div className="flex justify-between">
-                <span className="text-text-muted">Date de Livraison:</span>
-                <span className="font-bold text-gold">{formatDate(viewingCmd.receiveDate, 'fr')} à {viewingCmd.receiveHour}h{viewingCmd.receiveMinute}</span>
-              </div>
-            </div>
 
-            <div>
-              <h4 className="text-xs font-bold text-gold mb-2 uppercase">Liste des produits commandés</h4>
-              <div className="border border-gold/20 rounded-xl overflow-hidden bg-vanilla/40">
+              <div className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold border ${
+                d.isFull ? 'border-pistachio/40 bg-pistachio/10 text-pistachio'
+                  : d.isPartial ? 'border-caramel/40 bg-caramel/10 text-caramel'
+                  : 'border-rose-deep/40 bg-rose-deep/10 text-rose-deep'
+              }`}>
+                {d.isFull ? <PackageCheck size={15} /> : <AlertTriangle size={15} />}
+                {d.isFull ? 'Commande entièrement livrée'
+                  : d.isPartial ? `Livraison partielle — ${d.delivered}/${d.ordered} (${d.percent.toFixed(0)}%)`
+                  : 'Aucune livraison effectuée'}
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-gold/20">
                 <table className="w-full text-xs">
                   <thead className="bg-vanilla/60 text-text-secondary">
                     <tr>
                       <th className="text-left px-3 py-2">Produit</th>
-                      <th className="text-center px-3 py-2">Quantité</th>
+                      <th className="text-center px-3 py-2">Commandé</th>
+                      <th className="text-center px-3 py-2">Livré</th>
                       <th className="text-right px-3 py-2">P.U</th>
                       <th className="text-right px-3 py-2">Total</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {viewingCmd.items.map((it, idx) => (
-                      <tr key={idx} className="border-t border-gold/10">
-                        <td className="px-3 py-2 font-bold">{it.productName}</td>
-                        <td className="px-3 py-2 text-center">{it.quantity}{it.sellByUnit && it.sellUnit ? ` ${it.sellUnit}` : ''}</td>
-                        <td className="px-3 py-2 text-right">{formatCurrency(it.unitPrice)}</td>
-                        <td className="px-3 py-2 text-right font-bold text-gold">{formatCurrency(it.totalPrice)}</td>
-                      </tr>
-                    ))}
+                    {viewingCmd.items.map((it, idx) => {
+                      const u = it.sellByUnit && it.sellUnit ? ` ${it.sellUnit}` : '';
+                      const done = (it.deliveredQuantity ?? 0) >= it.quantity;
+                      return (
+                        <tr key={idx} className="border-t border-gold/10">
+                          <td className="px-3 py-2 font-bold">{it.productName}</td>
+                          <td className="px-3 py-2 text-center tabular">{it.quantity}{u}</td>
+                          <td className={`px-3 py-2 text-center tabular font-bold ${done ? 'text-pistachio' : 'text-caramel'}`}>
+                            {it.deliveredQuantity ?? 0}{u}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular">{formatCurrency(it.unitPrice)}</td>
+                          <td className="px-3 py-2 text-right tabular font-bold text-gold">{formatCurrency(it.totalPrice)}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
-            </div>
 
-            <div className="bg-vanilla/50 p-3 rounded-xl border border-gold/20 space-y-1 text-xs">
-              <div className="flex justify-between">
-                <span className="text-text-muted">Total Commande:</span>
-                <span className="font-bold">{formatCurrency(viewingCmd.totalAmount)}</span>
+              <div className="grid grid-cols-3 gap-2">
+                <Tile label="Total" value={formatCurrency(viewingCmd.totalAmount)} />
+                <Tile label="Versé" value={formatCurrency(viewingCmd.paidAmount)} color="text-pistachio" />
+                <Tile label="Reste" value={formatCurrency(viewingCmd.restAmount)} color="text-rose-deep" />
               </div>
-              <div className="flex justify-between">
-                <span className="text-text-muted">Acompte Versé:</span>
-                <span className="font-bold text-emerald-400">{formatCurrency(viewingCmd.paidAmount)}</span>
-              </div>
-              <div className="flex justify-between font-bold text-sm border-t border-gold/10 pt-1">
-                <span>Reste à Payer:</span>
-                <span className={viewingCmd.restAmount > 0 ? 'text-rose-400' : 'text-emerald-400'}>{formatCurrency(viewingCmd.restAmount)}</span>
-              </div>
-            </div>
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-gold/10">
-              <Button variant="secondary" onClick={() => printBonDeCommande(viewingCmd)}>
-                <Printer size={15} /> Imprimer Bon Commande
-              </Button>
-              <Button variant="gold" onClick={() => printBonDeLivraison(viewingCmd)}>
-                <Printer size={15} /> Imprimer Bon Livraison
-              </Button>
+              <div className="flex justify-end gap-2 pt-2 border-t border-gold/10">
+                <Button variant="secondary" onClick={() => printBonDeCommande(viewingCmd)}>
+                  <Printer size={15} /> Bon de commande
+                </Button>
+                <Button variant="gold" onClick={() => { setViewingCmd(null); setHistoryCmd(viewingCmd); }}>
+                  <History size={15} /> Historique des livraisons
+                </Button>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
 
-      {/* ===== Delivery Confirmation Modal ===== */}
-      <Modal open={!!finaliseCmd} onClose={() => setFinaliseCmd(null)} title="Confirmer la Livraison de la commande" size="md">
-        {finaliseCmd && (
-          <div className="space-y-4">
-            <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs text-amber-300 font-semibold flex items-center gap-2">
-              <AlertTriangle size={18} />
-              <span>Voulez-vous valider la livraison et déduire les marchandises du stock ?</span>
-            </div>
+      {/* ================= Delivery history ================= */}
+      <Modal
+        open={!!historyCmd}
+        onClose={() => setHistoryCmd(null)}
+        title={`Livraisons — ${historyCmd?.reference ?? ''}`}
+        size="lg"
+      >
+        {historyCmd && (() => {
+          const list = deliveriesOf(historyCmd.id);
+          const d = deliveryStatus(historyCmd);
+          return (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <Tile label="Commandé" value={String(d.ordered)} />
+                <Tile label="Livré" value={String(d.delivered)} color="text-pistachio" />
+                <Tile label="Reste à livrer" value={String(d.remaining)} color="text-rose-deep" />
+                <Tile label="Livraisons" value={String(list.length)} color="text-gold-dark" />
+              </div>
 
-            <div className="bg-vanilla/50 p-3 rounded-xl text-xs space-y-1.5 border border-gold/20">
-              <div className="flex justify-between">
-                <span className="text-text-muted">Client:</span>
-                <span className="font-bold text-text-primary">{finaliseCmd.clientName}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-text-muted">Total Commande:</span>
-                <span className="font-bold text-gold">{formatCurrency(finaliseCmd.totalAmount)}</span>
-              </div>
-              <div className="flex justify-between font-bold text-rose-400 border-t border-gold/10 pt-1">
-                <span>Dette à conserver:</span>
-                <span>{formatCurrency(finaliseCmd.restAmount)}</span>
-              </div>
-            </div>
+              {!d.isFull && (
+                <Button
+                  variant="gold" className="w-full"
+                  onClick={() => { setEditingDelivery(null); setDeliverCmd(historyCmd); setHistoryCmd(null); }}
+                >
+                  <Truck size={16} /> Nouvelle livraison
+                </Button>
+              )}
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-gold/10">
-              <Button variant="secondary" onClick={() => setFinaliseCmd(null)}>Annuler</Button>
-              <Button variant="gold" onClick={handleConfirmFinalise}>
-                <Truck size={16} /> Valider Livraison &amp; Imprimer Bon
-              </Button>
+              {list.length === 0 ? (
+                <EmptyState message="Aucune livraison enregistrée" icon={<Truck size={30} />} />
+              ) : (
+                <div className="space-y-3">
+                  {list.map((dl) => (
+                    <div key={dl.id} className="rounded-xl border border-gold/15 bg-vanilla/30 p-3.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+                        <div>
+                          <p className="font-semibold text-text-primary text-sm flex items-center gap-2">
+                            <Truck size={14} className="text-gold" /> {dl.reference}
+                          </p>
+                          <p className="text-[11px] text-text-muted">{formatDateTime(dl.deliveredAt)}</p>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Button size="icon" variant="ghost" title="Imprimer le bon de livraison"
+                            onClick={() => doPrintDelivery(historyCmd, dl)}>
+                            <Printer size={15} />
+                          </Button>
+                          {can('clients', 'edit') && (
+                            <Button
+                              size="icon" variant="ghost" title="Modifier"
+                              onClick={() => { setEditingDelivery(dl); setDeliverCmd(historyCmd); setHistoryCmd(null); }}
+                            >
+                              <Pencil size={15} />
+                            </Button>
+                          )}
+                          {can('clients', 'delete') && (
+                            <Button size="icon" variant="ghost" title="Supprimer" onClick={() => setDeleteDeliveryId(dl.id)}>
+                              <Trash2 size={15} className="text-rose-deep" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        {dl.items.map((li, i) => (
+                          <div key={i} className="flex justify-between text-xs py-1 border-b border-gold/5 last:border-0">
+                            <span className="text-text-secondary">{li.productName}</span>
+                            <span className="tabular font-semibold text-pistachio">
+                              {li.quantity}{li.sellUnit ? ` ${li.sellUnit}` : ''}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                      {dl.notes && <p className="text-[11px] text-text-muted italic mt-2">« {dl.notes} »</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
       </Modal>
 
-      {/* ===== Pay Debt Modal ===== */}
-      <Modal open={!!payCmd} onClose={() => setPayCmd(null)} title="Règlement Acompte / Dette Commande" size="sm">
+      {/* ================= Delivery modal ================= */}
+      <DeliveryModal
+        open={!!deliverCmd}
+        command={deliverCmd}
+        editing={editingDelivery}
+        onClose={() => { setDeliverCmd(null); setEditingDelivery(null); }}
+        onSave={handleSaveDelivery}
+      />
+
+      {/* ================= Pay ================= */}
+      <Modal open={!!payCmd} onClose={() => setPayCmd(null)} title="Règlement de commande" size="sm">
         {payCmd && (
           <div className="space-y-4">
             <div className="bg-vanilla/50 p-3 rounded-xl text-xs space-y-1 border border-gold/20">
-              <p><strong>N° Commande :</strong> {payCmd.reference}</p>
-              <p><strong>Client :</strong> {payCmd.clientName}</p>
-              <p><strong>Reste à payer :</strong> <strong className="text-rose-400">{formatCurrency(payCmd.restAmount)}</strong></p>
+              <Row label="N° commande" value={payCmd.reference} strong />
+              <Row label="Client" value={payCmd.clientName} />
+              <Row label="Reste à payer" value={formatCurrency(payCmd.restAmount)} />
             </div>
-
             <Input
-              label="Montant du versement (DA) *"
-              type="number"
-              value={payAmount || ''}
-              onChange={(e) => setPayAmount(Number(e.target.value))}
+              label="Montant du versement (DA) *" type="number" step="any"
+              value={payAmount || ''} onChange={(e) => setPayAmount(Number(e.target.value))} autoFocus
             />
-
-            <Input
-              label="Description / Note"
-              type="text"
-              value={payDescription}
-              onChange={(e) => setPayDescription(e.target.value)}
-            />
-
+            <div className="flex items-center justify-between rounded-xl border border-gold/25 bg-gold/5 px-4 py-3 text-sm">
+              <span className="text-text-muted">Reste après paiement</span>
+              <span className="font-bold tabular text-rose-deep">
+                {formatCurrency(Math.max(0, payCmd.restAmount - payAmount))}
+              </span>
+            </div>
             <div className="flex justify-end gap-2 pt-2 border-t border-gold/10">
               <Button variant="secondary" onClick={() => setPayCmd(null)}>Annuler</Button>
               <Button variant="gold" onClick={handlePayDebt}>Valider le versement</Button>
@@ -1050,40 +1058,70 @@ export default function CommandsPage() {
       <ConfirmDialog
         open={!!deleteId}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => { if (deleteId) { deleteCommand(deleteId); toast.success('Commande supprimée'); } }}
+        onConfirm={() => { if (deleteId) void deleteCommand(deleteId).then(() => toast.success('Commande supprimée')); }}
+        title="Supprimer la commande"
+      />
+      <ConfirmDialog
+        open={!!deleteDeliveryId}
+        onClose={() => setDeleteDeliveryId(null)}
+        onConfirm={() => {
+          if (deleteDeliveryId) void deleteDelivery(deleteDeliveryId).then(() => toast.success('Livraison supprimée'));
+        }}
+        title="Supprimer la livraison"
+        message="Les quantités livrées seront recalculées et la commande repassera éventuellement en « non livrée »."
       />
 
-      {/* ===== Print Prompt Modal ===== */}
-      <Modal open={!!printPromptCmd} onClose={() => setPrintPromptCmd(null)} size="sm">
+      {/* ================= Print prompt ================= */}
+      <Modal open={!!printPrompt} onClose={() => setPrintPrompt(null)} size="sm">
         <div className="flex flex-col items-center text-center py-2">
-          <div className="h-14 w-14 rounded-full bg-emerald-500/20 flex items-center justify-center mb-4">
-            <CheckCircle2 size={30} className="text-emerald-400" />
+          <div className="h-14 w-14 rounded-full bg-pistachio/15 flex items-center justify-center mb-4">
+            <CheckCircle2 size={30} className="text-pistachio" />
           </div>
           <h3 className="font-display text-lg font-bold text-text-primary mb-1">
-            Opération Réussie !
+            {printPrompt?.kind === 'delivery' ? 'Livraison enregistrée' : 'Commande enregistrée'}
           </h3>
-          <p className="text-xs text-gold mb-1">{printPromptCmd?.reference}</p>
+          <p className="text-xs text-gold mb-1">
+            {printPrompt?.kind === 'delivery' ? printPrompt.delivery.reference : printPrompt?.cmd.reference}
+          </p>
           <p className="text-xs text-text-muted mb-6">
-            Voulez-vous imprimer le document ?
+            {printPrompt?.kind === 'delivery'
+              ? 'Voulez-vous imprimer le bon de livraison ?'
+              : 'Voulez-vous imprimer le bon de commande ?'}
           </p>
           <div className="flex gap-2 w-full">
-            <Button variant="secondary" className="flex-1 text-xs" onClick={() => setPrintPromptCmd(null)}>Fermer</Button>
+            <Button variant="secondary" className="flex-1 text-xs" onClick={() => setPrintPrompt(null)}>Fermer</Button>
             <Button
-              variant="gold"
-              className="flex-1 text-xs font-bold"
+              variant="gold" className="flex-1 text-xs font-bold"
               onClick={() => {
-                if (printPromptCmd) {
-                  if (printPromptType === 'bon_livraison') printBonDeLivraison(printPromptCmd);
-                  else printBonDeCommande(printPromptCmd);
-                  setPrintPromptCmd(null);
-                }
+                if (!printPrompt) return;
+                if (printPrompt.kind === 'delivery') doPrintDelivery(printPrompt.cmd, printPrompt.delivery);
+                else printBonDeCommande(printPrompt.cmd);
+                setPrintPrompt(null);
               }}
             >
-              <Printer size={16} /> Imprimer Document
+              <Printer size={16} /> Imprimer
             </Button>
           </div>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div className="flex justify-between">
+      <span className="text-text-muted">{label}</span>
+      <span className={strong ? 'font-bold text-text-primary' : 'text-text-secondary'}>{value}</span>
+    </div>
+  );
+}
+
+function Tile({ label, value, color = 'text-text-primary' }: { label: string; value: string; color?: string }) {
+  return (
+    <div className="bg-vanilla/40 rounded-xl p-3 text-center border border-gold/10">
+      <p className="text-xs text-text-muted mb-0.5">{label}</p>
+      <p className={`text-base font-bold tabular ${color}`}>{value}</p>
     </div>
   );
 }

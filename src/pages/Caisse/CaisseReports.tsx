@@ -112,7 +112,7 @@ export function computeReportCalc(report: CaisseReport, stores: CalcStores): Rep
   const dayWithdrawals = dayTx.filter((t) => t.type === 'withdrawal');
 
   const dayWorkerPayments = workers.flatMap((w) => [
-    ...w.payments.filter((p) => inRange(p.date)).map((p) => ({ id: p.id, date: p.date, amount: p.amount, worker: w.fullName, kind: 'payment', description: p.description || '' })),
+    ...w.payments.filter((p) => inRange(p.date)).map((p) => ({ id: p.id, date: p.date, amount: p.amount, worker: w.fullName, kind: p.kind === 'overtime' ? 'overtime' : 'payment', description: p.description || '' })),
     ...w.acomptes.filter((p) => inRange(p.date)).map((p) => ({ id: p.id, date: p.date, amount: p.amount, worker: w.fullName, kind: 'acompte', description: p.description || '' })),
   ]);
 
@@ -357,7 +357,8 @@ export function buildCaisseReportDoc(report: CaisseReport, stores: DetailStores,
   const catL = (c?: string) => c || t('uncategorized');
   const clientNm = (id: string | null) => (id ? clients.find((c) => c.id === id)?.name || '—' : t('walkIn'));
   const supplierNm = (id: string) => stores.suppliers.find((s) => s.id === id)?.name || '—';
-  const prodCatNm = (categoryId: string) => stores.productCategories.find((c) => c.id === categoryId)?.name || t('uncategorized');
+  /** Products are described by their unit now (sac / tonne / m³ …). */
+  const prodUnit = (unit?: string) => unit || '—';
 
   const subtitle = period
     ? `${formatDate(report.date, language)} → ${formatDate(report.endDate!, language)}`
@@ -397,14 +398,14 @@ export function buildCaisseReportDoc(report: CaisseReport, stores: DetailStores,
   sections.push({
     title: t('stockState'), icon: '📦', headerTotal: money(stockValue),
     cols: [
-      { label: t('productName') }, { label: t('category') },
+      { label: t('productName') }, { label: t('unit') },
       { label: t('currentStock'), align: 'right' }, { label: t('minAlert'), align: 'right' },
       { label: t('purchasePrice'), align: 'right' }, { label: t('stockValue'), align: 'right' },
     ],
     rows: [
       ...stockSorted.map(({ p, value }): PrintRow => ({
         cells: [
-          p.name, prodCatNm(p.categoryId),
+          p.name, prodUnit(p.unit),
           `${p.currentQuantity}${p.unit ? ' ' + p.unit : ''}`,
           `${p.minAlertQuantity}${p.unit ? ' ' + p.unit : ''}`,
           money(p.purchasePrice), money(value),
@@ -743,7 +744,7 @@ export default function CaisseReportsPage() {
   const { can } = usePermissions();
   const navigate = useNavigate();
 
-  const { reports, addReport, updateReport, deleteReport } = useCaisseReportStore();
+  const { reports, addReport, deleteReport } = useCaisseReportStore();
   const sales = useSalesStore((s) => s.sales);
   const purchases = usePurchaseStore((s) => s.purchases);
   const expenses = useExpenseStore((s) => s.expenses);
@@ -818,13 +819,9 @@ export default function CaisseReportsPage() {
       description: form.description,
       declaredAmount: Number(form.declaredAmount),
     };
-    if (editing) {
-      updateReport(editing.id, payload);
-      toast.success('Rapport modifié');
-    } else {
-      addReport(payload);
-      toast.success('Rapport de caisse créé');
-    }
+    // Un rapport est une photographie de la caisse à un instant donné : il n'est
+    // pas modifiable, on en crée un nouveau (l'ancien reste dans l'historique).
+    void addReport(payload).then(() => toast.success('Rapport de caisse enregistré'));
     setFormOpen(false);
   };
 
@@ -1526,7 +1523,7 @@ function CalcCard({ index, icon, label, value, accent, count, signed }: {
 function MiniTile({ label, value, tone }: { label: string; value: string; tone?: 'rose' | 'gold' | 'mint' }) {
   const cls = tone === 'rose' ? 'text-rose-deep' : tone === 'gold' ? 'text-gold-dark' : tone === 'mint' ? 'text-pistachio' : 'text-text-primary';
   return (
-    <div className="bg-white/70 rounded-lg p-2 text-center border border-gold/10">
+    <div className="bg-vanilla/50 rounded-lg p-2 text-center border border-gold/10">
       <p className="text-[11px] text-text-muted">{label}</p>
       <p className={`text-sm font-bold tabular ${cls}`}>{value}</p>
     </div>

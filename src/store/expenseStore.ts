@@ -1,64 +1,95 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-import type { Expense, Category } from '@/types';
-import { uid } from '@/lib/utils';
-import { getCurrentUsername } from './authStore';
-import { db } from '@/lib/db';
-import { push, swapId } from '@/lib/persist';
+import type { Expense, Category, PurchaseOrder } from '@/types';
+import { db, rpc } from '@/lib/db';
+import { save } from '@/lib/persist';
 
 interface ExpenseState {
   expenses: Expense[];
   categories: Category[];
-  addExpense: (e: Omit<Expense, 'id' | 'date'> & { date?: string }) => Expense;
-  updateExpense: (id: string, data: Partial<Expense>) => void;
-  deleteExpense: (id: string) => void;
-  addCategory: (name: string) => Category;
-  deleteCategory: (id: string) => void;
+  /** Bons de commande créés depuis l'écran Dépenses. */
+  orders: PurchaseOrder[];
+  load: () => Promise<void>;
+  addExpense: (e: Omit<Expense, 'id' | 'date'> & { date?: string }) => Promise<Expense>;
+  updateExpense: (id: string, data: Partial<Expense>) => Promise<void>;
+  deleteExpense: (id: string) => Promise<void>;
+  addCategory: (name: string) => Promise<Category>;
+  deleteCategory: (id: string) => Promise<void>;
+  // ---- bons de commande ----
+  addOrder: (data: Omit<PurchaseOrder, 'id' | 'reference'>) => Promise<PurchaseOrder>;
+  updateOrder: (id: string, data: Partial<PurchaseOrder>) => Promise<void>;
+  deleteOrder: (id: string) => Promise<void>;
 }
 
-export const useExpenseStore = create<ExpenseState>()(
-  persist(
-    (set, get) => ({
-      expenses: [],
-      categories: [],
-      addExpense: (e) => {
-        const expense: Expense = {
-          ...e,
-          id: uid('exp'),
-          date: e.date || new Date().toISOString().slice(0, 10),
-          createdBy: e.createdBy || getCurrentUsername(),
-        };
-        set({ expenses: [expense, ...get().expenses] });
-        // the SQL trigger `trg_expense_caisse` books the matching caisse withdrawal
-        push('expenses.create', () => db.expenses.create(expense), (row) =>
-          set({ expenses: swapId(get().expenses, expense.id, row.id) })
-        );
-        return expense;
-      },
-      updateExpense: (id, data) => {
-        set({ expenses: get().expenses.map((ex) => (ex.id === id ? { ...ex, ...data } : ex)) });
-        const merged = get().expenses.find((ex) => ex.id === id);
-        if (merged) push('expenses.update', () => db.expenses.update(id, merged));
-      },
-      deleteExpense: (id) => {
-        set({ expenses: get().expenses.filter((ex) => ex.id !== id) });
-        push('expenses.delete', () => db.expenses.remove(id));
-      },
-      addCategory: (name) => {
-        const existing = get().categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
-        if (existing) return existing;
-        const c: Category = { id: uid('expcat'), name };
-        set({ categories: [...get().categories, c] });
-        push('expenseCategories.create', () => db.expenseCategories.create(name), (row) =>
-          set({ categories: swapId(get().categories, c.id, row.id) })
-        );
-        return c;
-      },
-      deleteCategory: (id) => {
-        set({ categories: get().categories.filter((c) => c.id !== id) });
-        push('expenseCategories.delete', () => db.expenseCategories.remove(id));
-      },
-    }),
-    { name: 'altech-expenses' }
-  )
-);
+const orderPayload = (d: Partial<PurchaseOrder>) => ({
+  date: d.date,
+  supplier_name: d.supplierName ?? '',
+  notes: d.notes ?? '',
+  items: (d.items ?? []).map((i) => ({
+    product_name: i.productName,
+    description: i.description ?? '',
+    quantity: i.quantity,
+    unit: i.unit ?? null,
+  })),
+});
+
+export const useExpenseStore = create<ExpenseState>()((set, get) => ({
+  expenses: [],
+  categories: [],
+  orders: [],
+
+  load: async () => {
+    const [expenses, categories, orders] = await Promise.all([
+      db.expenses.list(), db.expenseCategories.list(), db.purchaseOrders.list(),
+    ]);
+    set({ expenses, categories, orders });
+  },
+
+  addExpense: async (e) => {
+    const row = await save('expenses.create', () =>
+      db.expenses.create({ ...e, date: e.date || new Date().toISOString().slice(0, 10) })
+    );
+    set({ expenses: [row, ...get().expenses] });
+    return row;
+  },
+
+  updateExpense: async (id, data) => {
+    const current = get().expenses.find((x) => x.id === id);
+    const row = await save('expenses.update', () => db.expenses.update(id, { ...current, ...data }));
+    set({ expenses: get().expenses.map((x) => (x.id === id ? row : x)) });
+  },
+
+  deleteExpense: async (id) => {
+    await save('expenses.delete', () => db.expenses.remove(id));
+    set({ expenses: get().expenses.filter((x) => x.id !== id) });
+  },
+
+  addCategory: async (name) => {
+    const existing = get().categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (existing) return existing;
+    const row = await save('expenseCategories.create', () => db.expenseCategories.create(name));
+    set({ categories: [...get().categories, row] });
+    return row;
+  },
+
+  deleteCategory: async (id) => {
+    await save('expenseCategories.delete', () => db.expenseCategories.remove(id));
+    set({ categories: get().categories.filter((c) => c.id !== id) });
+  },
+
+  addOrder: async (data) => {
+    const row = await save('purchaseOrders.create', () => rpc.createPurchaseOrder(orderPayload(data)));
+    const orders = await db.purchaseOrders.list();
+    set({ orders });
+    return orders.find((o) => o.id === row.id) as PurchaseOrder;
+  },
+
+  updateOrder: async (id, data) => {
+    await save('purchaseOrders.update', () => rpc.updatePurchaseOrder(id, orderPayload(data)));
+    set({ orders: await db.purchaseOrders.list() });
+  },
+
+  deleteOrder: async (id) => {
+    await save('purchaseOrders.delete', () => db.purchaseOrders.remove(id));
+    set({ orders: get().orders.filter((o) => o.id !== id) });
+  },
+}));

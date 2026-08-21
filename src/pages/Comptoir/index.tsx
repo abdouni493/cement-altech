@@ -82,22 +82,22 @@ export default function ComptoirPage() {
     }
   };
 
-  const handleDestroy = () => {
+  const handleDestroy = async () => {
     if (!destroying) return;
     if (destroyQty <= 0 || destroyQty > destroying.quantity) { toast.error('Quantité invalide'); return; }
-    destroy(destroying.id, destroyQty, reason || 'Non spécifié');
+    await destroy(destroying.id, destroyQty, reason || 'Non spécifié');
     toast.success('Destruction enregistrée');
     setDestroying(null); setDestroyQty(1); setReason('');
   };
 
-  const handleBulkDelete = () => {
-    deleteDestructions(selectedIds);
+  const handleBulkDelete = async () => {
+    await deleteDestructions(selectedIds);
     toast.success('Destructions supprimées');
     setSelectedIds([]);
   };
 
-  const handleBulkRecover = () => {
-    recoverDestructions(selectedIds);
+  const handleBulkRecover = async () => {
+    await recoverDestructions(selectedIds);
     toast.success('Produits récupérés et remis au comptoir');
     setSelectedIds([]);
   };
@@ -241,7 +241,7 @@ export default function ComptoirPage() {
       <ConfirmDialog
         open={!!recoverId}
         onClose={() => setRecoverId(null)}
-        onConfirm={() => { if (recoverId) { recoverDestruction(recoverId); toast.success('Produit récupéré et remis au comptoir'); } }}
+        onConfirm={() => { if (recoverId) void recoverDestruction(recoverId).then(() => toast.success('Produit récupéré et remis au comptoir')); }}
         title={t('recover')}
         message={t('recoverConfirm')}
       />
@@ -249,7 +249,13 @@ export default function ComptoirPage() {
       <ConfirmDialog
         open={!!deleteId}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => { if (deleteId) { deleteDestructions([deleteId]); setSelectedIds((prev) => prev.filter((item) => item !== deleteId)); toast.success('Destruction supprimée'); } }}
+        onConfirm={() => {
+          if (!deleteId) return;
+          void deleteDestructions([deleteId]).then(() => {
+            setSelectedIds((prev) => prev.filter((item) => item !== deleteId));
+            toast.success('Destruction supprimée');
+          });
+        }}
         title={t('delete')}
         message={t('deleteConfirm')}
       />

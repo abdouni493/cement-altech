@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react';
-import { FlaskConical, Plus, Eye, Trash2, Search, X, Clock, User, Pencil, FileText, ChevronRight, BookOpen, AlertTriangle } from 'lucide-react';
+import {
+  FlaskConical, Plus, Eye, Trash2, Search, X, Clock, User, Pencil, FileText,
+  BookOpen, AlertTriangle, Printer, Factory, Coins, TrendingUp, PackageCheck,
+} from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Select } from '@/components/ui/Select';
@@ -12,6 +15,10 @@ import { Input, Textarea } from '@/components/ui/Input';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { UnitSelect } from '@/components/shared/UnitSelect';
+import { StatCard } from '@/components/shared/StatCard';
+import { useSettingsStore } from '@/store/settingsStore';
+import { printProductionSheet } from '@/lib/documents';
+import { motion } from 'framer-motion';
 import { useProductionStore } from '@/store/productionStore';
 import { useFicheTechnicStore, type FicheTechnic } from '@/store/ficheTechnicStore';
 import { useStockStore } from '@/store/stockStore';
@@ -26,6 +33,51 @@ export default function ProductionPage() {
   const { can } = usePermissions();
   const { productions, addProduction, deleteProduction } = useProductionStore();
   const { ficheTechnics, deleteFicheTechnic } = useFicheTechnicStore();
+  const settings = useSettingsStore((s) => s.settings);
+
+  /** Imprime la fiche complète d'une production (matières, résultat, gains). */
+  const printProduction = (prod: Production) =>
+    printProductionSheet(
+      {
+        name: prod.name,
+        date: prod.date,
+        hour: prod.hour,
+        categoryName: prod.categoryName,
+        description: prod.description,
+        createdBy: prod.createdBy,
+        outputQuantity: prod.outputQuantity,
+        sellUnit: prod.sellByUnit ? prod.sellUnit : undefined,
+        unitPrice: prod.unitPrice,
+        totalValue: prod.totalValue,
+        totalCost: prod.totalCost ?? 0,
+        sentToComptoir: prod.sentToComptoir ?? 0,
+        hasLoss: prod.hasLoss,
+        expectedQuantity: prod.expectedQuantity,
+        lossQuantity: prod.lossQuantity,
+        lossValue: prod.lossValue,
+        lossDescription: prod.lossDescription,
+        ingredients: prod.usedProducts.map((u) => ({
+          productName: u.productName,
+          quantityUsed: u.quantityUsed,
+          unit: u.unit,
+          unitCost: u.unitCost ?? 0,
+          lineCost: u.lineCost ?? (u.quantityUsed * (u.unitCost ?? 0)),
+        })),
+      },
+      settings
+    );
+
+  // KPI de l'onglet Productions
+  const prodStats = useMemo(() => {
+    const cost = productions.reduce((sum, x) => sum + (x.totalCost ?? 0), 0);
+    const value = productions.reduce((sum, x) => sum + x.totalValue, 0);
+    const remaining = productions.reduce(
+      (sum, x) => sum + (x.outputQuantity - (x.sentToComptoir ?? 0)),
+      0
+    );
+    const loss = productions.reduce((sum, x) => sum + (x.lossValue ?? 0), 0);
+    return { cost, value, remaining, loss, gains: value - cost };
+  }, [productions]);
 
   const [activeTab, setActiveTab] = useState<'productions' | 'fiche_technics'>('productions');
   const [search, setSearch] = useState('');
@@ -108,6 +160,13 @@ export default function ProductionPage() {
 
       {activeTab === 'productions' ? (
         <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <StatCard label="Valeur produite" value={prodStats.value} format="currency" icon={<Factory size={22} />} index={0} accent="gold" />
+            <StatCard label="Coût des matières" value={prodStats.cost} format="currency" icon={<Coins size={22} />} index={1} accent="rose" />
+            <StatCard label="Gains estimés" value={prodStats.gains} format="currency" icon={<TrendingUp size={22} />} index={2} accent="pistachio" />
+            <StatCard label="Reste à envoyer au comptoir" value={prodStats.remaining} icon={<PackageCheck size={22} />} index={3} accent="caramel" />
+          </div>
+
           <div className="flex flex-wrap items-center gap-3 mb-6">
             <div className="flex-1 min-w-[200px]"><SearchBar value={search} onChange={setSearch} placeholder={t('search')} /></div>
             <Select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as DateFilter)}
@@ -117,45 +176,127 @@ export default function ProductionPage() {
           {filteredProductions.length === 0 ? <EmptyState message={t('noData')} /> : (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
               {filteredProductions.map((p, i) => (
-                <Card key={p.id} index={i} hoverable className="flex flex-col border border-gold/10 hover:border-gold/30">
-                  <div className="flex justify-between items-start mb-1 gap-2">
-                    <h3 className="font-display font-semibold text-text-primary text-base">{p.name}</h3>
+                <Card
+                  key={p.id}
+                  index={i}
+                  hoverable
+                  className={`flex flex-col rounded-2xl p-0 overflow-hidden border ${
+                    p.hasLoss ? 'border-rose-deep/35' : 'border-gold/20 hover:border-gold/45'
+                  }`}
+                >
+                  {/* Bandeau */}
+                  <div className={`px-4 py-3 flex items-start justify-between gap-2 ${p.hasLoss ? 'bg-rose-deep/10' : 'bg-gold/10'}`}>
+                    <div className="min-w-0">
+                      <h3 className="font-display font-semibold text-text-primary text-base truncate">{p.name}</h3>
+                      <p className="text-[11px] text-text-muted flex items-center gap-1 mt-0.5">
+                        <Clock size={11} /> {formatDate(p.date, language)} — {p.hour}
+                      </p>
+                    </div>
                     <div className="flex flex-col items-end gap-1 shrink-0">
-                      {p.categoryName && <Badge variant="info" className="bg-gold/10 text-gold-dark border-0">{p.categoryName}</Badge>}
-                      {p.hasLoss && <Badge variant="danger" className="flex items-center gap-1"><AlertTriangle size={10} /> {t('hasLoss')}</Badge>}
+                      {p.categoryName && <Badge variant="info">{p.categoryName}</Badge>}
+                      {p.hasLoss && (
+                        <motion.div animate={{ opacity: [1, 0.6, 1] }} transition={{ duration: 2, repeat: Infinity }}>
+                          <Badge variant="danger" className="gap-1"><AlertTriangle size={10} /> Perte</Badge>
+                        </motion.div>
+                      )}
                     </div>
                   </div>
-                  <p className="text-xs text-text-muted flex items-center gap-1 mb-2"><Clock size={12} /> {formatDate(p.date, language)} — {p.hour}</p>
-                  {p.description && <p className="text-xs text-text-secondary mb-3 line-clamp-2 italic">« {p.description} »</p>}
-                  
-                  <div className="bg-vanilla/40 rounded-xl p-3 space-y-1.5 text-xs mb-3">
-                    <div className="flex justify-between"><span className="text-text-muted">{t('ingredient')}s consommés</span><span className="tabular font-medium">{p.usedProducts.length}</span></div>
-                    <div className="flex justify-between"><span className="text-text-muted">Quantité produite</span><span className="tabular font-semibold text-text-primary">{p.outputQuantity}{p.sellByUnit && p.sellUnit ? ` ${p.sellUnit}` : ''}</span></div>
-                    {p.hasLoss && (
-                      <>
-                        <div className="flex justify-between"><span className="text-text-muted">{t('expectedQty')}</span><span className="tabular text-text-secondary">{p.expectedQuantity}{p.sellByUnit && p.sellUnit ? ` ${p.sellUnit}` : ''}</span></div>
-                        <div className="flex justify-between"><span className="text-rose-deep font-medium">{t('lossQty')}</span><span className="tabular text-rose-deep font-bold">− {p.lossQuantity}{p.sellByUnit && p.sellUnit ? ` ${p.sellUnit}` : ''} ({formatCurrency(p.lossValue ?? 0)})</span></div>
-                      </>
+
+                  <div className="p-4 flex-1 flex flex-col">
+                    {p.description && (
+                      <p className="text-xs text-text-secondary mb-3 line-clamp-2 italic">« {p.description} »</p>
                     )}
-                    <div className="flex justify-between"><span className="text-text-muted">Reste en stock production</span><span className="tabular font-bold text-gold-dark">{p.outputQuantity - (p.sentToComptoir ?? 0)}{p.sellByUnit && p.sellUnit ? ` ${p.sellUnit}` : ''}</span></div>
-                    <div className="flex justify-between"><span className="text-text-muted">Coût de production</span><span className="tabular text-rose-deep font-medium">{formatCurrency(p.totalCost ?? 0)}</span></div>
-                    <div className="flex justify-between"><span className="text-text-muted">Valeur (Vente)</span><span className="tabular text-gold-dark font-medium">{formatCurrency(p.totalValue)}</span></div>
-                    <div className="flex justify-between border-t border-gold/5 pt-1.5 mt-1.5"><span className="text-text-muted font-semibold">{t('totalGains')}</span><span className={`tabular font-bold ${p.totalValue - (p.totalCost ?? 0) >= 0 ? 'text-pistachio' : 'text-rose-deep'}`}>{formatCurrency(p.totalValue - (p.totalCost ?? 0))}</span></div>
-                  </div>
-                  {p.createdBy && <p className="text-[10px] text-text-muted flex items-center gap-1 mb-3"><User size={10} className="text-gold" /> {t('createdBy')}: {p.createdBy}</p>}
-                  {p.outputQuantity - (p.sentToComptoir ?? 0) > 0 && can('production', 'edit') && (
-                    <Button
-                      size="sm"
-                      variant="gold"
-                      className="w-full text-xs mb-2 flex items-center justify-center gap-1.5"
-                      onClick={() => setTransferProd(p)}
-                    >
-                      <Plus size={13} /> Mettre au comptoir ({p.outputQuantity - (p.sentToComptoir ?? 0)})
-                    </Button>
-                  )}
-                  <div className="flex gap-2 mt-auto pt-2 border-t border-gold/5">
-                    <Button size="sm" variant="secondary" className="flex-1 text-xs" onClick={() => setProdViewing(p)}><Eye size={13} /> {t('view')}</Button>
-                    {can('production', 'delete') && <Button size="sm" variant="ghost" onClick={() => setProdDeleteId(p.id)} className="hover:bg-rose-deep/5"><Trash2 size={13} className="text-rose-deep" /></Button>}
+
+                    {/* Quantité produite + jauge comptoir */}
+                    <div className="mb-3">
+                      <div className="flex items-end justify-between mb-1.5">
+                        <span className="text-[11px] uppercase tracking-wider font-bold text-text-muted">Quantité produite</span>
+                        <span className="tabular font-extrabold text-xl leading-none text-text-primary">
+                          {p.outputQuantity}
+                          <span className="text-xs font-semibold text-text-muted ml-1">
+                            {p.sellByUnit && p.sellUnit ? p.sellUnit : ''}
+                          </span>
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-vanilla overflow-hidden border border-gold/10">
+                        <motion.div
+                          initial={{ width: 0 }}
+                          animate={{
+                            width: `${p.outputQuantity > 0 ? Math.min(100, ((p.sentToComptoir ?? 0) / p.outputQuantity) * 100) : 0}%`,
+                          }}
+                          transition={{ delay: i * 0.05, duration: 0.8 }}
+                          className="h-full rounded-full bg-gradient-mint"
+                        />
+                      </div>
+                      <div className="flex justify-between mt-1 text-[10px] text-text-muted">
+                        <span>Envoyé au comptoir : {p.sentToComptoir ?? 0}</span>
+                        <span>Reste : {p.outputQuantity - (p.sentToComptoir ?? 0)}</span>
+                      </div>
+                    </div>
+
+                    {/* Chiffres */}
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <MiniTile label="Ingrédients" value={String(p.usedProducts.length)} />
+                      <MiniTile
+                        label="Prix unitaire"
+                        value={`${formatCurrency(p.unitPrice)}${p.sellByUnit && p.sellUnit ? `/${p.sellUnit}` : ''}`}
+                      />
+                      <MiniTile label="Coût de production" value={formatCurrency(p.totalCost ?? 0)} accent="text-rose-deep" />
+                      <MiniTile label="Valeur de vente" value={formatCurrency(p.totalValue)} accent="text-gold-dark" />
+                    </div>
+
+                    {p.hasLoss && (
+                      <div className="rounded-xl border border-rose-deep/25 bg-rose-deep/5 px-3 py-2 mb-3 text-xs">
+                        <div className="flex justify-between text-text-muted">
+                          <span>Quantité prévue</span>
+                          <span className="tabular">{p.expectedQuantity}{p.sellByUnit && p.sellUnit ? ` ${p.sellUnit}` : ''}</span>
+                        </div>
+                        <div className="flex justify-between font-bold text-rose-deep mt-0.5">
+                          <span>Perte constatée</span>
+                          <span className="tabular">
+                            − {p.lossQuantity}{p.sellByUnit && p.sellUnit ? ` ${p.sellUnit}` : ''} ({formatCurrency(p.lossValue ?? 0)})
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between rounded-xl border border-gold/20 bg-gold/5 px-3 py-2 mb-3">
+                      <span className="text-xs font-semibold text-text-secondary">Gain net estimé</span>
+                      <span className={`text-base font-bold tabular ${p.totalValue - (p.totalCost ?? 0) >= 0 ? 'text-pistachio' : 'text-rose-deep'}`}>
+                        {formatCurrency(p.totalValue - (p.totalCost ?? 0))}
+                      </span>
+                    </div>
+
+                    {p.createdBy && (
+                      <p className="text-[10px] text-text-muted flex items-center gap-1 mb-3">
+                        <User size={10} className="text-gold" /> Produit par {p.createdBy}
+                      </p>
+                    )}
+
+                    {p.outputQuantity - (p.sentToComptoir ?? 0) > 0 && can('production', 'edit') && (
+                      <Button
+                        size="sm"
+                        variant="gold"
+                        className="w-full text-xs mb-2"
+                        onClick={() => setTransferProd(p)}
+                      >
+                        <Plus size={13} /> Mettre au comptoir ({p.outputQuantity - (p.sentToComptoir ?? 0)})
+                      </Button>
+                    )}
+
+                    <div className="flex gap-1.5 mt-auto pt-2 border-t border-gold/10">
+                      <Button size="sm" variant="secondary" className="flex-1 text-xs" onClick={() => setProdViewing(p)}>
+                        <Eye size={13} /> Détails
+                      </Button>
+                      <Button size="sm" variant="secondary" className="flex-1 text-xs" onClick={() => printProduction(p)}>
+                        <Printer size={13} /> Imprimer
+                      </Button>
+                      {can('production', 'delete') && (
+                        <Button size="sm" variant="ghost" onClick={() => setProdDeleteId(p.id)} title="Supprimer">
+                          <Trash2 size={13} className="text-rose-deep" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </Card>
               ))}
@@ -219,7 +360,14 @@ export default function ProductionPage() {
 
       {/* Production Form Modal */}
       <Modal open={prodCreateOpen} onClose={() => setProdCreateOpen(false)} title="Lancer une Production" size="lg">
-        <CreateProductionForm onClose={() => setProdCreateOpen(false)} onSubmit={(data) => { addProduction(data); toast.success("Production enregistrée ! Stock d'ingrédients déduit. (À transférer au comptoir manuellement)"); setProdCreateOpen(false); }} />
+        <CreateProductionForm
+          onClose={() => setProdCreateOpen(false)}
+          onSubmit={async (data) => {
+            await addProduction(data);
+            toast.success("Production enregistrée — stock d'ingrédients déduit");
+            setProdCreateOpen(false);
+          }}
+        />
       </Modal>
 
       {/* Fiche Technic Modals */}
@@ -294,6 +442,10 @@ export default function ProductionPage() {
                 <p className={`text-base font-bold tabular ${gains >= 0 ? 'text-pistachio' : 'text-rose-deep'}`}>{formatCurrency(gains)}</p>
               </div>
 
+              <Button variant="gold" className="w-full" onClick={() => printProduction(prodViewing)}>
+                <Printer size={16} /> Imprimer la fiche de production
+              </Button>
+
               {prodViewing.hasLoss && (
                 <div className="bg-rose-deep/5 border border-rose-deep/20 rounded-xl p-3 space-y-2">
                   <p className="text-sm font-semibold text-rose-deep flex items-center gap-1.5"><AlertTriangle size={14} /> {t('productionLoss')}</p>
@@ -302,7 +454,7 @@ export default function ProductionPage() {
                     <Tile label={t('lossQty')} value={`${prodViewing.lossQuantity}${su}`} />
                     <Tile label={t('lossValueLabel')} value={formatCurrency(prodViewing.lossValue ?? 0)} />
                   </div>
-                  {prodViewing.lossDescription && <p className="text-xs text-text-secondary bg-white/60 p-2 rounded-lg italic">« {prodViewing.lossDescription} »</p>}
+                  {prodViewing.lossDescription && <p className="text-xs text-text-secondary bg-vanilla/50 p-2 rounded-lg italic">« {prodViewing.lossDescription} »</p>}
                 </div>
               )}
             </div>
@@ -380,8 +532,10 @@ export default function ProductionPage() {
       </Modal>
 
       {/* Confirm Deletion */}
-      <ConfirmDialog open={!!prodDeleteId} onClose={() => setProdDeleteId(null)} onConfirm={() => { if (prodDeleteId) { deleteProduction(prodDeleteId); toast.success('Production supprimée'); } }} />
-      <ConfirmDialog open={!!ftDeleteId} onClose={() => setFtDeleteId(null)} onConfirm={() => { if (ftDeleteId) { deleteFicheTechnic(ftDeleteId); toast.success('Fiche technique supprimée'); } }} />
+      <ConfirmDialog open={!!prodDeleteId} onClose={() => setProdDeleteId(null)}
+        onConfirm={() => { if (prodDeleteId) void deleteProduction(prodDeleteId).then(() => toast.success('Production supprimée')); }} />
+      <ConfirmDialog open={!!ftDeleteId} onClose={() => setFtDeleteId(null)}
+        onConfirm={() => { if (ftDeleteId) void deleteFicheTechnic(ftDeleteId).then(() => toast.success('Fiche technique supprimée')); }} />
 
       {/* Transfer to Comptoir Modal */}
       <Modal open={!!transferProd} onClose={() => setTransferProd(null)} title="Mettre au comptoir" size="sm">
@@ -406,7 +560,7 @@ function TransferToComptoirModal({ production, onClose }: { production: Producti
   const restQty = remainingQty - quantity;
   const su = production.sellByUnit && production.sellUnit ? ` ${production.sellUnit}` : '';
 
-  const handleTransfer = () => {
+  const handleTransfer = async () => {
     if (quantity <= 0) {
       toast.error('La quantité doit être supérieure à 0');
       return;
@@ -416,8 +570,8 @@ function TransferToComptoirModal({ production, onClose }: { production: Producti
       return;
     }
     try {
-      transferToComptoir(production.id, quantity);
-      toast.success('Transfert au comptoir réussi !');
+      await transferToComptoir(production.id, quantity);
+      toast.success('Transfert au comptoir réussi');
       onClose();
     } catch (e: any) {
       toast.error(e.message || 'Une erreur est survenue');
@@ -482,6 +636,15 @@ function TransferToComptoirModal({ production, onClose }: { production: Producti
   );
 }
 
+function MiniTile({ label, value, accent = 'text-text-primary' }: { label: string; value: string; accent?: string }) {
+  return (
+    <div className="rounded-xl border border-gold/10 bg-vanilla/40 px-2.5 py-2">
+      <p className="text-[10px] text-text-muted leading-tight">{label}</p>
+      <p className={`text-xs font-bold tabular ${accent} mt-0.5`}>{value}</p>
+    </div>
+  );
+}
+
 function Tile({ label, value }: { label: string; value: string }) {
   return <div className="bg-vanilla/40 rounded-lg p-2.5 text-center"><p className="text-[10px] text-text-muted">{label}</p><p className="text-xs font-bold tabular text-text-primary mt-0.5">{value}</p></div>;
 }
@@ -539,7 +702,7 @@ function FicheTechnicForm({ initial, onClose }: { initial?: FicheTechnic; onClos
     >;
     const s = ingredientSearch.toLowerCase();
     const stockMatches = products
-      .filter((p) => p.name.toLowerCase().includes(s) || p.barcode.includes(s))
+      .filter((p) => p.name.toLowerCase().includes(s) || (p.description || '').toLowerCase().includes(s))
       .slice(0, 6)
       .map((product) => ({ kind: 'stock' as const, product }));
     const ficheMatches = reusableFiches
@@ -593,6 +756,11 @@ function FicheTechnicForm({ initial, onClose }: { initial?: FicheTechnic; onClos
     setLines(lines.map((l) => (l._key === key ? { ...l, quantityUsed: qty } : l)));
   };
 
+  /** The user picks — or creates — the unit each ingredient is dosed in. */
+  const updateLineUnit = (key: string, unit: string) => {
+    setLines(lines.map((l) => (l._key === key ? { ...l, unit: unit || undefined } : l)));
+  };
+
   // Calculations
   const totalCost = useMemo(() => {
     return lines.reduce((sum, l) => sum + l.quantityUsed * l.unitCost, 0);
@@ -614,15 +782,17 @@ function FicheTechnicForm({ initial, onClose }: { initial?: FicheTechnic; onClos
     return totalValue - totalCost;
   }, [totalValue, totalCost]);
 
-  const handleAddCat = () => {
+  const handleAddCat = async () => {
     if (!newCat.trim()) return;
-    const c = addCategory(newCat.trim());
+    const c = await addCategory(newCat.trim());
     setCategoryId(c.id);
     setNewCat('');
     setCatModal(false);
   };
 
-  const handleSave = () => {
+  const [savingFiche, setSavingFiche] = useState(false);
+
+  const handleSave = async () => {
     if (!name.trim()) { toast.error('Nom de produit requis'); return; }
     if (!categoryId) { toast.error('Sélectionnez une catégorie'); return; }
     if (lines.length === 0) { toast.error('Ajoutez au moins un ingrédient'); return; }
@@ -660,14 +830,19 @@ function FicheTechnicForm({ initial, onClose }: { initial?: FicheTechnic; onClos
       totalGains,
     };
 
-    if (initial) {
-      updateFicheTechnic(initial.id, data);
-      toast.success('Fiche technique mise à jour ! (Aucune modification de stock)');
-    } else {
-      addFicheTechnic(data);
-      toast.success('Fiche technique créée ! (Aucune modification de stock)');
+    setSavingFiche(true);
+    try {
+      if (initial) {
+        await updateFicheTechnic(initial.id, data);
+        toast.success('Fiche technique mise à jour');
+      } else {
+        await addFicheTechnic(data);
+        toast.success('Fiche technique créée');
+      }
+      onClose();
+    } finally {
+      setSavingFiche(false);
     }
-    onClose();
   };
 
   return (
@@ -694,7 +869,7 @@ function FicheTechnicForm({ initial, onClose }: { initial?: FicheTechnic; onClos
         <div className="space-y-3 bg-vanilla/20 p-4 rounded-xl border border-gold/15 flex flex-col">
           <h4 className="font-display font-semibold text-gold-dark text-sm border-b border-gold/5 pb-1">2. Rendement et Tarification</h4>
           
-          <div className="flex flex-wrap items-end gap-3 mb-2 bg-white/60 p-2 rounded-xl border border-gold/5">
+          <div className="flex flex-wrap items-end gap-3 mb-2 bg-vanilla/50 p-2 rounded-xl border border-gold/5">
             <Switch checked={sellByUnit} onChange={setSellByUnit} label="Vendre avec unité de détail" />
             {sellByUnit && <UnitSelect label="Unité de détail" value={sellUnit} onChange={setSellUnit} className="min-w-[150px] flex-1" />}
           </div>
@@ -715,7 +890,7 @@ function FicheTechnicForm({ initial, onClose }: { initial?: FicheTechnic; onClos
           </div>
 
           {/* Realtime calculations display */}
-          <div className="mt-auto pt-3 border-t border-gold/10 space-y-2 bg-white/80 rounded-xl p-3 text-xs">
+          <div className="mt-auto pt-3 border-t border-gold/10 space-y-2 bg-vanilla/60 rounded-xl p-3 text-xs">
             <div className="flex justify-between">
               <span className="text-text-muted">Coût des ingrédients total:</span>
               <span className="font-semibold text-rose-deep tabular">{formatCurrency(totalCost)}</span>
@@ -748,7 +923,7 @@ function FicheTechnicForm({ initial, onClose }: { initial?: FicheTechnic; onClos
           <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
           <Input value={ingredientSearch} onChange={(e) => setIngredientSearch(e.target.value)} placeholder="Rechercher un produit en stock ou une formule réutilisable (ex: solution acide)..." className="pl-10" />
           {ingResults.length > 0 && (
-            <div className="absolute z-20 mt-1 w-full bg-white rounded-xl border border-gold/20 shadow-lg max-h-[220px] overflow-y-auto">
+            <div className="absolute z-20 mt-1 w-full bg-[--surface-dropdown] rounded-xl border border-gold/20 shadow-lg max-h-[220px] overflow-y-auto">
               {ingResults.map((r) =>
                 r.kind === 'fiche' ? (
                   <button key={`f-${r.fiche.id}`} type="button" onClick={() => addFicheIngredient(r.fiche)} className="w-full text-left px-4 py-2 text-sm hover:bg-pistachio/10 flex justify-between items-center border-b border-gold/5 last:border-0">
@@ -770,40 +945,86 @@ function FicheTechnicForm({ initial, onClose }: { initial?: FicheTechnic; onClos
         </div>
 
         {/* Selected ingredients list */}
-        <div className="space-y-2 max-h-[250px] overflow-y-auto pr-1">
+        <div className="space-y-2.5 max-h-[340px] overflow-y-auto pr-1">
           {lines.map((l) => (
-            <div key={l._key} className={`rounded-xl p-3 border flex items-center gap-3 shadow-sm transition-all ${l.sourceType === 'fiche' ? 'bg-pistachio/5 border-pistachio/20 hover:border-pistachio/40' : 'bg-white border-gold/10 hover:border-gold/20'}`}>
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold text-text-primary text-sm truncate flex items-center gap-1.5">
-                  {l.sourceType === 'fiche' && <Badge variant="info" className="bg-pistachio/15 text-pistachio border-0 text-[9px] px-1.5 py-0">Production</Badge>}
-                  {l.productName}
-                </p>
-                <p className="text-xs text-text-muted">{l.sourceType === 'fiche' ? 'Coût de revient' : "Prix d'achat"}: {formatCurrency(l.unitCost)}{l.unit ? `/${l.unit}` : ''}</p>
+            <div
+              key={l._key}
+              className={`rounded-xl p-3 border shadow-sm transition-all ${
+                l.sourceType === 'fiche'
+                  ? 'bg-pistachio/5 border-pistachio/20 hover:border-pistachio/40'
+                  : 'bg-gradient-card border-gold/10 hover:border-gold/25'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2 mb-2.5">
+                <div className="min-w-0">
+                  <p className="font-semibold text-text-primary text-sm truncate flex items-center gap-1.5">
+                    {l.sourceType === 'fiche' && (
+                      <Badge variant="info" className="bg-pistachio/15 text-pistachio border-0 text-[9px] px-1.5 py-0">Production</Badge>
+                    )}
+                    {l.productName}
+                  </p>
+                  <p className="text-[11px] text-text-muted">
+                    {l.sourceType === 'fiche' ? 'Coût de revient' : "Prix d'achat"} :{' '}
+                    {formatCurrency(l.unitCost)}{l.unit ? `/${l.unit}` : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeLine(l._key)}
+                  className="text-rose-deep p-1 hover:bg-rose-deep/10 rounded-lg transition-all shrink-0"
+                >
+                  <X size={16} />
+                </button>
               </div>
-              <div className="text-right shrink-0">
-                <label className="block text-[10px] text-text-muted mb-0.5">{l.unit ? `Quantité (${l.unit})` : 'Quantité'}</label>
-                <Input type="number" step={l.unit ? 'any' : '1'} value={l.quantityUsed} onChange={(e) => updateLineQty(l._key, Number(e.target.value))} className="max-w-[100px] text-center" />
+
+              {/* Quantité utilisée + unité de CE produit dans la production */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wide text-text-muted mb-1">
+                    {l.unit ? `Quantité utilisée (${l.unit})` : 'Quantité utilisée'}
+                  </label>
+                  <Input
+                    type="number" step="any" min={0}
+                    value={l.quantityUsed}
+                    onChange={(e) => updateLineQty(l._key, Number(e.target.value))}
+                    className="text-center"
+                  />
+                </div>
+                <UnitSelect
+                  label="Unité de ce produit"
+                  value={l.unit || ''}
+                  onChange={(u) => updateLineUnit(l._key, u)}
+                  compact
+                  allowDelete={false}
+                />
+                <div className="text-right">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-text-muted">Coût de la ligne</p>
+                  <p className="text-base font-bold tabular text-rose-deep">
+                    {formatCurrency((Number(l.quantityUsed) || 0) * (Number(l.unitCost) || 0))}
+                  </p>
+                </div>
               </div>
-              <div className="text-right w-24 shrink-0">
-                <p className="text-[10px] text-text-muted">Coût ligne</p>
-                <p className="text-sm font-bold tabular text-rose-deep">{formatCurrency(l.quantityUsed * l.unitCost)}</p>
-              </div>
-              <button type="button" onClick={() => removeLine(l._key)} className="text-rose-deep p-1 hover:bg-rose-deep/5 rounded-lg transition-all"><X size={16} /></button>
             </div>
           ))}
-          {lines.length === 0 && <p className="text-sm text-text-muted text-center py-6 bg-white/50 rounded-xl border border-dashed border-gold/10">Aucun ingrédient ajouté pour le moment.</p>}
+          {lines.length === 0 && (
+            <p className="text-sm text-text-muted text-center py-6 bg-vanilla/40 rounded-xl border border-dashed border-gold/15">
+              Aucun ingrédient ajouté — recherchez un produit du stock ci-dessus.
+            </p>
+          )}
         </div>
       </div>
 
       <div className="flex justify-end gap-3 border-t border-gold/5 pt-4">
         <Button variant="secondary" onClick={onClose}>{t('cancel')}</Button>
-        <Button variant="gold" onClick={handleSave}>{initial ? 'Mettre à jour' : 'Créer la Fiche'}</Button>
+        <Button variant="gold" onClick={handleSave} disabled={savingFiche}>
+          {savingFiche ? 'Enregistrement…' : initial ? 'Mettre à jour' : 'Créer la Fiche'}
+        </Button>
       </div>
 
       {/* Category Creation Modal */}
       <Modal open={catModal} onClose={() => setCatModal(false)} title="Ajouter une Catégorie de Formule" size="sm">
         <div className="space-y-4">
-          <Input label="Nom de Catégorie" value={newCat} onChange={(e) => setNewCat(e.target.value)} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCat(); } }} />
+          <Input label="Nom de Catégorie" value={newCat} onChange={(e) => setNewCat(e.target.value)} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleAddCat(); } }} />
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" onClick={() => setCatModal(false)}>{t('cancel')}</Button>
             <Button type="button" variant="gold" onClick={handleAddCat}>{t('add')}</Button>
@@ -813,7 +1034,13 @@ function FicheTechnicForm({ initial, onClose }: { initial?: FicheTechnic; onClos
 
       {/* Category Deletion Confirm */}
       <ConfirmDialog open={!!confirmDelCat} onClose={() => setConfirmDelCat(null)}
-        onConfirm={() => { if (confirmDelCat) { deleteCategory(confirmDelCat.id); if (categoryId === confirmDelCat.id) setCategoryId(''); toast.success('Catégorie supprimée'); } }}
+        onConfirm={() => {
+          if (!confirmDelCat) return;
+          void deleteCategory(confirmDelCat.id).then(() => {
+            if (categoryId === confirmDelCat.id) setCategoryId('');
+            toast.success('Catégorie supprimée');
+          });
+        }}
         title="Catégorie" message={`Voulez-vous supprimer « ${confirmDelCat?.name} » ?`} />
     </div>
   );
@@ -822,7 +1049,7 @@ function FicheTechnicForm({ initial, onClose }: { initial?: FicheTechnic; onClos
 // -------------------------------------------------------------
 // Form to Create Production from Fiche Technic
 // -------------------------------------------------------------
-function CreateProductionForm({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: any) => void }) {
+function CreateProductionForm({ onClose, onSubmit }: { onClose: () => void; onSubmit: (data: any) => void | Promise<void> }) {
   const { t } = useLanguage();
   const products = useStockStore((s) => s.products);
   const { ficheTechnics } = useFicheTechnicStore();
@@ -990,7 +1217,7 @@ function CreateProductionForm({ onClose, onSubmit }: { onClose: () => void; onSu
             className="pl-10" 
           />
           {showFicheResults && ficheResults.length > 0 && (
-            <div className="absolute z-20 mt-1 w-full bg-white rounded-xl border border-gold/20 shadow-lg max-h-[220px] overflow-y-auto">
+            <div className="absolute z-20 mt-1 w-full bg-[--surface-dropdown] rounded-xl border border-gold/20 shadow-lg max-h-[220px] overflow-y-auto">
               {ficheResults.map((ft) => (
                 <button key={ft.id} type="button" onClick={() => selectFicheTechnic(ft)} className="w-full text-left px-4 py-2.5 text-sm hover:bg-gold/10 flex justify-between items-center border-b border-gold/5 last:border-0">
                   <div>
@@ -1021,11 +1248,11 @@ function CreateProductionForm({ onClose, onSubmit }: { onClose: () => void; onSu
             </div>
 
             {selectedFt.description && (
-              <p className="text-xs text-text-secondary bg-white/40 p-2.5 rounded-lg italic">« {selectedFt.description} »</p>
+              <p className="text-xs text-text-secondary bg-vanilla/40 p-2.5 rounded-lg italic">« {selectedFt.description} »</p>
             )}
 
             {/* Input to scale production */}
-            <div className="bg-white/80 p-3 rounded-xl border border-gold/10 space-y-2">
+            <div className="bg-vanilla/60 p-3 rounded-xl border border-gold/10 space-y-2">
               <label className="block text-xs font-bold text-text-secondary">
                 {selectedFt.sellByUnit && selectedFt.sellUnit ? `Modifier la Quantité à Produire (${selectedFt.sellUnit})` : 'Modifier la Quantité à Produire'}
               </label>
@@ -1045,7 +1272,7 @@ function CreateProductionForm({ onClose, onSubmit }: { onClose: () => void; onSu
             </div>
 
             {/* Perte (production loss) */}
-            <div className={`p-3 rounded-xl border space-y-2.5 transition-colors ${hasLoss ? 'bg-rose-deep/5 border-rose-deep/25' : 'bg-white/80 border-gold/10'}`}>
+            <div className={`p-3 rounded-xl border space-y-2.5 transition-colors ${hasLoss ? 'bg-rose-deep/5 border-rose-deep/25' : 'bg-vanilla/60 border-gold/10'}`}>
               <div className="flex items-center gap-2">
                 <AlertTriangle size={15} className={hasLoss ? 'text-rose-deep' : 'text-text-muted'} />
                 <Switch
@@ -1099,7 +1326,7 @@ function CreateProductionForm({ onClose, onSubmit }: { onClose: () => void; onSu
             </div>
 
             {/* Scale-based price statistics */}
-            <div className="bg-white/80 p-3 rounded-xl border border-gold/10 space-y-2 text-xs">
+            <div className="bg-vanilla/60 p-3 rounded-xl border border-gold/10 space-y-2 text-xs">
               <h5 className="font-semibold text-text-secondary border-b border-gold/5 pb-1">Calculs et Profits Recalculés:</h5>
               <div className="flex justify-between">
                 <span>Coût de production total:</span>
@@ -1149,7 +1376,7 @@ function CreateProductionForm({ onClose, onSubmit }: { onClose: () => void; onSu
                       ? 'bg-rose-deep/5 border-rose-deep/30'
                       : u.isFiche
                         ? 'bg-pistachio/5 border-pistachio/20'
-                        : 'bg-white border-gold/10'
+                        : 'bg-gradient-card border-gold/10'
                   }`}>
                     <div className="flex justify-between items-start gap-2">
                       <span className="font-semibold text-xs text-text-primary truncate flex items-center gap-1.5">

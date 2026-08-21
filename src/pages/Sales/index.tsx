@@ -121,10 +121,43 @@ export default function SalesPage() {
           <div className="space-y-4">
             <p className="text-sm text-text-secondary">{clientName(viewing.clientId)} — {formatDateTime(viewing.date, language)}</p>
             {viewing.createdBy && <p className="text-xs text-text-muted">{t('createdBy')}: {viewing.createdBy}</p>}
-            <table className="w-full text-sm">
-              <thead className="bg-vanilla/60"><tr><th className="text-left px-3 py-2">{t('name')}</th><th className="text-right px-3 py-2">{t('quantity')}</th><th className="text-right px-3 py-2">P.U.</th><th className="text-right px-3 py-2">Total</th></tr></thead>
-              <tbody>{viewing.products.map((l, i) => (<tr key={i} className="border-t border-gold/10"><td className="px-3 py-2">{l.productName}{l.sellByUnit && l.unit ? <span className="text-xs text-gold-dark"> · {l.unit}</span> : null}</td><td className="px-3 py-2 text-right tabular">{l.quantity}{l.sellByUnit && l.unit ? ` ${l.unit}` : ''}</td><td className="px-3 py-2 text-right tabular">{formatCurrency(l.sellingPrice)}{l.sellByUnit && l.unit ? `/${l.unit}` : ''}</td><td className="px-3 py-2 text-right tabular">{formatCurrency(l.quantity * l.sellingPrice)}</td></tr>))}</tbody>
-            </table>
+            <div className="overflow-x-auto rounded-xl border border-gold/15">
+              <table className="w-full text-sm">
+                <thead className="bg-vanilla/60 text-text-secondary">
+                  <tr>
+                    <th className="text-left px-3 py-2">Produit</th>
+                    <th className="text-right px-3 py-2">Qté</th>
+                    <th className="text-right px-3 py-2">Prix catalogue</th>
+                    <th className="text-right px-3 py-2">Prix appliqué</th>
+                    <th className="text-right px-3 py-2">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {viewing.products.map((l, i) => {
+                    const overridden = l.basePrice !== undefined && Math.abs(l.basePrice - l.sellingPrice) > 0.001;
+                    return (
+                      <tr key={i} className="border-t border-gold/10">
+                        <td className="px-3 py-2 font-medium">
+                          {l.productName}
+                          {l.sellByUnit && l.unit ? <span className="text-xs text-gold-dark"> · {l.unit}</span> : null}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular">
+                          {l.quantity}{l.sellByUnit && l.unit ? ` ${l.unit}` : ''}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular text-text-muted">
+                          {l.basePrice !== undefined ? formatCurrency(l.basePrice) : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular font-bold text-gold-dark">
+                          {formatCurrency(l.sellingPrice)}{l.sellByUnit && l.unit ? `/${l.unit}` : ''}
+                          {overridden && <Badge variant="warning" className="ml-1.5 text-[9px]">modifié</Badge>}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular">{formatCurrency(l.quantity * l.sellingPrice)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
             <div className="grid grid-cols-2 gap-2 text-sm">
               <Tile label={t('total')} value={formatCurrency(viewing.totalAmount)} />
               <Tile label={t('reduction')} value={formatCurrency(viewing.reduction)} />
@@ -136,9 +169,9 @@ export default function SalesPage() {
         )}
       </Modal>
 
-      {paying && <PayDebtModal open={!!paying} onClose={() => setPaying(null)} reference={paying.reference} partyName={clientName(paying.clientId)} total={paying.finalAmount} paid={paying.paidAmount} onPay={(a, d) => payDebt(paying.id, a, d)} />}
+      {paying && <PayDebtModal open={!!paying} onClose={() => setPaying(null)} reference={paying.reference} partyName={clientName(paying.clientId)} total={paying.finalAmount} paid={paying.paidAmount} onPay={(a, _n, paidAt) => { void payDebt(paying.id, a, (paidAt || new Date().toISOString()).slice(0, 10)); }} />}
 
-      <ConfirmDialog open={!!deleteId} onClose={() => setDeleteId(null)} onConfirm={() => { if (deleteId) { deleteSale(deleteId); toast.success('Vente supprimée'); } }} />
+      <ConfirmDialog open={!!deleteId} onClose={() => setDeleteId(null)} onConfirm={() => { if (deleteId) { void deleteSale(deleteId).then(() => toast.success('Vente supprimée')); } }} />
     </div>
   );
 }

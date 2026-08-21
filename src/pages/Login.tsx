@@ -69,7 +69,8 @@ export default function Login() {
       if (ok) {
         await hydrateFromSupabase();
         toast.success(t('welcome') + ' 👋');
-        navigate('/dashboard');
+        // '/' redirects to the first interface this account is allowed to open
+        navigate('/', { replace: true });
       } else {
         setShake(true);
         setTimeout(() => setShake(false), 500);

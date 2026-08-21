@@ -1,43 +1,13 @@
 import { NavLink, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import {
-  Building2, Warehouse, Factory, ShoppingCart, Receipt, Calculator,
-  Users, ClipboardList, Truck, HardHat, Banknote, Coins, Wallet,
-  TrendingUp, Settings, LogOut, X, PackageCheck
-} from 'lucide-react';
+import { LogOut, X } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useSettingsStore } from '@/store/settingsStore';
 import { LogoBadge } from '@/components/shared/LogoBadge';
 import { sidebarItemVariants } from '@/lib/animations';
-import type { PermissionModule } from '@/types';
-import type { TranslationKey } from '@/lib/i18n';
-
-interface NavItem {
-  to: string;
-  key: TranslationKey;
-  module: PermissionModule;
-  icon: typeof Building2;
-}
-
-const navItems: NavItem[] = [
-  { to: '/dashboard', key: 'dashboard', module: 'dashboard', icon: Building2 },
-  { to: '/stock', key: 'stock', module: 'stock', icon: Warehouse },
-  { to: '/production', key: 'production', module: 'production', icon: Factory },
-  { to: '/purchase', key: 'purchase', module: 'purchase', icon: ShoppingCart },
-  { to: '/sales', key: 'sales', module: 'sales', icon: Receipt },
-  { to: '/pos', key: 'pos', module: 'pos', icon: Calculator },
-  { to: '/clients', key: 'clients', module: 'clients', icon: Users },
-  { to: '/commands', key: 'commands', module: 'clients', icon: ClipboardList },
-  { to: '/suppliers', key: 'suppliers', module: 'suppliers', icon: Truck },
-  { to: '/workers', key: 'workers', module: 'workers', icon: HardHat },
-  { to: '/expenses', key: 'expenses', module: 'expenses', icon: Banknote },
-  { to: '/expenses/debts', key: 'debtsClients', module: 'expenses', icon: Coins },
-  { to: '/caisse', key: 'caisse', module: 'caisse', icon: Wallet },
-  { to: '/reports', key: 'reports', module: 'reports', icon: TrendingUp },
-  { to: '/settings', key: 'settings', module: 'settings', icon: Settings },
-];
+import { navItems } from './navItems';
 
 interface SidebarProps {
   open: boolean;
@@ -47,23 +17,23 @@ interface SidebarProps {
 export function Sidebar({ open, onClose }: SidebarProps) {
   const navigate = useNavigate();
   const logout = useAuthStore((s) => s.logout);
+  const user = useAuthStore((s) => s.user);
   const { t, isRTL } = useLanguage();
-  const { canView } = usePermissions();
+  const { canView, isAdmin } = usePermissions();
   const store = useSettingsStore((s) => s.settings);
 
+  // Only the interfaces the administrator granted are displayed.
   const visibleItems = navItems.filter((item) => canView(item.module));
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     navigate('/login');
   };
 
   return (
     <>
       {/* Mobile overlay */}
-      {open && (
-        <div className="fixed inset-0 bg-black/60 z-30 lg:hidden" onClick={onClose} />
-      )}
+      {open && <div className="fixed inset-0 bg-black/60 z-30 lg:hidden" onClick={onClose} />}
 
       <motion.aside
         initial={false}
@@ -114,10 +84,23 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               </motion.div>
             );
           })}
+          {visibleItems.length === 0 && (
+            <p className="px-3 py-4 text-xs text-text-muted">
+              Aucune interface autorisée pour ce compte.
+            </p>
+          )}
         </nav>
 
-        {/* Logout */}
-        <div className="p-3 border-t border-gold/15">
+        {/* Account + logout */}
+        <div className="p-3 border-t border-gold/15 space-y-2">
+          {user && (
+            <div className="px-3.5 py-2 rounded-xl bg-gold/5 border border-gold/10">
+              <p className="text-xs font-semibold text-text-primary truncate">{user.name}</p>
+              <p className="text-[10px] text-text-muted truncate">
+                {isAdmin ? 'Administrateur' : `Employé · ${visibleItems.length} interface(s)`}
+              </p>
+            </div>
+          )}
           <button
             onClick={handleLogout}
             className="flex items-center gap-3 w-full px-3.5 py-2.5 rounded-xl text-sm font-medium text-text-secondary hover:bg-rose-deep/15 hover:text-rose-deep transition-all"

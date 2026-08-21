@@ -3,7 +3,8 @@ import { supabase } from './supabase';
 import type {
   Product, Marque, Category, Unit, Supplier, Client, ClientDebt, Sale, Purchase,
   Production, ComptoirItem, Destruction, Worker, Role, Expense, CaisseTransaction,
-  CaisseReport, StoreSettings,
+  CaisseReport, StoreSettings, PartyPayment, CommandDelivery, WorkerOvertime,
+  PurchaseOrder,
 } from '@/types';
 import type { Command } from '@/store/commandStore';
 import type { FicheTechnic } from '@/store/ficheTechnicStore';
@@ -23,6 +24,29 @@ async function select<T>(table: string, columns = '*', order?: string): Promise<
   const { data, error } = await q;
   if (error) throw new Error(`[${table}] ${error.message}`);
   return (data ?? []) as T[];
+}
+
+/** True when the error means "this table/column does not exist yet". */
+function isMissingSchema(message: string): boolean {
+  return /Could not find the table|does not exist|schema cache|PGRST205|PGRST200|42P01|42703/i.test(message);
+}
+
+/**
+ * Same as `select()` but returns an empty list when the table has not been
+ * created yet — the screens introduced by the 2026 update stay usable before
+ * `altech_production_update_2026.sql` has been executed.
+ */
+async function selectOptional<T>(table: string, columns = '*', order?: string): Promise<T[]> {
+  try {
+    return await select<T>(table, columns, order);
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (isMissingSchema(msg)) {
+      console.warn(`[db] ${table} absente — exécutez altech_production_update_2026.sql`);
+      return [];
+    }
+    throw e;
+  }
 }
 
 async function insert<T>(table: string, row: Record<string, any>): Promise<T> {
@@ -70,21 +94,24 @@ const toProduct = (r: any): Product => ({
   createdBy: r.created_by ?? undefined,
 });
 
-const fromProduct = (p: Partial<Product>) => ({
-  name: p.name,
-  description: p.description,
-  barcode: p.barcode || null,
-  marque_id: p.marqueId || null,
-  category_id: p.categoryId || null,
-  principal_quantity: p.principalQuantity,
-  current_quantity: p.currentQuantity,
-  min_alert_quantity: p.minAlertQuantity,
-  purchase_price: p.purchasePrice,
-  unit_enabled: p.unitEnabled ?? false,
-  unit: p.unit || null,
-  expiration_enabled: p.expirationEnabled ?? false,
-  expiration_date: p.expirationDate || null,
-});
+/** Only the keys actually present are sent, so a partial edit never wipes a column. */
+const fromProduct = (p: Partial<Product>) => {
+  const row: Record<string, any> = {};
+  if (p.name !== undefined) row.name = p.name;
+  if (p.description !== undefined) row.description = p.description;
+  if (p.barcode !== undefined) row.barcode = p.barcode || null;
+  if (p.marqueId !== undefined) row.marque_id = p.marqueId || null;
+  if (p.categoryId !== undefined) row.category_id = p.categoryId || null;
+  if (p.principalQuantity !== undefined) row.principal_quantity = Number(p.principalQuantity) || 0;
+  if (p.currentQuantity !== undefined) row.current_quantity = Number(p.currentQuantity) || 0;
+  if (p.minAlertQuantity !== undefined) row.min_alert_quantity = Number(p.minAlertQuantity) || 0;
+  if (p.purchasePrice !== undefined) row.purchase_price = Number(p.purchasePrice) || 0;
+  if (p.unitEnabled !== undefined) row.unit_enabled = p.unitEnabled ?? true;
+  if (p.unit !== undefined) row.unit = p.unit || null;
+  if (p.expirationEnabled !== undefined) row.expiration_enabled = p.expirationEnabled ?? false;
+  if (p.expirationDate !== undefined) row.expiration_date = p.expirationDate || null;
+  return row;
+};
 
 const toSupplier = (r: any): Supplier => ({
   id: r.id, name: r.name, phone: r.phone ?? '', address: r.address ?? '',
@@ -116,7 +143,71 @@ const toWorker = (r: any): Worker => ({
     id: a.id, date: a.date, description: a.description ?? '', cost: num(a.cost),
   })),
   payments: (r.worker_payments ?? []).map((a: any) => ({
-    id: a.id, date: a.date, period: a.period ?? '', amount: num(a.amount), description: a.description ?? '',
+    id: a.id, date: a.date, period: a.period ?? '', amount: num(a.amount),
+    description: a.description ?? '', kind: a.kind ?? 'salary',
+  })),
+  overtimes: (r.worker_overtimes ?? []).map(toOvertime),
+});
+
+const toOvertime = (r: any): WorkerOvertime => ({
+  id: r.id,
+  workerId: r.worker_id,
+  date: r.date,
+  workEndHour: Number(r.work_end_hour ?? 0),
+  workEndMinute: Number(r.work_end_minute ?? 0),
+  overtimeEndHour: Number(r.overtime_end_hour ?? 0),
+  overtimeEndMinute: Number(r.overtime_end_minute ?? 0),
+  hours: num(r.hours),
+  hourlyRate: num(r.hourly_rate),
+  amount: num(r.amount),
+  description: r.description ?? '',
+  isPaid: r.is_paid ?? false,
+  paidAt: r.paid_at ?? null,
+  paymentId: r.payment_id ?? null,
+  createdBy: r.created_by ?? undefined,
+});
+
+const toPartyPayment = (idKey: string, nameKey: string) => (r: any): PartyPayment => ({
+  id: r.id,
+  partyId: r[idKey] ?? '',
+  partyName: r[nameKey] ?? undefined,
+  amount: num(r.amount),
+  date: r.date,
+  paidAt: r.paid_at ?? r.created_at,
+  notes: r.notes ?? '',
+  createdAt: r.created_at,
+  createdBy: r.created_by ?? undefined,
+});
+
+const toCommandDelivery = (r: any): CommandDelivery => ({
+  id: r.id,
+  commandId: r.command_id,
+  reference: r.reference,
+  date: r.date,
+  deliveredAt: r.delivered_at ?? r.created_at,
+  notes: r.notes ?? '',
+  createdBy: r.created_by ?? undefined,
+  items: (r.command_delivery_items ?? []).map((i: any) => ({
+    commandItemId: i.command_item_id ?? undefined,
+    productName: i.product_name,
+    quantity: num(i.quantity),
+    sellUnit: i.sell_unit ?? undefined,
+  })),
+});
+
+const toPurchaseOrder = (r: any): PurchaseOrder => ({
+  id: r.id,
+  reference: r.reference,
+  date: r.date,
+  supplierName: r.supplier_name ?? '',
+  notes: r.notes ?? '',
+  createdAt: r.created_at,
+  createdBy: r.created_by ?? undefined,
+  items: (r.purchase_order_items ?? []).map((i: any) => ({
+    productName: i.product_name,
+    description: i.description ?? '',
+    quantity: num(i.quantity),
+    unit: i.unit ?? undefined,
   })),
 });
 
@@ -178,6 +269,7 @@ const toSale = (r: any): Sale => ({
     productName: l.product_name,
     quantity: num(l.quantity),
     sellingPrice: num(l.selling_price),
+    basePrice: l.base_price === null || l.base_price === undefined ? undefined : num(l.base_price),
     sellByUnit: l.sell_by_unit ?? false,
     unit: l.unit ?? undefined,
   })),
@@ -288,6 +380,8 @@ const toCommand = (r: any): Command => ({
   notes: r.notes ?? undefined,
   createdBy: r.created_by ?? '',
   items: (r.command_items ?? []).map((i: any) => ({
+    id: i.id,
+    deliveredQuantity: num(i.delivered_quantity),
     productId: i.product_id ?? undefined,
     ficheTechnicId: i.fiche_technic_id ?? undefined,
     productName: i.product_name,
@@ -443,6 +537,17 @@ export const db = {
   commands: {
     list: async (): Promise<Command[]> =>
       (await select<any>('commands', '*, command_items(*)', 'created_at')).map(toCommand),
+    update: (id: string, row: Record<string, any>) => update('commands', id, row),
+    /** Replaces every line of a command (edit screen). */
+    replaceItems: async (commandId: string, items: Record<string, any>[]) => {
+      const { error: delErr } = await supabase.from('command_items').delete().eq('command_id', commandId);
+      if (delErr) throw new Error(`[command_items] ${delErr.message}`);
+      if (!items.length) return;
+      const { error } = await supabase
+        .from('command_items')
+        .insert(items.map((i) => ({ ...i, command_id: commandId })));
+      if (error) throw new Error(`[command_items] ${error.message}`);
+    },
     remove: (id: string) => remove('commands', id),
   },
 
@@ -461,7 +566,47 @@ export const db = {
   ficheTechnics: {
     list: async (): Promise<FicheTechnic[]> =>
       (await select<any>('fiche_technics', '*, fiche_technic_lines(*)', 'created_at')).map(toFiche),
+    create: async (payload: Record<string, any>) =>
+      toFiche(await call<any>('create_fiche_technic', { p_payload: payload })),
+    update: async (id: string, payload: Record<string, any>) =>
+      toFiche(await call<any>('update_fiche_technic', { p_id: id, p_payload: payload })),
     remove: (id: string) => remove('fiche_technics', id),
+  },
+  ficheCategories: {
+    list: async (): Promise<Category[]> => (await selectOptional<any>('fiche_categories')).map(simpleName),
+    create: async (name: string) => simpleName(await call<any>('upsert_fiche_category', { p_name: name })),
+    remove: (id: string) => remove('fiche_categories', id),
+  },
+
+  // /suppliers — règlements de dette
+  supplierPayments: {
+    list: async (): Promise<PartyPayment[]> =>
+      (await selectOptional<any>('supplier_payments', '*', 'paid_at')).map(toPartyPayment('supplier_id', 'supplier_name')),
+  },
+
+  // /clients — règlements de dette
+  clientPayments: {
+    list: async (): Promise<PartyPayment[]> =>
+      (await selectOptional<any>('client_payments', '*', 'paid_at')).map(toPartyPayment('client_id', 'client_name')),
+  },
+
+  // /commands — livraisons
+  commandDeliveries: {
+    list: async (): Promise<CommandDelivery[]> =>
+      (await selectOptional<any>('command_deliveries', '*, command_delivery_items(*)', 'delivered_at')).map(toCommandDelivery),
+  },
+
+  // /workers — heures supplémentaires
+  overtimes: {
+    list: async (): Promise<WorkerOvertime[]> =>
+      (await selectOptional<any>('worker_overtimes', '*', 'date')).map(toOvertime),
+  },
+
+  // /expenses — bons de commande
+  purchaseOrders: {
+    list: async (): Promise<PurchaseOrder[]> =>
+      (await selectOptional<any>('purchase_orders', '*, purchase_order_items(*)', 'date')).map(toPurchaseOrder),
+    remove: (id: string) => remove('purchase_orders', id),
   },
 
   // /comptoir
@@ -473,8 +618,16 @@ export const db = {
 
   // /workers
   workers: {
-    list: async (): Promise<Worker[]> =>
-      (await select<any>('workers', '*, worker_acomptes(*), worker_absences(*), worker_payments(*)')).map(toWorker),
+    list: async (): Promise<Worker[]> => {
+      const full = '*, worker_acomptes(*), worker_absences(*), worker_payments(*), worker_overtimes(*)';
+      try {
+        return (await select<any>('workers', full)).map(toWorker);
+      } catch (e) {
+        if (!isMissingSchema((e as Error).message)) throw e;
+        // overtime table not deployed yet — load the employees without it
+        return (await select<any>('workers', '*, worker_acomptes(*), worker_absences(*), worker_payments(*)')).map(toWorker);
+      }
+    },
     create: async (w: Partial<Worker>) => toWorker(await insert('workers', fromWorker(w))),
     update: async (id: string, w: Partial<Worker>) => toWorker(await update('workers', id, fromWorker(w))),
     remove: (id: string) => remove('workers', id),
@@ -642,6 +795,52 @@ export const rpc = {
     call<string>('create_admin_account', {
       p_name: name, p_username: username, p_email: email, p_password: password,
     }),
+
+  // /suppliers — payer la dette d'un fournisseur
+  paySupplier: (supplierId: string, amount: number, paidAt: string, notes = '') =>
+    call<any>('pay_supplier', {
+      p_supplier_id: supplierId, p_amount: amount, p_paid_at: paidAt, p_notes: notes,
+    }),
+  updateSupplierPayment: (id: string, amount: number, paidAt?: string, notes?: string) =>
+    call<any>('update_supplier_payment', {
+      p_id: id, p_amount: amount, p_paid_at: paidAt ?? null, p_notes: notes ?? null,
+    }),
+  deleteSupplierPayment: (id: string) => call<void>('delete_supplier_payment', { p_id: id }),
+
+  // /clients — payer la dette d'un client
+  payClient: (clientId: string, amount: number, paidAt: string, notes = '') =>
+    call<any>('pay_client', {
+      p_client_id: clientId, p_amount: amount, p_paid_at: paidAt, p_notes: notes,
+    }),
+  updateClientPayment: (id: string, amount: number, paidAt?: string, notes?: string) =>
+    call<any>('update_client_payment', {
+      p_id: id, p_amount: amount, p_paid_at: paidAt ?? null, p_notes: notes ?? null,
+    }),
+  deleteClientPayment: (id: string) => call<void>('delete_client_payment', { p_id: id }),
+
+  // /commands — livraisons partielles
+  createCommandDelivery: (payload: Record<string, any>) =>
+    call<any>('create_command_delivery', { p_payload: payload }),
+  updateCommandDelivery: (id: string, payload: Record<string, any>) =>
+    call<any>('update_command_delivery', { p_id: id, p_payload: payload }),
+  deleteCommandDelivery: (id: string) => call<void>('delete_command_delivery', { p_id: id }),
+
+  // /workers — heures supplémentaires
+  addWorkerOvertime: (payload: Record<string, any>) =>
+    call<any>('add_worker_overtime', { p_payload: payload }),
+  updateWorkerOvertime: (id: string, payload: Record<string, any>) =>
+    call<any>('update_worker_overtime', { p_id: id, p_payload: payload }),
+  deleteWorkerOvertime: (id: string) => call<void>('delete_worker_overtime', { p_id: id }),
+  payWorkerOvertimes: (workerId: string, ids: string[], date?: string, description = '') =>
+    call<any>('pay_worker_overtimes', {
+      p_worker_id: workerId, p_ids: ids, p_date: date ?? null, p_description: description,
+    }),
+
+  // /expenses — bons de commande
+  createPurchaseOrder: (payload: Record<string, any>) =>
+    call<any>('create_purchase_order', { p_payload: payload }),
+  updatePurchaseOrder: (id: string, payload: Record<string, any>) =>
+    call<any>('update_purchase_order', { p_id: id, p_payload: payload }),
 
   // /caisse
   addCaisseTransaction: (

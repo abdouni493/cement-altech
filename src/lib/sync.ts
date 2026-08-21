@@ -1,4 +1,3 @@
-import { db } from './db';
 import { useStockStore } from '@/store/stockStore';
 import { useSupplierStore } from '@/store/supplierStore';
 import { useClientStore } from '@/store/clientStore';
@@ -10,21 +9,43 @@ import { useFicheTechnicStore } from '@/store/ficheTechnicStore';
 import { useComptoirStore } from '@/store/comptoirStore';
 import { useWorkerStore } from '@/store/workerStore';
 import { useExpenseStore } from '@/store/expenseStore';
-import { useClientDebtStore } from '@/store/clientDebtStore';
 import { useCaisseStore } from '@/store/caisseStore';
 import { useCaisseReportStore } from '@/store/caisseReportStore';
 import { useSettingsStore } from '@/store/settingsStore';
 
 /**
- * Loads every screen's data from Supabase into the local stores.
+ * Loads every screen from Supabase.
  *
- * Each block is independent: when a worker has no permission on a module its
+ * Nothing is cached in localStorage any more: this is the ONLY source of the
+ * data displayed by the application, so a refresh always shows the real rows.
+ * Each block is independent — when a worker has no permission on a module its
  * RLS policy simply returns nothing and the other modules still load.
  */
-export async function hydrateFromSupabase(): Promise<{ ok: boolean; failed: string[] }> {
+let inFlight: Promise<{ ok: boolean; failed: string[] }> | null = null;
+let lastRun = 0;
+
+/**
+ * Reloads everything, but never twice at the same time: two screens (or the
+ * boot sequence and the login effect) asking together share the same request.
+ * `force: false` also skips a reload that happened less than 15 s ago.
+ */
+export function hydrateFromSupabase(options: { force?: boolean } = {}) {
+  const { force = true } = options;
+  if (inFlight) return inFlight;
+  if (!force && Date.now() - lastRun < 15_000) {
+    return Promise.resolve({ ok: true, failed: [] as string[] });
+  }
+  inFlight = runHydration().finally(() => {
+    inFlight = null;
+    lastRun = Date.now();
+  });
+  return inFlight;
+}
+
+async function runHydration(): Promise<{ ok: boolean; failed: string[] }> {
   const failed: string[] = [];
 
-  const step = async (label: string, fn: () => Promise<void>) => {
+  const step = async (label: string, fn: () => Promise<unknown>) => {
     try {
       await fn();
     } catch (e) {
@@ -34,116 +55,30 @@ export async function hydrateFromSupabase(): Promise<{ ok: boolean; failed: stri
   };
 
   await Promise.all([
-    // ---------------------------------------------------------- /stock ----
-    step('stock', async () => {
-      const [products, marques, categories, units] = await Promise.all([
-        db.products.list(), db.marques.list(), db.categories.list(), db.units.list(),
-      ]);
-      useStockStore.setState((s) => ({
-        products: products.length ? products : s.products,
-        marques: marques.length ? marques : s.marques,
-        categories: categories.length ? categories : s.categories,
-        units: units.length ? units : s.units,
-      }));
-    }),
-
-    // ------------------------------------------------------ /suppliers ----
-    step('suppliers', async () => {
-      const suppliers = await db.suppliers.list();
-      if (suppliers.length) useSupplierStore.setState({ suppliers });
-    }),
-
-    // -------------------------------------------------------- /clients ----
-    step('clients', async () => {
-      const clients = await db.clients.list();
-      if (clients.length) useClientStore.setState({ clients });
-    }),
-
-    // ------------------------------------------------------- /purchase ----
-    step('purchases', async () => {
-      usePurchaseStore.setState({ purchases: await db.purchases.list() });
-    }),
-
-    // ---------------------------------------------------------- /sales ----
-    step('sales', async () => {
-      useSalesStore.setState({ sales: await db.sales.list() });
-    }),
-
-    // ------------------------------------------------------- /commands ----
-    step('commands', async () => {
-      useCommandStore.setState({ commands: await db.commands.list() });
-    }),
-
-    // ----------------------------------------------------- /production ----
-    step('productions', async () => {
-      const [productions, categories] = await Promise.all([
-        db.productions.list(), db.productionCategories.list(),
-      ]);
-      useProductionStore.setState((s) => ({
-        productions,
-        categories: categories.length ? categories : s.categories,
-      }));
-    }),
-
-    step('fiches techniques', async () => {
-      const ficheTechnics = await db.ficheTechnics.list();
-      if (ficheTechnics.length) useFicheTechnicStore.setState({ ficheTechnics });
-    }),
-
-    // ------------------------------------------------------- /comptoir ----
-    step('comptoir', async () => {
-      const [items, destructions] = await Promise.all([
-        db.comptoir.list(), db.comptoir.destructions(),
-      ]);
-      useComptoirStore.setState({ items, destructions });
-    }),
-
-    // -------------------------------------------------------- /workers ----
-    step('workers', async () => {
-      const [workers, roles] = await Promise.all([db.workers.list(), db.roles.list()]);
-      useWorkerStore.setState((s) => ({
-        workers: workers.length ? workers : s.workers,
-        roles: roles.length ? roles : s.roles,
-      }));
-    }),
-
-    // ------------------------------------------------------- /expenses ----
-    step('expenses', async () => {
-      const [expenses, categories] = await Promise.all([
-        db.expenses.list(), db.expenseCategories.list(),
-      ]);
-      useExpenseStore.setState((s) => ({
-        expenses,
-        categories: categories.length ? categories : s.categories,
-      }));
-    }),
-
-    step('dettes clients', async () => {
-      useClientDebtStore.setState({ debts: await db.clientDebts.list() });
-    }),
-
-    // --------------------------------------------------------- /caisse ----
-    step('caisse', async () => {
-      const [transactions, categories, initialBalance] = await Promise.all([
-        db.caisse.list(), db.caisseCategories.list(), db.caisse.initialBalance(),
-      ]);
-      useCaisseStore.setState((s) => ({
-        transactions,
-        categories: categories.length ? categories : s.categories,
-        initialBalance,
-      }));
-    }),
-
-    step('rapports de caisse', async () => {
-      useCaisseReportStore.setState({ reports: await db.caisseReports.list() });
-    }),
-
-    // ------------------------------------------------------- /settings ----
-    step('paramètres', async () => {
-      const settings = await db.settings.get();
-      if (settings) useSettingsStore.setState({ settings });
-    }),
+    step('stock', () => useStockStore.getState().load()),
+    step('fournisseurs', () => useSupplierStore.getState().load()),
+    step('clients', () => useClientStore.getState().load()),
+    step('achats', () => usePurchaseStore.getState().load()),
+    step('ventes', () => useSalesStore.getState().load()),
+    step('commandes', () => useCommandStore.getState().load()),
+    step('productions', () => useProductionStore.getState().load()),
+    step('fiches techniques', () => useFicheTechnicStore.getState().load()),
+    step('comptoir', () => useComptoirStore.getState().load()),
+    step('employés', () => useWorkerStore.getState().load()),
+    step('dépenses', () => useExpenseStore.getState().load()),
+    step('caisse', () => useCaisseStore.getState().load()),
+    step('rapports de caisse', () => useCaisseReportStore.getState().load()),
+    step('paramètres', () => useSettingsStore.getState().load()),
   ]);
 
   return { ok: failed.length === 0, failed };
+}
+
+/** Re-reads only the modules impacted by a cross-screen operation. */
+export async function refreshMoney(): Promise<void> {
+  await Promise.all([
+    useCaisseStore.getState().load(),
+    useSalesStore.getState().load(),
+    usePurchaseStore.getState().load(),
+  ]).catch(() => undefined);
 }

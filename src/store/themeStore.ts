@@ -9,10 +9,15 @@ interface ThemeState {
   setTheme: (theme: ThemeMode) => void;
 }
 
+/**
+ * The application opens in LIGHT mode by default. The choice is remembered per
+ * browser (the only thing still kept in localStorage — it is a display
+ * preference, not business data).
+ */
 export const useThemeStore = create<ThemeState>()(
   persist(
     (set, get) => ({
-      theme: 'dark',
+      theme: 'light',
       toggleTheme: () => {
         const nextTheme = get().theme === 'dark' ? 'light' : 'dark';
         set({ theme: nextTheme });
@@ -23,17 +28,30 @@ export const useThemeStore = create<ThemeState>()(
         applyTheme(theme);
       },
     }),
-    { name: 'cement-theme-store' }
+    {
+      name: 'altech-theme',
+      // a browser that never chose a theme starts in light mode
+      merge: (persisted, current) => ({
+        ...current,
+        ...(persisted as Partial<ThemeState> | undefined),
+        theme: ((persisted as Partial<ThemeState> | undefined)?.theme as ThemeMode) || 'light',
+      }),
+    }
   )
 );
 
 export function applyTheme(theme: ThemeMode) {
   const root = document.documentElement;
-  if (theme === 'light') {
-    root.classList.remove('dark');
-    root.classList.add('light');
-  } else {
+  if (theme === 'dark') {
     root.classList.remove('light');
     root.classList.add('dark');
+  } else {
+    root.classList.remove('dark');
+    root.classList.add('light');
   }
+}
+
+// Paint the light theme before React mounts so there is no dark flash.
+if (typeof document !== 'undefined') {
+  applyTheme(useThemeStore.getState().theme);
 }
