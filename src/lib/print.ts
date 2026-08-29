@@ -14,6 +14,10 @@ interface InvoiceData {
   partyName: string;
   partyPhone?: string;
   partyAddress?: string;
+  /** N° du bon de livraison fournisseur (achats) */
+  bonNumber?: string;
+  /** Immatriculation du camion qui a livré (achats) */
+  driverPlate?: string;
   lines: InvoiceLine[];
   total: number;
   reduction?: number;
@@ -130,6 +134,8 @@ export function printInvoice(data: InvoiceData, store: StoreSettings) {
             <div class="title-meta">
               <strong>N° ${data.reference}</strong><br/>
               Date: ${data.type === 'sale' ? formatDateTime(data.date) : formatDate(data.date)}
+              ${data.bonNumber ? `<br/>Bon n° ${data.bonNumber}` : ''}
+              ${data.driverPlate ? `<br/>Matricule: ${data.driverPlate}` : ''}
             </div>
           </div>
 

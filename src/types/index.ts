@@ -83,6 +83,10 @@ export interface Purchase {
   reference: string;
   supplierId: string;
   date: string;
+  /** Immatriculation du camion / chauffeur qui a livré la marchandise */
+  driverPlate?: string;
+  /** N° du bon de livraison remis par le fournisseur */
+  bonNumber?: string;
   products: PurchaseLine[];
   totalAmount: number;
   paidAmount: number;

@@ -232,6 +232,8 @@ const toPurchase = (r: any): Purchase => ({
   reference: r.reference,
   supplierId: r.supplier_id ?? '',
   date: r.date,
+  driverPlate: r.driver_plate ?? '',
+  bonNumber: r.bon_number ?? '',
   totalAmount: num(r.total_amount),
   paidAmount: num(r.paid_amount),
   restAmount: num(r.rest_amount),

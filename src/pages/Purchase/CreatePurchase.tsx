@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Search, Plus, X, Truck, Package, Wallet, Ruler, Check } from 'lucide-react';
+import { Search, Plus, X, Truck, Package, Wallet, Ruler, Check, FileText, CarFront } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
@@ -37,6 +37,8 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
   const [supplierId, setSupplierId] = useState('');
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [date, setDate] = useState(todayISO());
+  const [driverPlate, setDriverPlate] = useState('');
+  const [bonNumber, setBonNumber] = useState('');
   const [showProductForm, setShowProductForm] = useState(false);
   const [showSupplierForm, setShowSupplierForm] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -116,6 +118,8 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
       const purchase = await addPurchase({
         supplierId,
         date,
+        driverPlate: driverPlate.trim(),
+        bonNumber: bonNumber.trim(),
         products: lines.map(({ _key, stockBefore, ...l }) => ({
           ...l,
           quantity: Number(l.quantity),
@@ -261,7 +265,7 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
       {/* 2 — Fournisseur */}
       <section className="bg-vanilla/30 rounded-2xl p-4 border border-gold/15">
         <h3 className="font-display font-semibold text-text-primary mb-3 flex items-center gap-2 text-sm">
-          <Truck size={16} className="text-gold" /> 2. Fournisseur &amp; date
+          <Truck size={16} className="text-gold" /> 2. Fournisseur, date &amp; livraison
         </h3>
         <div className="flex flex-wrap gap-2">
           <div className="relative flex-1 min-w-[220px]">
@@ -297,6 +301,31 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
             <Check size={15} /> {suppliers.find((s) => s.id === supplierId)?.name}
           </p>
         )}
+
+        {/* Bon de livraison & camion — facultatifs, saisis tels qu'ils figurent sur le bon papier */}
+        <div className="mt-4 pt-4 border-t border-gold/10">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-text-muted mb-2.5 flex items-center gap-1.5">
+            <FileText size={12} className="text-gold" /> Bon de livraison &amp; camion
+            <span className="normal-case tracking-normal font-medium text-text-muted/70">(facultatif)</span>
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <Input
+              label="N° du bon"
+              icon={<FileText size={16} />}
+              value={bonNumber}
+              onChange={(e) => setBonNumber(e.target.value)}
+              placeholder="Ex : BL-2026-0142"
+            />
+            <Input
+              label="Matricule du chauffeur"
+              icon={<CarFront size={16} />}
+              value={driverPlate}
+              onChange={(e) => setDriverPlate(e.target.value.toUpperCase())}
+              placeholder="Ex : 09876-114-09"
+              className="uppercase tabular"
+            />
+          </div>
+        </div>
       </section>
 
       {/* 3 — Paiement */}

@@ -46,6 +46,8 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
         rpc.createPurchase({
           supplier_id: p.supplierId,
           date: purDate,
+          driver_plate: p.driverPlate?.trim() || null,
+          bon_number: p.bonNumber?.trim() || null,
           total_amount: total,
           paid_amount: paid,
           products: p.products.map((l) => ({

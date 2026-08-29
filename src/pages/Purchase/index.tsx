@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ShoppingCart, Plus, Eye, Wallet, Printer, Trash2, Calendar, Folder, DollarSign, TrendingDown, CheckCircle2 } from 'lucide-react';
+import { ShoppingCart, Plus, Eye, Wallet, Printer, Trash2, Calendar, Folder, DollarSign, TrendingDown, CheckCircle2, FileText, CarFront } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Select } from '@/components/ui/Select';
@@ -46,7 +46,12 @@ export default function PurchasePage() {
 
   const filtered = useMemo(() => {
     return purchases.filter((p) => {
-      const matchSearch = supplierName(p.supplierId).toLowerCase().includes(search.toLowerCase()) || p.reference.toLowerCase().includes(search.toLowerCase());
+      const q = search.toLowerCase();
+      const matchSearch =
+        supplierName(p.supplierId).toLowerCase().includes(q) ||
+        p.reference.toLowerCase().includes(q) ||
+        (p.bonNumber || '').toLowerCase().includes(q) ||
+        (p.driverPlate || '').toLowerCase().includes(q);
       
       const matchDate = dateFilter === 'period'
         ? isWithinRange(p.date, startDate, endDate)
@@ -87,6 +92,7 @@ export default function PurchasePage() {
     printInvoice({
       type: 'purchase', reference: p.reference, date: p.date,
       partyName: sup?.name || '—', partyPhone: sup?.phone, partyAddress: sup?.address,
+      bonNumber: p.bonNumber, driverPlate: p.driverPlate,
       lines: p.products.map((l) => ({ designation: l.productName || '', quantity: l.quantity, unitPrice: l.purchasePrice })),
       total: p.totalAmount, paid: p.paidAmount, rest: p.restAmount,
     }, settings);
@@ -134,7 +140,7 @@ export default function PurchasePage() {
       {/* Filters bar */}
       <div className="flex flex-wrap items-center gap-3 mb-6 bg-vanilla/20 p-4 rounded-2xl border border-gold/10">
         <div className="flex-1 min-w-[200px]">
-          <SearchBar value={search} onChange={setSearch} placeholder={`${t('search')} ${t('supplier')} ou Réf.`} />
+          <SearchBar value={search} onChange={setSearch} placeholder={`${t('search')} ${t('supplier')}, Réf., n° de bon ou matricule`} />
         </div>
         
         {/* Unit filtering */}
@@ -198,6 +204,17 @@ export default function PurchasePage() {
                 </div>
                 <p className="text-sm font-semibold text-text-secondary mb-1">{supplierName(p.supplierId)}</p>
                 <p className="text-xs text-text-muted mb-2">{p.products.length} article(s)</p>
+
+                {(p.bonNumber || p.driverPlate) && (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2 text-[11px] text-text-secondary">
+                    {p.bonNumber && (
+                      <span className="flex items-center gap-1"><FileText size={11} className="text-gold" /> Bon <span className="font-semibold tabular">{p.bonNumber}</span></span>
+                    )}
+                    {p.driverPlate && (
+                      <span className="flex items-center gap-1"><CarFront size={11} className="text-gold" /> <span className="font-semibold tabular">{p.driverPlate}</span></span>
+                    )}
+                  </div>
+                )}
                 
                 {/* Categories Badge Display */}
                 {cats.length > 0 && (
@@ -256,6 +273,16 @@ export default function PurchasePage() {
         {viewing && (
           <div className="space-y-4">
             <p className="text-sm text-text-secondary">{supplierName(viewing.supplierId)} — {formatDate(viewing.date, language)}</p>
+            {(viewing.bonNumber || viewing.driverPlate) && (
+              <div className="flex flex-wrap gap-2">
+                {viewing.bonNumber && (
+                  <Badge variant="info" className="bg-gold/10 text-gold-dark border-0"><FileText size={12} /> Bon n° {viewing.bonNumber}</Badge>
+                )}
+                {viewing.driverPlate && (
+                  <Badge variant="info" className="bg-gold/10 text-gold-dark border-0"><CarFront size={12} /> Matricule {viewing.driverPlate}</Badge>
+                )}
+              </div>
+            )}
             {viewing.createdBy && <p className="text-xs text-text-muted">{t('createdBy')}: {viewing.createdBy}</p>}
             <table className="w-full text-sm">
               <thead className="bg-vanilla/60"><tr><th className="text-left px-3 py-2">{t('name')}</th><th className="text-right px-3 py-2">{t('quantity')}</th><th className="text-right px-3 py-2">P.U.</th><th className="text-right px-3 py-2">Total</th></tr></thead>
