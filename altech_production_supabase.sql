@@ -1402,6 +1402,57 @@ end;
 $$;
 
 -- ------------------------------------------------------------ /production ----
+-- `fiche_technics.category_id` references `fiche_categories` while
+-- `productions.category_id` references `production_categories`: a production
+-- started from a fiche technique (Production screen or point of sale) carries
+-- the wrong id. It is translated here — same name reused, created on the fly
+-- when missing — otherwise only the label is kept.
+create or replace function public.resolve_production_category(
+  p_category_id uuid, p_category_name text default null
+) returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_id   uuid;
+  v_name text;
+begin
+  if p_category_id is not null then
+    select id into v_id from public.production_categories where id = p_category_id;
+    if v_id is not null then
+      return v_id;
+    end if;
+  end if;
+
+  v_name := nullif(btrim(coalesce(p_category_name, '')), '');
+  if v_name is null and p_category_id is not null then
+    select name into v_name from public.fiche_categories where id = p_category_id;
+  end if;
+  if v_name is null and p_category_id is not null then
+    select name into v_name from public.categories where id = p_category_id;
+  end if;
+  if v_name is null then
+    return null;
+  end if;
+
+  select id into v_id
+    from public.production_categories
+   where lower(btrim(name)) = lower(v_name)
+   limit 1;
+  if v_id is not null then
+    return v_id;
+  end if;
+
+  insert into public.production_categories (name)
+  values (v_name)
+  on conflict (name) do update set name = excluded.name
+  returning id into v_id;
+
+  return v_id;
+end;
+$$;
+
 -- Button "Lancer la production" — consumes ingredients from the stock
 create or replace function public.create_production(p_payload jsonb)
 returns public.productions
@@ -1410,16 +1461,25 @@ security definer
 set search_path = public
 as $$
 declare
-  v_prod  public.productions;
-  v_line  jsonb;
-  v_cost  numeric := 0;
-  v_out   numeric := coalesce((p_payload ->> 'output_quantity')::numeric, 0);
-  v_price numeric := coalesce((p_payload ->> 'unit_price')::numeric, 0);
+  v_prod     public.productions;
+  v_line     jsonb;
+  v_cost     numeric := 0;
+  v_out      numeric := coalesce((p_payload ->> 'output_quantity')::numeric, 0);
+  v_price    numeric := coalesce((p_payload ->> 'unit_price')::numeric, 0);
+  v_cat      uuid;
+  v_cat_name text;
 begin
   for v_line in select * from jsonb_array_elements(coalesce(p_payload -> 'used_products', '[]'::jsonb)) loop
     v_cost := v_cost + coalesce((v_line ->> 'line_cost')::numeric,
                 coalesce((v_line ->> 'quantity_used')::numeric, 0) * coalesce((v_line ->> 'unit_cost')::numeric, 0));
   end loop;
+
+  v_cat := public.resolve_production_category(
+             nullif(p_payload ->> 'category_id', '')::uuid,
+             p_payload ->> 'category_name');
+  v_cat_name := coalesce(
+    nullif(btrim(coalesce(p_payload ->> 'category_name', '')), ''),
+    (select name from public.production_categories where id = v_cat));
 
   insert into public.productions (name, description, date, hour, category_id, category_name,
                                   fiche_technic_id, total_cost, output_quantity, unit_price,
@@ -1430,8 +1490,8 @@ begin
           coalesce(p_payload ->> 'description', ''),
           coalesce((p_payload ->> 'date')::date, current_date),
           coalesce(p_payload ->> 'hour', to_char(now(), 'HH24:MI')),
-          nullif(p_payload ->> 'category_id', '')::uuid,
-          p_payload ->> 'category_name',
+          v_cat,
+          v_cat_name,
           nullif(p_payload ->> 'fiche_technic_id', '')::uuid,
           v_cost, v_out, v_price, v_out * v_price,
           coalesce((p_payload ->> 'sell_by_unit')::boolean, false),
