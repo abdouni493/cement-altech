@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import {
   FlaskConical, Plus, Eye, Trash2, Search, X, Clock, User, Pencil, FileText,
   BookOpen, AlertTriangle, Printer, Factory, Coins, TrendingUp, PackageCheck,
+  CreditCard, Receipt,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -82,6 +83,8 @@ export default function ProductionPage() {
   const [activeTab, setActiveTab] = useState<'productions' | 'fiche_technics'>('productions');
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
+  // manuelle (écran Production) ou lancée depuis le point de vente
+  const [originFilter, setOriginFilter] = useState<'all' | 'manual' | 'pos'>('all');
   
   // Production Modals
   const [prodCreateOpen, setProdCreateOpen] = useState(false);
@@ -97,8 +100,20 @@ export default function ProductionPage() {
 
   // Filter productions
   const filteredProductions = useMemo(
-    () => productions.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()) && matchesDateFilter(p.date, dateFilter)),
-    [productions, search, dateFilter]
+    () =>
+      productions.filter(
+        (p) =>
+          (p.name.toLowerCase().includes(search.toLowerCase()) ||
+            (p.saleReference || '').toLowerCase().includes(search.toLowerCase())) &&
+          matchesDateFilter(p.date, dateFilter) &&
+          (originFilter === 'all' || (p.origin ?? 'manual') === originFilter)
+      ),
+    [productions, search, dateFilter, originFilter]
+  );
+
+  const posCount = useMemo(
+    () => productions.filter((p) => p.origin === 'pos').length,
+    [productions]
   );
 
   // Filter Fiche Technics
@@ -171,6 +186,16 @@ export default function ProductionPage() {
             <div className="flex-1 min-w-[200px]"><SearchBar value={search} onChange={setSearch} placeholder={t('search')} /></div>
             <Select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as DateFilter)}
               options={[{ value: 'all', label: t('all') }, { value: 'today', label: t('today') }, { value: 'week', label: t('week') }, { value: 'month', label: t('month') }]} className="max-w-[180px]" />
+            <Select
+              value={originFilter}
+              onChange={(e) => setOriginFilter(e.target.value as 'all' | 'manual' | 'pos')}
+              options={[
+                { value: 'all', label: 'Toutes les origines' },
+                { value: 'manual', label: 'Lancées manuellement' },
+                { value: 'pos', label: `Issues du point de vente (${posCount})` },
+              ]}
+              className="max-w-[240px]"
+            />
           </div>
 
           {filteredProductions.length === 0 ? <EmptyState message={t('noData')} /> : (
@@ -193,6 +218,9 @@ export default function ProductionPage() {
                       </p>
                     </div>
                     <div className="flex flex-col items-end gap-1 shrink-0">
+                      {p.origin === 'pos' && (
+                        <Badge variant="success" className="gap-1"><CreditCard size={10} /> Point de vente</Badge>
+                      )}
                       {p.categoryName && <Badge variant="info">{p.categoryName}</Badge>}
                       {p.hasLoss && (
                         <motion.div animate={{ opacity: [1, 0.6, 1] }} transition={{ duration: 2, repeat: Infinity }}>
@@ -266,6 +294,12 @@ export default function ProductionPage() {
                         {formatCurrency(p.totalValue - (p.totalCost ?? 0))}
                       </span>
                     </div>
+
+                    {p.saleReference && (
+                      <p className="text-[10px] text-pistachio flex items-center gap-1 mb-1.5 font-semibold">
+                        <Receipt size={10} /> Produite pour la vente {p.saleReference}
+                      </p>
+                    )}
 
                     {p.createdBy && (
                       <p className="text-[10px] text-text-muted flex items-center gap-1 mb-3">
@@ -391,6 +425,12 @@ export default function ProductionPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   {prodViewing.categoryName && <Badge variant="info">{prodViewing.categoryName}</Badge>}
                   {prodViewing.sellByUnit && prodViewing.sellUnit && <Badge variant="warning">{t('sellUnit')}: {prodViewing.sellUnit}</Badge>}
+                  {prodViewing.origin === 'pos' && (
+                    <Badge variant="success" className="gap-1">
+                      <CreditCard size={10} /> Lancée depuis le point de vente
+                      {prodViewing.saleReference ? ` · ${prodViewing.saleReference}` : ''}
+                    </Badge>
+                  )}
                 </div>
               </div>
               {prodViewing.description && <p className="text-sm text-text-secondary bg-vanilla/20 p-2.5 rounded-xl border border-gold/5 italic">« {prodViewing.description} »</p>}

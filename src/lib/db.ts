@@ -300,6 +300,9 @@ const toProduction = (r: any): Production => ({
   lossQuantity: num(r.loss_quantity),
   lossDescription: r.loss_description ?? undefined,
   lossValue: num(r.loss_value),
+  origin: (r.origin === 'pos' ? 'pos' : 'manual') as 'manual' | 'pos',
+  saleId: r.sale_id ?? undefined,
+  saleReference: r.sale_reference ?? undefined,
   createdBy: r.created_by ?? undefined,
   usedProducts: (r.production_used_products ?? []).map((u: any) => ({
     productId: u.product_id ?? '',
@@ -732,11 +735,20 @@ export const db = {
 export const rpc = {
   // /purchase
   createPurchase: (payload: Record<string, any>) => call<any>('create_purchase', { p_payload: payload }),
+  /** Modifier l'en-tête d'une facture d'achat (date, bon, matricule, payé). */
+  updatePurchase: (id: string, payload: Record<string, any>) =>
+    call<any>('update_purchase', { p_id: id, p_payload: payload }),
   paySupplierDebt: (purchaseId: string, amount: number, date?: string) =>
     call<any>('pay_supplier_debt', { p_purchase_id: purchaseId, p_amount: amount, p_date: date ?? null }),
 
   // /pos & /sales
   createSale: (payload: Record<string, any>) => call<any>('create_sale', { p_payload: payload }),
+  /** POS : lance les productions du panier, les met au comptoir et crée la vente. */
+  createSaleWithProductions: (payload: Record<string, any>) =>
+    call<any>('create_sale_with_productions', { p_payload: payload }),
+  /** Modifier l'en-tête commercial d'une vente (date, réduction, montant payé). */
+  updateSale: (id: string, payload: Record<string, any>) =>
+    call<any>('update_sale', { p_id: id, p_payload: payload }),
   paySaleDebt: (saleId: string, amount: number, date?: string) =>
     call<any>('pay_sale_debt', { p_sale_id: saleId, p_amount: amount, p_date: date ?? null }),
 

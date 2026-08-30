@@ -17,7 +17,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime, matchesDateFilter, type DateFilter } from '@/lib/utils';
-import { printInvoice } from '@/lib/print';
+import { printSaleInvoice } from '@/lib/invoicePrint';
 import { toast } from '@/components/ui/Toast';
 import type { Sale } from '@/types';
 
@@ -48,11 +48,16 @@ export default function SalesPage() {
 
   const handlePrint = (s: Sale) => {
     const cl = clients.find((c) => c.id === s.clientId);
-    printInvoice({
-      type: 'sale', reference: s.reference, date: s.date,
-      partyName: cl?.name || t('walkIn'), partyPhone: cl?.phone,
-      lines: s.products.map((l) => ({ designation: l.productName || '', quantity: l.quantity, unitPrice: l.sellingPrice })),
-      total: s.totalAmount, reduction: s.reduction, final: s.finalAmount, paid: s.paidAmount, rest: s.restAmount,
+    printSaleInvoice({
+      reference: s.reference,
+      date: s.date,
+      client: { name: cl?.name || t('walkIn'), phone: cl?.phone, address: cl?.address },
+      lines: s.products.map((l) => ({
+        designation: l.productName || '', quantity: l.quantity, unit: l.unit,
+        unitPrice: l.sellingPrice, basePrice: l.basePrice,
+      })),
+      total: s.totalAmount, reduction: s.reduction, final: s.finalAmount,
+      paid: s.paidAmount, rest: s.restAmount, createdBy: s.createdBy,
     }, settings);
   };
 

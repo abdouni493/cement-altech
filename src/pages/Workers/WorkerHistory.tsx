@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react';
-import { Banknote, Clock, Wallet, CalendarX, Printer, Coins, TrendingDown } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Banknote, Clock, Wallet, CalendarX, Printer, Coins, TrendingDown, FileBarChart,
+} from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -7,19 +9,26 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { printOvertimeReceipt } from '@/lib/documents';
+import { WorkerReport } from './WorkerReport';
 import type { Worker } from '@/types';
 
 const pad = (n: number) => String(n).padStart(2, '0');
-type Tab = 'payments' | 'overtime' | 'acomptes' | 'absences';
+export type WorkerHistoryTab = 'payments' | 'overtime' | 'acomptes' | 'absences' | 'report';
+type Tab = WorkerHistoryTab;
 
 /**
  * Historique complet d'un employé : paiements de salaire, heures
  * supplémentaires (payées ou non), acomptes et absences.
  */
-export function WorkerHistory({ worker, roleName }: { worker: Worker; roleName?: string }) {
+export function WorkerHistory({ worker, roleName, initialTab = 'payments' }: {
+  worker: Worker; roleName?: string; initialTab?: WorkerHistoryTab;
+}) {
   const { language } = useLanguage();
   const settings = useSettingsStore((s) => s.settings);
-  const [tab, setTab] = useState<Tab>('payments');
+  const [tab, setTab] = useState<Tab>(initialTab);
+
+  // reopening the modal on another tab (e.g. the "Rapport" card button)
+  useEffect(() => setTab(initialTab), [initialTab, worker.id]);
 
   const payments = useMemo(
     () => [...worker.payments].sort((a, b) => b.date.localeCompare(a.date)),
@@ -100,6 +109,7 @@ export function WorkerHistory({ worker, roleName }: { worker: Worker; roleName?:
           ['overtime', `Heures sup. (${overtimes.length})`],
           ['acomptes', `Acomptes (${acomptes.length})`],
           ['absences', `Absences (${absences.length})`],
+          ['report', 'Rapport de période'],
         ] as const).map(([key, label]) => (
           <button
             key={key}
@@ -170,6 +180,8 @@ export function WorkerHistory({ worker, roleName }: { worker: Worker; roleName?:
           />
         )
       )}
+
+      {tab === 'report' && <WorkerReport worker={worker} roleName={roleName} />}
 
       {tab === 'absences' && (
         absences.length === 0 ? (

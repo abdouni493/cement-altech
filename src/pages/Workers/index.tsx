@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import {
   HardHat, Plus, Eye, Pencil, Shield, Wallet, CalendarX, Banknote, Trash2,
   Phone, Calendar, Clock, History, KeyRound, AlertTriangle, Users, Coins,
+  FileBarChart,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -20,7 +21,7 @@ import { WorkerAcompte } from './WorkerAcompte';
 import { WorkerAbsence } from './WorkerAbsence';
 import { WorkerPayment } from './WorkerPayment';
 import { WorkerOvertime } from './WorkerOvertime';
-import { WorkerHistory } from './WorkerHistory';
+import { WorkerHistory, type WorkerHistoryTab } from './WorkerHistory';
 import { useWorkerStore } from '@/store/workerStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -43,6 +44,7 @@ export default function WorkersPage() {
   const [filter, setFilter] = useState<WorkerFilter>('all');
   const [modal, setModal] = useState<ModalType>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [historyTab, setHistoryTab] = useState<WorkerHistoryTab>('payments');
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   // always read the live row so a modal reflects what the database returned
@@ -77,7 +79,11 @@ export default function WorkersPage() {
     return { count: workers.length, monthly, unpaidOvertime, acomptes };
   }, [workers]);
 
-  const open = (type: ModalType, worker?: Worker) => { setActiveId(worker?.id ?? null); setModal(type); };
+  const open = (type: ModalType, worker?: Worker, tab: WorkerHistoryTab = 'payments') => {
+    setActiveId(worker?.id ?? null);
+    setHistoryTab(tab);
+    setModal(type);
+  };
   const close = () => { setModal(null); setActiveId(null); };
 
   return (
@@ -179,6 +185,7 @@ export default function WorkersPage() {
                   <div className="grid grid-cols-3 gap-1.5 mt-auto">
                     <ActionBtn icon={<Eye size={13} />} label="Fiche" onClick={() => open('view', w)} />
                     <ActionBtn icon={<History size={13} />} label="Historique" onClick={() => open('history', w)} />
+                    <ActionBtn icon={<FileBarChart size={13} />} label="Rapport" onClick={() => open('history', w, 'report')} />
                     <ActionBtn
                       icon={<Clock size={13} />} label="Heures sup." highlight={ot.count > 0}
                       onClick={() => open('overtime', w)}
@@ -234,7 +241,7 @@ export default function WorkersPage() {
       </Modal>
 
       <Modal open={modal === 'history'} onClose={close} title={`Historique — ${active?.fullName ?? ''}`} size="lg">
-        {active && <WorkerHistory worker={active} roleName={roleName(active.roleId)} />}
+        {active && <WorkerHistory worker={active} roleName={roleName(active.roleId)} initialTab={historyTab} />}
       </Modal>
 
       {/* Fiche */}
@@ -262,9 +269,14 @@ export default function WorkersPage() {
               <Detail label="Paiements" value={String(active.payments.length)} />
               <Detail label="Heures sup." value={String((active.overtimes ?? []).length)} />
             </div>
-            <Button variant="gold" className="w-full" onClick={() => setModal('history')}>
-              <History size={16} /> Voir l'historique complet
-            </Button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <Button variant="secondary" onClick={() => { setHistoryTab('payments'); setModal('history'); }}>
+                <History size={16} /> Historique complet
+              </Button>
+              <Button variant="gold" onClick={() => { setHistoryTab('report'); setModal('history'); }}>
+                <FileBarChart size={16} /> Créer un rapport
+              </Button>
+            </div>
           </div>
         )}
       </Modal>

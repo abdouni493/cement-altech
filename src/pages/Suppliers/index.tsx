@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Truck, Plus, Pencil, Trash2, Phone, MapPin, Wallet, History, Printer,
-  CheckCircle2, AlertTriangle, Receipt, TrendingDown, Coins,
+  CheckCircle2, AlertTriangle, Receipt, TrendingDown, Coins, FileBarChart, Eye,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -17,14 +17,17 @@ import { StatCard } from '@/components/shared/StatCard';
 import { SupplierForm } from '@/components/shared/SupplierForm';
 import { PayDebtModal } from '@/components/shared/PayDebtModal';
 import { EditPaymentModal } from '@/components/shared/EditPaymentModal';
+import { EditPurchaseModal } from '@/components/shared/EditPurchaseModal';
+import { SupplierStatementModal } from '@/components/shared/SupplierStatementModal';
 import { useSupplierStore } from '@/store/supplierStore';
 import { usePurchaseStore } from '@/store/purchaseStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 import { printPaymentReceipt } from '@/lib/documents';
+import { printInvoice } from '@/lib/print';
 import { toast } from '@/components/ui/Toast';
-import type { Supplier, PartyPayment } from '@/types';
+import type { Supplier, PartyPayment, Purchase } from '@/types';
 
 type SupplierFilter = 'all' | 'debt' | 'clear';
 
@@ -32,7 +35,7 @@ export default function SuppliersPage() {
   const { can } = usePermissions();
   const { suppliers, payments, addSupplier, updateSupplier, deleteSupplier, payDebt, updatePayment, deletePayment } =
     useSupplierStore();
-  const purchases = usePurchaseStore((s) => s.purchases);
+  const { purchases, updatePurchase, deletePurchase } = usePurchaseStore();
   const settings = useSettingsStore((s) => s.settings);
 
   const [search, setSearch] = useState('');
@@ -45,6 +48,10 @@ export default function SuppliersPage() {
   const [editPayment, setEditPayment] = useState<PartyPayment | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deletePaymentId, setDeletePaymentId] = useState<string | null>(null);
+  const [viewPurchase, setViewPurchase] = useState<Purchase | null>(null);
+  const [editPurchase, setEditPurchase] = useState<Purchase | null>(null);
+  const [deletePurchaseId, setDeletePurchaseId] = useState<string | null>(null);
+  const [statement, setStatement] = useState<Supplier | null>(null);
   const [printPrompt, setPrintPrompt] = useState<{ supplier: Supplier; payment: PartyPayment } | null>(null);
 
   /** Debt situation of a supplier, computed from its invoices. */
@@ -119,6 +126,22 @@ export default function SuppliersPage() {
         totalDebt: st.total,
         totalPaid: st.paid,
         restAmount: st.rest,
+      },
+      settings
+    );
+  };
+
+  /** Facture d'achat imprimée depuis l'historique du fournisseur. */
+  const doPrintPurchase = (purchase: Purchase, supplier: Supplier) => {
+    printInvoice(
+      {
+        type: 'purchase', reference: purchase.reference, date: purchase.date,
+        partyName: supplier.name, partyPhone: supplier.phone, partyAddress: supplier.address,
+        bonNumber: purchase.bonNumber, driverPlate: purchase.driverPlate,
+        lines: purchase.products.map((l) => ({
+          designation: l.productName || '', quantity: l.quantity, unitPrice: l.purchasePrice,
+        })),
+        total: purchase.totalAmount, paid: purchase.paidAmount, rest: purchase.restAmount,
       },
       settings
     );
@@ -241,21 +264,30 @@ export default function SuppliersPage() {
                         <Wallet size={16} /> {hasDebt ? `Payer la dette (${formatCurrency(st.rest)})` : 'Aucune dette'}
                       </Button>
                     )}
-                    <div className="flex gap-1.5">
+                    <div className="grid grid-cols-2 gap-1.5">
                       <Button
-                        size="sm" variant="secondary" className="flex-1 text-xs"
+                        size="sm" variant="secondary" className="text-xs"
                         onClick={() => { setHistory(s); setHistoryTab('payments'); }}
                       >
                         <History size={14} /> Historique
                       </Button>
+                      <Button
+                        size="sm" variant="secondary" className="text-xs"
+                        onClick={() => setStatement(s)}
+                        title="Compte rendu sur une periode"
+                      >
+                        <FileBarChart size={14} /> Compte rendu
+                      </Button>
+                    </div>
+                    <div className="flex gap-1.5">
                       {can('suppliers', 'edit') && (
-                        <Button size="sm" variant="ghost" onClick={() => { setEditing(s); setFormOpen(true); }} title="Modifier">
-                          <Pencil size={14} />
+                        <Button size="sm" variant="ghost" className="flex-1 text-xs" onClick={() => { setEditing(s); setFormOpen(true); }}>
+                          <Pencil size={14} /> Modifier
                         </Button>
                       )}
                       {can('suppliers', 'delete') && (
-                        <Button size="sm" variant="ghost" onClick={() => setDeleteId(s.id)} title="Supprimer">
-                          <Trash2 size={14} className="text-rose-deep" />
+                        <Button size="sm" variant="ghost" className="flex-1 text-xs" onClick={() => setDeleteId(s.id)}>
+                          <Trash2 size={14} className="text-rose-deep" /> Supprimer
                         </Button>
                       )}
                     </div>
@@ -360,17 +392,41 @@ export default function SuppliersPage() {
                         <th className="text-right px-3 py-2">Total</th>
                         <th className="text-right px-3 py-2">Payé</th>
                         <th className="text-right px-3 py-2">Reste</th>
+                        <th className="text-center px-3 py-2">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {st.list.map((p) => (
                         <tr key={p.id} className="border-t border-gold/10">
-                          <td className="px-3 py-2 font-medium">{p.reference}</td>
+                          <td className="px-3 py-2 font-medium">
+                            {p.reference}
+                            {p.bonNumber && <span className="block text-[10px] text-text-muted">Bon {p.bonNumber}</span>}
+                          </td>
                           <td className="px-3 py-2 text-xs">{formatDate(p.date)}</td>
                           <td className="px-3 py-2 text-right tabular">{p.products.length}</td>
                           <td className="px-3 py-2 text-right tabular">{formatCurrency(p.totalAmount)}</td>
                           <td className="px-3 py-2 text-right tabular text-pistachio">{formatCurrency(p.paidAmount)}</td>
                           <td className="px-3 py-2 text-right tabular text-rose-deep">{formatCurrency(p.restAmount)}</td>
+                          <td className="px-3 py-2">
+                            <div className="flex items-center justify-center gap-1">
+                              <Button size="icon" variant="ghost" title="Voir les details" onClick={() => setViewPurchase(p)}>
+                                <Eye size={15} />
+                              </Button>
+                              <Button size="icon" variant="ghost" title="Imprimer la facture" onClick={() => doPrintPurchase(p, history)}>
+                                <Printer size={15} />
+                              </Button>
+                              {can('suppliers', 'edit') && (
+                                <Button size="icon" variant="ghost" title="Modifier la facture" onClick={() => setEditPurchase(p)}>
+                                  <Pencil size={15} />
+                                </Button>
+                              )}
+                              {can('suppliers', 'delete') && (
+                                <Button size="icon" variant="ghost" title="Supprimer la facture" onClick={() => setDeletePurchaseId(p.id)}>
+                                  <Trash2 size={15} className="text-rose-deep" />
+                                </Button>
+                              )}
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -398,6 +454,72 @@ export default function SuppliersPage() {
           />
         );
       })()}
+
+      {/* ---- Purchase invoice detail ---- */}
+      <Modal
+        open={!!viewPurchase}
+        onClose={() => setViewPurchase(null)}
+        title={`Facture ${viewPurchase?.reference ?? ''}`}
+        size="md"
+      >
+        {viewPurchase && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-text-secondary">
+              <span>{formatDate(viewPurchase.date)}</span>
+              {viewPurchase.bonNumber && <Badge variant="info">Bon n° {viewPurchase.bonNumber}</Badge>}
+              {viewPurchase.driverPlate && <Badge variant="warning">Matricule {viewPurchase.driverPlate}</Badge>}
+              {viewPurchase.createdBy && <span className="text-xs text-text-muted">par {viewPurchase.createdBy}</span>}
+            </div>
+            <div className="overflow-x-auto rounded-xl border border-gold/15">
+              <table className="w-full text-sm">
+                <thead className="bg-vanilla/60 text-text-secondary">
+                  <tr>
+                    <th className="text-left px-3 py-2">Produit</th>
+                    <th className="text-right px-3 py-2">Qté</th>
+                    <th className="text-right px-3 py-2">Prix d&rsquo;achat</th>
+                    <th className="text-right px-3 py-2">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {viewPurchase.products.map((l, i) => (
+                    <tr key={i} className="border-t border-gold/10">
+                      <td className="px-3 py-2 font-medium">{l.productName}</td>
+                      <td className="px-3 py-2 text-right tabular">{l.quantity}{l.unit ? ` ${l.unit}` : ''}</td>
+                      <td className="px-3 py-2 text-right tabular">{formatCurrency(l.purchasePrice)}</td>
+                      <td className="px-3 py-2 text-right tabular">{formatCurrency(l.quantity * l.purchasePrice)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <Tile label="Total" value={formatCurrency(viewPurchase.totalAmount)} />
+              <Tile label="Payé" value={formatCurrency(viewPurchase.paidAmount)} color="text-pistachio" />
+              <Tile label="Reste" value={formatCurrency(viewPurchase.restAmount)} color="text-rose-deep" />
+            </div>
+            {history && (
+              <Button variant="gold" className="w-full" onClick={() => doPrintPurchase(viewPurchase, history)}>
+                <Printer size={16} /> Imprimer la facture
+              </Button>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* ---- Edit a purchase invoice ---- */}
+      <EditPurchaseModal
+        purchase={editPurchase}
+        onClose={() => setEditPurchase(null)}
+        onSave={async (data) => {
+          if (!editPurchase) return;
+          await updatePurchase(editPurchase.id, data);
+          toast.success('Facture modifiée');
+          setEditPurchase(null);
+        }}
+      />
+
+      {/* ---- Période : compte rendu détaillé ---- */}
+      <SupplierStatementModal supplier={statement} onClose={() => setStatement(null)} />
 
       {/* ---- Edit an existing payment ---- */}
       <EditPaymentModal
@@ -442,6 +564,15 @@ export default function SuppliersPage() {
         onClose={() => setDeleteId(null)}
         onConfirm={() => { if (deleteId) void deleteSupplier(deleteId).then(() => toast.success('Fournisseur supprimé')); }}
         title="Supprimer le fournisseur"
+      />
+      <ConfirmDialog
+        open={!!deletePurchaseId}
+        onClose={() => setDeletePurchaseId(null)}
+        onConfirm={() => {
+          if (deletePurchaseId) void deletePurchase(deletePurchaseId).then(() => { setViewPurchase(null); toast.success('Facture supprimée'); });
+        }}
+        title="Supprimer la facture fournisseur"
+        message="La facture, ses lignes et sa sortie de caisse seront supprimées."
       />
       <ConfirmDialog
         open={!!deletePaymentId}

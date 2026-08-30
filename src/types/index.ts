@@ -199,6 +199,12 @@ export interface Production {
   sellUnit?: string;
   createdBy?: string;
   sentToComptoir?: number; // quantity of this production sent to the comptoir
+  // Where the batch comes from:
+  //  - 'manual' (default): launched from the Production screen
+  //  - 'pos': launched automatically when the cashier sold a fiche technique
+  origin?: 'manual' | 'pos';
+  saleId?: string;         // the POS sale that triggered this production
+  saleReference?: string;  // its human reference (VNT-YYYY-000)
   // ---------- Perte (production loss) ----------
   // When enabled, the fiche technique predicts `expectedQuantity` but the batch
   // only yielded `outputQuantity` (the real quantity). The difference is a loss.

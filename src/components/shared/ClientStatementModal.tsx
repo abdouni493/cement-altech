@@ -1,0 +1,372 @@
+import { useMemo, useState } from 'react';
+import {
+  FileBarChart, Printer, ShoppingBag, Coins, ClipboardList, Wallet, RotateCcw,
+} from 'lucide-react';
+import { Modal } from '@/components/ui/Modal';
+import { Button } from '@/components/ui/Button';
+import { Badge } from '@/components/ui/Badge';
+import { PeriodPicker, ReportKpis, ReportSection, firstDayOfMonth, inPeriod } from './PeriodReport';
+import { useSalesStore } from '@/store/salesStore';
+import { useClientStore } from '@/store/clientStore';
+import { useCommandStore, deliveryStatus } from '@/store/commandStore';
+import { useClientDebtStore } from '@/store/clientDebtStore';
+import { useSettingsStore } from '@/store/settingsStore';
+import { useLanguage } from '@/hooks/useLanguage';
+import { formatCurrency, formatDate, formatDateTime, todayISO } from '@/lib/utils';
+import { printDetailedReport, type PrintRow, type PrintTableSection } from '@/lib/reportPrint';
+import type { Client } from '@/types';
+
+/**
+ * Compte rendu d'un client sur une période : ventes, commandes, règlements
+ * de dette et versements de dettes manuelles — affiché à l'écran puis
+ * imprimable sur le modèle professionnel de l'entreprise.
+ */
+export function ClientStatementModal({ client, onClose }: { client: Client | null; onClose: () => void }) {
+  const { language } = useLanguage();
+  const sales = useSalesStore((s) => s.sales);
+  const payments = useClientStore((s) => s.payments);
+  const commands = useCommandStore((s) => s.commands);
+  const debts = useClientDebtStore((s) => s.debts);
+  const settings = useSettingsStore((s) => s.settings);
+
+  const [from, setFrom] = useState(firstDayOfMonth());
+  const [to, setTo] = useState(todayISO());
+  const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
+
+  const data = useMemo(() => {
+    if (!client || !period) return null;
+    const { from: f, to: t } = period;
+
+    const salesList = sales
+      .filter((s) => s.clientId === client.id && inPeriod(s.date, f, t))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const commandsList = commands
+      .filter((c) => c.clientId === client.id && inPeriod(c.createdAt, f, t))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+    const paymentsList = payments
+      .filter((p) => p.partyId === client.id && inPeriod(p.paidAt, f, t))
+      .sort((a, b) => a.paidAt.localeCompare(b.paidAt));
+
+    const versements = debts
+      .filter((d) => d.clientId === client.id)
+      .flatMap((d) =>
+        (d.versements ?? [])
+          .filter((v) => inPeriod(v.date || v.createdAt, f, t))
+          .map((v) => ({ ...v, debtDescription: d.description }))
+      )
+      .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+    const salesTotal = salesList.reduce((s, x) => s + x.finalAmount, 0);
+    const salesPaid = salesList.reduce((s, x) => s + x.paidAmount, 0);
+    const salesRest = salesList.reduce((s, x) => s + x.restAmount, 0);
+    const commandsTotal = commandsList.reduce((s, x) => s + x.totalAmount, 0);
+    const commandsPaid = commandsList.reduce((s, x) => s + x.paidAmount, 0);
+    const commandsRest = commandsList.reduce((s, x) => s + x.restAmount, 0);
+    const settled = paymentsList.reduce((s, x) => s + x.amount, 0);
+    const versed = versements.reduce((s, x) => s + x.amount, 0);
+    const articles = salesList.reduce((s, x) => s + x.products.length, 0);
+
+    return {
+      salesList, commandsList, paymentsList, versements,
+      salesTotal, salesPaid, salesRest,
+      commandsTotal, commandsPaid, commandsRest,
+      settled, versed, articles,
+      billed: salesTotal + commandsTotal,
+      collected: salesPaid + commandsPaid + settled + versed,
+      outstanding: salesRest + commandsRest,
+    };
+  }, [client, period, sales, commands, payments, debts]);
+
+  const periodLabel = period
+    ? `Du ${formatDate(period.from, language)} au ${formatDate(period.to, language)}`
+    : '';
+
+  const doPrint = () => {
+    if (!client || !data || !period) return;
+
+    const salesSection: PrintTableSection = {
+      title: 'Ventes de la période',
+      icon: '🧾',
+      headerTotal: formatCurrency(data.salesTotal),
+      cols: [
+        { label: 'N° facture' }, { label: 'Date' }, { label: 'Articles', align: 'right' },
+        { label: 'Total', align: 'right' }, { label: 'Payé', align: 'right' },
+        { label: 'Reste', align: 'right' },
+      ],
+      rows: [
+        ...data.salesList.map<PrintRow>((s) => ({
+          cells: [
+            s.reference, formatDate(s.date, language), String(s.products.length),
+            formatCurrency(s.finalAmount), formatCurrency(s.paidAmount), formatCurrency(s.restAmount),
+          ],
+          tone: s.restAmount > 0 ? 'neg' : 'pos',
+        })),
+        ...(data.salesList.length
+          ? [{
+              cells: ['TOTAL VENTES', '', String(data.articles), formatCurrency(data.salesTotal),
+                formatCurrency(data.salesPaid), formatCurrency(data.salesRest)],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucune vente sur la période',
+    };
+
+    const detailSection: PrintTableSection = {
+      title: 'Détail des articles vendus',
+      icon: '📦',
+      cols: [
+        { label: 'Facture / Produit' }, { label: 'Quantité', align: 'right' },
+        { label: 'P.U. appliqué', align: 'right' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: data.salesList.flatMap<PrintRow>((s) => [
+        {
+          cells: [`${s.reference} — ${formatDate(s.date, language)}`, formatCurrency(s.finalAmount)],
+          variant: 'category', span: true, tone: 'accent',
+        },
+        ...s.products.map<PrintRow>((p) => ({
+          cells: [
+            p.productName || '—',
+            `${p.quantity}${p.unit ? ` ${p.unit}` : ''}`,
+            formatCurrency(p.sellingPrice),
+            formatCurrency(p.quantity * p.sellingPrice),
+          ],
+          variant: 'detail',
+        })),
+      ]),
+      emptyLabel: 'Aucun article vendu sur la période',
+    };
+
+    const commandsSection: PrintTableSection = {
+      title: 'Commandes de la période',
+      icon: '📋',
+      headerTotal: formatCurrency(data.commandsTotal),
+      cols: [
+        { label: 'N° commande' }, { label: 'Créée le' }, { label: 'Livraison' },
+        { label: 'Total', align: 'right' }, { label: 'Payé', align: 'right' }, { label: 'Reste', align: 'right' },
+      ],
+      rows: [
+        ...data.commandsList.map<PrintRow>((c) => {
+          const d = deliveryStatus(c);
+          return {
+            cells: [
+              c.reference,
+              formatDate(c.createdAt.slice(0, 10), language),
+              d.isFull ? 'Livrée' : d.isPartial ? `Partielle ${d.percent.toFixed(0)}%` : 'Non livrée',
+              formatCurrency(c.totalAmount), formatCurrency(c.paidAmount), formatCurrency(c.restAmount),
+            ],
+            tone: c.restAmount > 0 ? 'neg' : 'pos',
+          };
+        }),
+        ...(data.commandsList.length
+          ? [{
+              cells: ['TOTAL COMMANDES', '', '', formatCurrency(data.commandsTotal),
+                formatCurrency(data.commandsPaid), formatCurrency(data.commandsRest)],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucune commande sur la période',
+    };
+
+    const paymentsSection: PrintTableSection = {
+      title: 'Règlements de dette encaissés',
+      icon: '💰',
+      headerTotal: formatCurrency(data.settled),
+      cols: [
+        { label: 'Date et heure' }, { label: 'Référence' }, { label: 'Note' },
+        { label: 'Montant', align: 'right' },
+      ],
+      rows: [
+        ...data.paymentsList.map<PrintRow>((p) => ({
+          cells: [
+            formatDateTime(p.paidAt, language),
+            `RGC-${p.id.slice(0, 8).toUpperCase()}`,
+            p.notes || '—',
+            formatCurrency(p.amount),
+          ],
+          tone: 'pos',
+        })),
+        ...(data.paymentsList.length
+          ? [{ cells: ['TOTAL RÈGLEMENTS', '', '', formatCurrency(data.settled)], variant: 'total' as const }]
+          : []),
+      ],
+      emptyLabel: 'Aucun règlement sur la période',
+    };
+
+    const versementsSection: PrintTableSection = {
+      title: 'Versements sur dettes enregistrées',
+      icon: '🧮',
+      headerTotal: formatCurrency(data.versed),
+      cols: [
+        { label: 'Date' }, { label: 'Dette' }, { label: 'Note' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: [
+        ...data.versements.map<PrintRow>((v) => ({
+          cells: [
+            formatDate(v.date || v.createdAt, language),
+            v.debtDescription || '—',
+            v.notes || '—',
+            formatCurrency(v.amount),
+          ],
+          tone: 'pos',
+        })),
+        ...(data.versements.length
+          ? [{ cells: ['TOTAL VERSEMENTS', '', '', formatCurrency(data.versed)], variant: 'total' as const }]
+          : []),
+      ],
+      emptyLabel: 'Aucun versement sur la période',
+    };
+
+    printDetailedReport(
+      {
+        docTitle: `Compte rendu ${client.name}`,
+        headTitle: 'COMPTE RENDU CLIENT',
+        subtitle: periodLabel,
+        meta: [
+          { label: 'Client', value: client.name },
+          { label: 'Téléphone', value: client.phone || '—' },
+          { label: 'Adresse', value: client.address || '—' },
+          { label: 'Période', value: periodLabel },
+        ],
+        kpis: [
+          { label: 'Total facturé', value: formatCurrency(data.billed), tone: 'accent' },
+          { label: 'Total encaissé', value: formatCurrency(data.collected), tone: 'pos' },
+          { label: 'Reste dû (période)', value: formatCurrency(data.outstanding), tone: 'neg' },
+          { label: 'Opérations', value: String(
+              data.salesList.length + data.commandsList.length + data.paymentsList.length + data.versements.length
+            ) },
+        ],
+        sections: [salesSection, detailSection, commandsSection, paymentsSection, versementsSection],
+      },
+      settings,
+      language
+    );
+  };
+
+  return (
+    <Modal
+      open={!!client}
+      onClose={onClose}
+      title={`Compte rendu — ${client?.name ?? ''}`}
+      size="lg"
+    >
+      {client && (
+        <div className="space-y-5">
+          <PeriodPicker
+            from={from}
+            to={to}
+            onChange={(f, t) => { setFrom(f); setTo(t); setPeriod(null); }}
+            onGenerate={() => setPeriod({ from, to })}
+          />
+
+          {!data ? (
+            <div className="rounded-2xl border border-dashed border-gold/25 bg-vanilla/20 py-10 text-center">
+              <FileBarChart size={34} className="mx-auto text-gold opacity-60 mb-3" />
+              <p className="text-sm text-text-muted">
+                Choisissez une date de début et une date de fin, puis générez le compte rendu.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-display text-base font-semibold text-text-primary">{client.name}</p>
+                  <p className="text-xs text-text-muted">{periodLabel}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="secondary" onClick={() => setPeriod(null)}>
+                    <RotateCcw size={14} /> Changer la période
+                  </Button>
+                  <Button size="sm" variant="gold" onClick={doPrint}>
+                    <Printer size={14} /> Imprimer le compte rendu
+                  </Button>
+                </div>
+              </div>
+
+              <ReportKpis
+                items={[
+                  { label: 'Total facturé', value: formatCurrency(data.billed), color: 'text-gold-dark' },
+                  { label: 'Total encaissé', value: formatCurrency(data.collected), color: 'text-pistachio' },
+                  { label: 'Reste dû', value: formatCurrency(data.outstanding), color: 'text-rose-deep' },
+                  { label: 'Ventes', value: String(data.salesList.length) },
+                  { label: 'Commandes', value: String(data.commandsList.length) },
+                  { label: 'Règlements', value: formatCurrency(data.settled), color: 'text-pistachio' },
+                  { label: 'Versements dettes', value: formatCurrency(data.versed), color: 'text-pistachio' },
+                  { label: 'Articles vendus', value: String(data.articles) },
+                ]}
+              />
+
+              <ReportSection
+                title="Ventes" icon={<ShoppingBag size={14} />}
+                total={formatCurrency(data.salesTotal)}
+                head={['N° facture', 'Date', 'Articles', 'Total', 'Payé', 'Reste']}
+                empty="Aucune vente sur cette période"
+                rows={data.salesList.map((s) => [
+                  <span key="r" className="font-semibold">{s.reference}</span>,
+                  formatDate(s.date, language),
+                  s.products.length,
+                  formatCurrency(s.finalAmount),
+                  <span key="p" className="text-pistachio">{formatCurrency(s.paidAmount)}</span>,
+                  <span key="x" className={s.restAmount > 0 ? 'text-rose-deep font-bold' : 'text-pistachio'}>
+                    {formatCurrency(s.restAmount)}
+                  </span>,
+                ])}
+              />
+
+              <ReportSection
+                title="Commandes" icon={<ClipboardList size={14} />}
+                total={formatCurrency(data.commandsTotal)}
+                head={['N° commande', 'Créée le', 'Livraison', 'Total', 'Payé', 'Reste']}
+                empty="Aucune commande sur cette période"
+                rows={data.commandsList.map((c) => {
+                  const d = deliveryStatus(c);
+                  return [
+                    <span key="r" className="font-semibold">{c.reference}</span>,
+                    formatDate(c.createdAt.slice(0, 10), language),
+                    <Badge key="d" variant={d.isFull ? 'success' : d.isPartial ? 'warning' : 'danger'}>
+                      {d.isFull ? 'Livrée' : d.isPartial ? `${d.percent.toFixed(0)}%` : 'Non livrée'}
+                    </Badge>,
+                    formatCurrency(c.totalAmount),
+                    <span key="p" className="text-pistachio">{formatCurrency(c.paidAmount)}</span>,
+                    <span key="x" className={c.restAmount > 0 ? 'text-rose-deep font-bold' : 'text-pistachio'}>
+                      {formatCurrency(c.restAmount)}
+                    </span>,
+                  ];
+                })}
+              />
+
+              <ReportSection
+                title="Règlements de dette" icon={<Coins size={14} />}
+                total={formatCurrency(data.settled)}
+                head={['Date et heure', 'Reçu n°', 'Note', 'Montant']}
+                empty="Aucun règlement sur cette période"
+                rows={data.paymentsList.map((p) => [
+                  formatDateTime(p.paidAt, language),
+                  `RGC-${p.id.slice(0, 8).toUpperCase()}`,
+                  p.notes || '—',
+                  <span key="a" className="font-bold text-pistachio">{formatCurrency(p.amount)}</span>,
+                ])}
+              />
+
+              <ReportSection
+                title="Versements sur dettes enregistrées" icon={<Wallet size={14} />}
+                total={formatCurrency(data.versed)}
+                head={['Date', 'Dette', 'Note', 'Montant']}
+                empty="Aucun versement sur cette période"
+                rows={data.versements.map((v) => [
+                  formatDate(v.date || v.createdAt, language),
+                  v.debtDescription || '—',
+                  v.notes || '—',
+                  <span key="a" className="font-bold text-pistachio">{formatCurrency(v.amount)}</span>,
+                ])}
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}

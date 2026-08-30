@@ -14,10 +14,20 @@ export type AddPurchaseInput = Omit<
   payments?: Purchase['payments'];
 };
 
+export interface UpdatePurchaseInput {
+  date?: string;
+  bonNumber?: string;
+  driverPlate?: string;
+  paidAmount?: number;
+  note?: string;
+}
+
 interface PurchaseState {
   purchases: Purchase[];
   load: () => Promise<void>;
   addPurchase: (p: AddPurchaseInput) => Promise<Purchase>;
+  /** Edits the commercial header of an invoice (date, bon, matricule, paid). */
+  updatePurchase: (id: string, data: UpdatePurchaseInput) => Promise<void>;
   paySupplierDebt: (purchaseId: string, amount: number, date?: string) => Promise<void>;
   payDebt: (purchaseId: string, amount: number, date?: string) => Promise<void>;
   deletePurchase: (id: string) => Promise<void>;
@@ -81,6 +91,19 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
           payments: [],
         }
       );
+    },
+
+    updatePurchase: async (id, data) => {
+      await save('purchases.update', () =>
+        rpc.updatePurchase(id, {
+          date: data.date ?? null,
+          bon_number: data.bonNumber ?? null,
+          driver_plate: data.driverPlate ?? null,
+          paid_amount: data.paidAmount ?? null,
+          note: data.note ?? null,
+        })
+      );
+      set({ purchases: await db.purchases.list() });
     },
 
     paySupplierDebt: payFn,

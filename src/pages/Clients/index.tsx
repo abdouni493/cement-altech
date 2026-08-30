@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import {
   Users, Plus, Pencil, Trash2, Phone, Wallet, History, Printer, CheckCircle2,
   AlertTriangle, Receipt, TrendingDown, Coins, ClipboardList, ShoppingBag, Eye,
+  FileBarChart,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -18,6 +19,8 @@ import { StatCard } from '@/components/shared/StatCard';
 import { ClientForm } from '@/components/shared/ClientForm';
 import { PayDebtModal } from '@/components/shared/PayDebtModal';
 import { EditPaymentModal } from '@/components/shared/EditPaymentModal';
+import { EditSaleModal } from '@/components/shared/EditSaleModal';
+import { ClientStatementModal } from '@/components/shared/ClientStatementModal';
 import { useClientStore } from '@/store/clientStore';
 import { useSalesStore } from '@/store/salesStore';
 import { useCommandStore, deliveryStatus } from '@/store/commandStore';
@@ -26,7 +29,7 @@ import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
 import { printPaymentReceipt } from '@/lib/documents';
-import { printInvoice } from '@/lib/print';
+import { printSaleInvoice } from '@/lib/invoicePrint';
 import { toast } from '@/components/ui/Toast';
 import type { Client, PartyPayment, Sale } from '@/types';
 
@@ -41,7 +44,7 @@ export default function ClientsPage() {
     clients, payments, addClient, updateClient, deleteClient,
     payDebt, updatePayment, deletePayment,
   } = useClientStore();
-  const sales = useSalesStore((s) => s.sales);
+  const { sales, updateSale, deleteSale } = useSalesStore();
   const commands = useCommandStore((s) => s.commands);
   const settings = useSettingsStore((s) => s.settings);
 
@@ -56,6 +59,9 @@ export default function ClientsPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deletePaymentId, setDeletePaymentId] = useState<string | null>(null);
   const [viewSale, setViewSale] = useState<Sale | null>(null);
+  const [editSale, setEditSale] = useState<Sale | null>(null);
+  const [deleteSaleId, setDeleteSaleId] = useState<string | null>(null);
+  const [statement, setStatement] = useState<Client | null>(null);
   const [printPrompt, setPrintPrompt] = useState<{ client: Client; payment: PartyPayment } | null>(null);
 
   /** Full debt situation of a client — sales + commands. */
@@ -141,16 +147,22 @@ export default function ClientsPage() {
     );
   };
 
-  const printSaleInvoice = (sale: Sale, client: Client) => {
-    printInvoice(
+  /** Facture professionnelle : logo, entreprise, client, cachet et signatures. */
+  const doPrintInvoice = (sale: Sale, client: Client) => {
+    printSaleInvoice(
       {
-        type: 'sale', reference: sale.reference, date: sale.date,
-        partyName: client.name, partyPhone: client.phone,
+        reference: sale.reference,
+        date: sale.date,
+        client: { name: client.name, phone: client.phone, address: client.address },
         lines: sale.products.map((l) => ({
-          designation: l.productName || '', quantity: l.quantity, unitPrice: l.sellingPrice,
+          designation: l.productName || '',
+          quantity: l.quantity,
+          unit: l.unit,
+          unitPrice: l.sellingPrice,
+          basePrice: l.basePrice,
         })),
         total: sale.totalAmount, reduction: sale.reduction, final: sale.finalAmount,
-        paid: sale.paidAmount, rest: sale.restAmount,
+        paid: sale.paidAmount, rest: sale.restAmount, createdBy: sale.createdBy,
       },
       settings
     );
@@ -269,21 +281,30 @@ export default function ClientsPage() {
                         <Wallet size={16} /> {hasDebt ? `Payer la dette (${formatCurrency(st.rest)})` : 'Aucune dette'}
                       </Button>
                     )}
-                    <div className="flex gap-1.5">
+                    <div className="grid grid-cols-2 gap-1.5">
                       <Button
-                        size="sm" variant="secondary" className="flex-1 text-xs"
+                        size="sm" variant="secondary" className="text-xs"
                         onClick={() => { setHistory(c); setHistoryTab('payments'); }}
                       >
                         <History size={14} /> Historique
                       </Button>
+                      <Button
+                        size="sm" variant="secondary" className="text-xs"
+                        onClick={() => setStatement(c)}
+                        title="Compte rendu sur une période"
+                      >
+                        <FileBarChart size={14} /> Compte rendu
+                      </Button>
+                    </div>
+                    <div className="flex gap-1.5">
                       {can('clients', 'edit') && (
-                        <Button size="sm" variant="ghost" onClick={() => { setEditing(c); setFormOpen(true); }} title="Modifier">
-                          <Pencil size={14} />
+                        <Button size="sm" variant="ghost" className="flex-1 text-xs" onClick={() => { setEditing(c); setFormOpen(true); }}>
+                          <Pencil size={14} /> Modifier
                         </Button>
                       )}
                       {can('clients', 'delete') && (
-                        <Button size="sm" variant="ghost" onClick={() => setDeleteId(c.id)} title="Supprimer">
-                          <Trash2 size={14} className="text-rose-deep" />
+                        <Button size="sm" variant="ghost" className="flex-1 text-xs" onClick={() => setDeleteId(c.id)}>
+                          <Trash2 size={14} className="text-rose-deep" /> Supprimer
                         </Button>
                       )}
                     </div>
@@ -389,7 +410,7 @@ export default function ClientsPage() {
                           <th className="text-right px-3 py-2">Articles</th>
                           <th className="text-right px-3 py-2">Total</th>
                           <th className="text-right px-3 py-2">Reste</th>
-                          <th className="text-center px-3 py-2">Détails</th>
+                          <th className="text-center px-3 py-2">Actions</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -402,10 +423,25 @@ export default function ClientsPage() {
                             <td className={`px-3 py-2 text-right tabular ${s.restAmount > 0 ? 'text-rose-deep' : 'text-pistachio'}`}>
                               {formatCurrency(s.restAmount)}
                             </td>
-                            <td className="px-3 py-2 text-center">
-                              <Button size="icon" variant="ghost" onClick={() => setViewSale(s)} title="Voir les détails">
-                                <Eye size={15} />
-                              </Button>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center justify-center gap-1">
+                                <Button size="icon" variant="ghost" onClick={() => setViewSale(s)} title="Voir les détails">
+                                  <Eye size={15} />
+                                </Button>
+                                <Button size="icon" variant="ghost" title="Imprimer la facture" onClick={() => doPrintInvoice(s, history)}>
+                                  <Printer size={15} />
+                                </Button>
+                                {can('clients', 'edit') && (
+                                  <Button size="icon" variant="ghost" title="Modifier la facture" onClick={() => setEditSale(s)}>
+                                    <Pencil size={15} />
+                                  </Button>
+                                )}
+                                {can('clients', 'delete') && (
+                                  <Button size="icon" variant="ghost" title="Supprimer la facture" onClick={() => setDeleteSaleId(s.id)}>
+                                    <Trash2 size={15} className="text-rose-deep" />
+                                  </Button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -513,7 +549,7 @@ export default function ClientsPage() {
               <Tile label="Reste" value={formatCurrency(viewSale.restAmount)} color="text-rose-deep" />
             </div>
             {history && (
-              <Button variant="gold" className="w-full" onClick={() => printSaleInvoice(viewSale, history)}>
+              <Button variant="gold" className="w-full" onClick={() => doPrintInvoice(viewSale, history)}>
                 <Printer size={16} /> Imprimer la facture
               </Button>
             )}
@@ -537,6 +573,21 @@ export default function ClientsPage() {
           />
         );
       })()}
+
+      {/* ---- Edit a sale invoice ---- */}
+      <EditSaleModal
+        sale={editSale}
+        onClose={() => setEditSale(null)}
+        onSave={async (data) => {
+          if (!editSale) return;
+          await updateSale(editSale.id, data);
+          toast.success('Facture modifiée');
+          setEditSale(null);
+        }}
+      />
+
+      {/* ---- Période : compte rendu détaillé ---- */}
+      <ClientStatementModal client={statement} onClose={() => setStatement(null)} />
 
       <EditPaymentModal
         payment={editPayment}
@@ -580,6 +631,15 @@ export default function ClientsPage() {
         onClose={() => setDeleteId(null)}
         onConfirm={() => { if (deleteId) void deleteClient(deleteId).then(() => toast.success('Client supprimé')); }}
         title="Supprimer le client"
+      />
+      <ConfirmDialog
+        open={!!deleteSaleId}
+        onClose={() => setDeleteSaleId(null)}
+        onConfirm={() => {
+          if (deleteSaleId) void deleteSale(deleteSaleId).then(() => { setViewSale(null); toast.success('Facture supprimée'); });
+        }}
+        title="Supprimer la facture de vente"
+        message="La vente, ses lignes et son encaissement de caisse seront supprimés."
       />
       <ConfirmDialog
         open={!!deletePaymentId}
