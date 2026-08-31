@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Package, Plus, Eye, Pencil, Trash2, AlertTriangle, Boxes, Coins, Ruler } from 'lucide-react';
+import {
+  Package, Plus, Eye, Pencil, Trash2, AlertTriangle, Boxes, Coins, Ruler, RefreshCw,
+} from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Select } from '@/components/ui/Select';
@@ -30,7 +32,9 @@ export default function Stock() {
   const addProduct = useStockStore((s) => s.addProduct);
   const updateProduct = useStockStore((s) => s.updateProduct);
   const deleteProduct = useStockStore((s) => s.deleteProduct);
+  const reloadStock = useStockStore((s) => s.load);
   const { ficheTechnics } = useFicheTechnicStore();
+  const [refreshing, setRefreshing] = useState(false);
 
   const [search, setSearch] = useState('');
   const [unitFilter, setUnitFilter] = useState('');
@@ -66,6 +70,40 @@ export default function Stock() {
     const out = products.filter((p) => p.currentQuantity <= 0).length;
     return { value, low, out, count: products.length };
   }, [products]);
+
+  /** Fiches techniques dont une matière ne pointe plus vers aucun produit :
+   *  tant qu'elles ne sont pas corrigées, leurs quantités ne peuvent pas être
+   *  déduites du stock à la vente. */
+  const brokenRecipes = useMemo(
+    () =>
+      ficheTechnics
+        .map((ft) => ({
+          name: ft.name,
+          missing: ft.usedProducts
+            .filter(
+              (u) =>
+                u.sourceType !== 'fiche' &&
+                !products.some(
+                  (p) =>
+                    p.id === u.productId ||
+                    p.name.trim().toLowerCase() === u.productName.trim().toLowerCase()
+                )
+            )
+            .map((u) => u.productName),
+        }))
+        .filter((x) => x.missing.length > 0),
+    [ficheTechnics, products]
+  );
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await reloadStock();
+      toast.success('Quantités rechargées depuis la base');
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const openCreate = () => { setEditing(null); setFormOpen(true); };
   const openEdit = (p: Product) => { setEditing(p); setFormOpen(true); };
@@ -110,13 +148,40 @@ export default function Stock() {
         icon={<Package size={24} />}
         subtitle={`${products.length} produit(s) · ${formatCurrency(stats.value)} de valeur en stock`}
         actions={
-          can('stock', 'create') && (
-            <Button variant="gold" onClick={openCreate}>
-              <Plus size={18} /> Nouveau produit
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={handleRefresh} disabled={refreshing} title="Recharger les quantités">
+              <RefreshCw size={18} className={refreshing ? 'animate-spin' : ''} />
+              {refreshing ? 'Actualisation…' : 'Actualiser'}
             </Button>
-          )
+            {can('stock', 'create') && (
+              <Button variant="gold" onClick={openCreate}>
+                <Plus size={18} /> Nouveau produit
+              </Button>
+            )}
+          </div>
         }
       />
+
+      {/* Fiches techniques dont une matière n'existe plus dans le stock */}
+      {brokenRecipes.length > 0 && (
+        <div className="rounded-2xl border border-rose-deep/35 bg-rose-deep/8 p-4 text-sm text-rose-deep">
+          <p className="font-bold flex items-center gap-2">
+            <AlertTriangle size={16} /> Fiches techniques à corriger ({brokenRecipes.length})
+          </p>
+          <p className="text-xs mt-1">
+            Les matières ci-dessous ne correspondent à aucun produit du stock. Tant que la fiche
+            n'est pas corrigée, leurs quantités ne peuvent pas être déduites lors d'une vente au
+            point de vente.
+          </p>
+          <ul className="mt-2 space-y-1 text-xs">
+            {brokenRecipes.map((r) => (
+              <li key={r.name}>
+                • <span className="font-bold">{r.name}</span> — {r.missing.join(', ')}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* KPI row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

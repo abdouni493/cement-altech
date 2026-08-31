@@ -126,95 +126,91 @@ export function amountInWords(amount: number): string {
 const CSS = `
   *{ box-sizing:border-box; margin:0; padding:0; }
   html{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-  body{ font-family:'Inter','Segoe UI',Arial,sans-serif; color:#1F2937; background:#EEF2F5; padding:20px; font-size:12px; line-height:1.5; }
+  body{ font-family:'Inter','Segoe UI',Arial,sans-serif; color:#000; background:#EEF2F5; padding:18px; font-size:14px; font-weight:600; line-height:1.5; }
 
-  .toolbar{ max-width:830px; margin:0 auto 14px; display:flex; justify-content:flex-end; gap:10px; }
-  .toolbar button{ font:inherit; font-weight:600; cursor:pointer; border:none; border-radius:9px; padding:9px 18px; color:#fff; background:linear-gradient(135deg,#B4881B,#8A6410); box-shadow:0 4px 12px rgba(138,100,16,.28); }
-  .toolbar button.ghost{ background:#fff; color:#8A6410; border:1px solid #E3CB8A; box-shadow:none; }
+  .toolbar{ max-width:860px; margin:0 auto 14px; display:flex; justify-content:flex-end; gap:10px; }
+  .toolbar button{ font:inherit; font-weight:800; cursor:pointer; border:none; border-radius:9px; padding:10px 20px; color:#fff; background:#8A6410; }
+  .toolbar button.ghost{ background:#fff; color:#6B4A05; border:2px solid #8A6410; }
 
-  .sheet{ max-width:830px; margin:0 auto; background:#fff; border:1px solid #E3CB8A; border-radius:12px; overflow:hidden; box-shadow:0 10px 30px rgba(31,41,55,.10); }
+  .sheet{ max-width:860px; margin:0 auto; background:#fff; border:2.5px solid #000; border-radius:12px; overflow:hidden; }
 
-  /* En-tête entreprise */
-  .head{ display:flex; gap:18px; align-items:flex-start; padding:20px 24px; background:linear-gradient(135deg,#FCF7E9 0%,#F7EDD4 100%); border-bottom:3px solid #B4881B; }
-  .logo{ width:82px; height:82px; border-radius:12px; border:2px solid #B4881B; background:#fff; display:flex; align-items:center; justify-content:center; overflow:hidden; flex-shrink:0; }
+  /* En-tête entreprise — logo agrandi */
+  .head{ display:flex; gap:18px; align-items:flex-start; padding:20px 24px; background:#F7EDD4; border-bottom:3px solid #000; }
+  .logo{ width:118px; height:118px; border-radius:12px; border:3px solid #000; background:#fff; display:flex; align-items:center; justify-content:center; overflow:hidden; flex-shrink:0; padding:3px; }
   .logo img{ width:100%; height:100%; object-fit:contain; }
-  .logo span{ font-size:32px; }
+  .logo span{ font-size:54px; }
   .brand{ flex:1; min-width:0; }
-  .brand h1{ font-size:23px; font-weight:800; color:#6B4A05; letter-spacing:-.3px; }
-  .brand .tag{ font-size:11.5px; font-style:italic; color:#8A6410; margin-top:2px; }
-  .brand .meta{ font-size:11px; color:#4B5563; margin-top:8px; line-height:1.75; }
-  .brand .meta b{ color:#374151; }
-  .fiscal{ flex-shrink:0; text-align:right; font-size:10.5px; color:#4B5563; line-height:1.8; border-left:1px dashed #D9BE7C; padding-left:14px; }
-  .fiscal b{ color:#6B4A05; }
+  .brand h1{ font-size:29px; font-weight:900; color:#000; letter-spacing:-.4px; text-transform:uppercase; }
+  .brand .tag{ font-size:13.5px; font-weight:700; font-style:italic; color:#222; margin-top:3px; }
+  .brand .meta{ font-size:13.5px; font-weight:700; color:#000; margin-top:9px; line-height:1.8; }
+  .brand .meta b{ color:#000; font-weight:900; }
+  .fiscal{ flex-shrink:0; text-align:right; font-size:13px; font-weight:700; color:#000; line-height:1.9; border-left:2px dashed #000; padding-left:16px; }
+  .fiscal b{ color:#000; font-weight:900; }
 
   /* Bandeau titre */
-  .titlebar{ display:flex; justify-content:space-between; align-items:center; gap:16px; padding:12px 24px; background:linear-gradient(135deg,#B4881B 0%,#8A6410 100%); color:#fff; }
-  .titlebar .t{ font-size:18px; font-weight:800; letter-spacing:2px; }
-  .titlebar .s{ text-align:right; font-size:11.5px; line-height:1.7; }
-  .titlebar .s b{ font-size:13px; }
+  .titlebar{ display:flex; justify-content:space-between; align-items:center; gap:16px; padding:13px 24px; background:#000; color:#fff; }
+  .titlebar .t{ font-size:22px; font-weight:900; letter-spacing:2px; }
+  .titlebar .s{ text-align:right; font-size:13.5px; font-weight:700; line-height:1.8; }
+  .titlebar .s b{ font-size:15px; font-weight:900; }
 
   .body{ padding:20px 24px 26px; }
 
   /* Bloc client / règlement */
-  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:18px; }
-  .box{ border:1px solid #E5E7EB; border-left:4px solid #B4881B; border-radius:9px; padding:11px 14px; background:#FCFBF7; }
-  .box .lbl{ font-size:9.5px; text-transform:uppercase; letter-spacing:1.2px; color:#8A6410; font-weight:800; margin-bottom:4px; }
-  .box .nm{ font-size:15px; font-weight:800; color:#111827; }
-  .box .ln{ font-size:11.5px; color:#4B5563; margin-top:3px; }
-  .box.alt{ border-left-color:#0F766E; }
-  .box.alt .lbl{ color:#0F766E; }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:16px; }
+  .box{ border:2px solid #000; border-left:7px solid #000; border-radius:8px; padding:12px 15px; background:#FAFAFA; color:#000; }
+  .box .lbl{ font-size:11.5px; text-transform:uppercase; letter-spacing:1.3px; color:#000; font-weight:900; margin-bottom:4px; }
+  .box .nm{ font-size:18px; font-weight:900; color:#000; }
+  .box .ln{ font-size:13.5px; font-weight:700; color:#000; margin-top:4px; }
 
   /* Tableaux */
-  table{ width:100%; border-collapse:collapse; font-size:11.5px; border:1px solid #E5E7EB; border-radius:8px; overflow:hidden; margin-bottom:16px; }
+  table{ width:100%; border-collapse:collapse; font-size:14px; color:#000; margin-bottom:16px; }
   thead{ display:table-header-group; }
-  th{ background:#6B4A05; color:#fff; padding:8px 10px; text-align:left; font-weight:700; font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; white-space:nowrap; }
-  td{ padding:8px 10px; border-top:1px solid #EFEAE0; vertical-align:top; }
-  tbody tr:nth-child(even) td{ background:#FCFBF7; }
+  th{ background:#000; color:#fff; padding:10px 11px; text-align:left; font-weight:900; font-size:13px; text-transform:uppercase; letter-spacing:.5px; white-space:nowrap; border:1.5px solid #000; }
+  td{ padding:10px 11px; border:1.5px solid #333; vertical-align:top; font-weight:700; color:#000; }
+  tbody tr:nth-child(even) td{ background:#F4F4F4; }
   tr{ break-inside:avoid; }
-  .num{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
-  .ctr{ text-align:center; }
-  .muted{ color:#6B7280; font-size:10.5px; }
-  .strike{ text-decoration:line-through; color:#9CA3AF; }
+  .num{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; font-weight:800; }
+  .ctr{ text-align:center; font-variant-numeric:tabular-nums; }
+  .muted{ color:#333; font-size:12.5px; font-weight:700; }
+  .strike{ text-decoration:line-through; color:#555; }
 
-  h2.sec{ font-size:12.5px; font-weight:800; color:#6B4A05; padding:7px 12px; background:#F7EDD4; border-left:4px solid #B4881B; border-radius:7px; margin-bottom:9px; display:flex; justify-content:space-between; align-items:center; }
-  .sub{ font-size:10.5px; color:#6B7280; margin:-4px 0 8px 2px; font-style:italic; }
+  h2.sec{ font-size:15px; font-weight:900; color:#000; padding:9px 14px; background:#F7EDD4; border:2px solid #000; border-left:7px solid #000; border-radius:7px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; text-transform:uppercase; letter-spacing:.5px; }
+  .sub{ font-size:12.5px; color:#222; font-weight:700; margin:-5px 0 9px 2px; font-style:italic; }
 
   /* Fiche de production */
-  .prod{ border:1px solid #E5E7EB; border-radius:9px; padding:0; margin-bottom:12px; overflow:hidden; break-inside:avoid; }
-  .prod .ph{ display:flex; justify-content:space-between; align-items:center; gap:12px; padding:8px 12px; background:#F0FDFA; border-bottom:1px solid #CCFBF1; }
-  .prod .ph .n{ font-weight:800; color:#0F766E; font-size:12.5px; }
-  .prod .ph .q{ font-size:11px; color:#134E4A; font-weight:700; }
-  .prod table{ margin:0; border:none; border-radius:0; }
-  .prod th{ background:#0F766E; }
+  .prod{ border:2px solid #000; border-radius:8px; padding:0; margin-bottom:12px; overflow:hidden; break-inside:avoid; }
+  .prod .ph{ display:flex; justify-content:space-between; align-items:center; gap:12px; padding:10px 13px; background:#E6F5F2; border-bottom:2px solid #000; }
+  .prod .ph .n{ font-weight:900; color:#000; font-size:15px; }
+  .prod .ph .q{ font-size:13.5px; color:#000; font-weight:900; }
+  .prod table{ margin:0; }
 
   /* Totaux */
   .totwrap{ display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:6px; }
-  .words{ flex:1; border:1px dashed #B4881B; border-radius:9px; padding:11px 14px; background:#FCF7E9; font-size:11.5px; }
-  .words .lbl{ font-size:9.5px; text-transform:uppercase; letter-spacing:1.2px; color:#8A6410; font-weight:800; margin-bottom:3px; }
-  .words .v{ font-weight:700; color:#374151; font-style:italic; }
-  .totals{ width:300px; flex-shrink:0; border:1px solid #E3CB8A; border-radius:9px; overflow:hidden; font-size:12px; }
-  .totals div{ display:flex; justify-content:space-between; padding:7px 14px; }
-  .totals div:nth-child(odd){ background:#FCFBF7; }
-  .totals .grand{ background:#6B4A05; color:#fff; font-weight:800; font-size:13.5px; }
-  .totals .due{ background:linear-gradient(135deg,#E11D48,#9F1239); color:#fff; font-weight:800; }
-  .totals .ok{ background:linear-gradient(135deg,#059669,#047857); color:#fff; font-weight:800; }
+  .words{ flex:1; border:2px dashed #000; border-radius:8px; padding:12px 15px; background:#FCF7E9; font-size:13.5px; color:#000; }
+  .words .lbl{ font-size:11.5px; text-transform:uppercase; letter-spacing:1.3px; color:#000; font-weight:900; margin-bottom:4px; }
+  .words .v{ font-weight:900; color:#000; font-style:italic; }
+  .totals{ width:330px; flex-shrink:0; border:2.5px solid #000; border-radius:8px; overflow:hidden; font-size:15px; font-weight:800; color:#000; }
+  .totals div{ display:flex; justify-content:space-between; gap:12px; padding:9px 15px; border-bottom:1.5px solid #333; font-variant-numeric:tabular-nums; }
+  .totals div:last-child{ border-bottom:0; }
+  .totals .grand{ background:#000; color:#fff; font-weight:900; font-size:16.5px; }
+  .totals .due{ background:#FBDDE3; color:#8F0F22; font-weight:900; }
+  .totals .ok{ background:#D8F2E2; color:#0A5A38; font-weight:900; }
 
   /* Cachet & signatures */
-  .signs{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-top:26px; break-inside:avoid; }
-  .sign{ border:1.5px solid #9CA3AF; border-radius:9px; height:110px; padding:8px 10px; display:flex; flex-direction:column; }
-  .sign .lbl{ font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:.8px; color:#4B5563; }
-  .sign .hint{ font-size:9px; color:#9CA3AF; margin-top:auto; text-align:center; font-style:italic; }
-  .sign.stamp{ border-style:dashed; border-color:#B4881B; background:#FCFBF7; }
-  .sign.stamp .lbl{ color:#8A6410; }
+  .signs{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-top:24px; break-inside:avoid; }
+  .sign{ border:2px solid #000; border-radius:8px; height:112px; padding:9px 11px; display:flex; flex-direction:column; }
+  .sign .lbl{ font-size:12px; font-weight:900; text-transform:uppercase; letter-spacing:.9px; color:#000; }
+  .sign .hint{ font-size:11px; color:#444; font-weight:700; margin-top:auto; text-align:center; font-style:italic; }
+  .sign.stamp{ border-style:dashed; background:#FCFBF7; }
 
-  .foot{ margin-top:20px; padding-top:12px; border-top:2px dashed #E3CB8A; text-align:center; font-size:10.5px; color:#6B7280; }
-  .foot .social{ color:#8A6410; font-weight:700; }
+  .foot{ margin-top:18px; padding-top:12px; border-top:2px dashed #000; text-align:center; font-size:12.5px; font-weight:700; color:#222; }
+  .foot .social{ color:#000; font-weight:900; }
 
   @media print{
-    body{ background:#fff; padding:0; font-size:11.5px; }
+    body{ background:#fff; padding:0; font-size:13.5px; }
     .toolbar{ display:none !important; }
-    .sheet{ border:none; box-shadow:none; border-radius:0; max-width:none; }
-    @page{ size:A4; margin:11mm; }
+    .sheet{ border:none; border-radius:0; max-width:none; }
+    @page{ size:A4; margin:9mm; }
   }
 `;
 

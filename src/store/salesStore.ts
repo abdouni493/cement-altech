@@ -126,7 +126,12 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
       })
     );
 
-    const [sales] = await Promise.all([db.sales.list(), useComptoirStore.getState().load()]);
+    // a sale may have consumed comptoir items AND raw stock products
+    const [sales] = await Promise.all([
+      db.sales.list(),
+      useComptoirStore.getState().load(),
+      useStockStore.getState().load(),
+    ]);
     set({ sales });
 
     return (

@@ -442,6 +442,10 @@ export interface CommandDelivery {
   date: string;
   deliveredAt: string;      // ISO datetime
   notes?: string;
+  /** Chauffeur qui a effectué CETTE livraison (repris de la commande par défaut). */
+  driverName?: string;
+  /** Immatriculation du camion — facultative. */
+  driverPlate?: string;
   items: CommandDeliveryItem[];
   createdBy?: string;
 }

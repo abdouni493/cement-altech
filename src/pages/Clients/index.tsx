@@ -2,9 +2,9 @@ import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
-  Users, Plus, Pencil, Trash2, Phone, Wallet, History, Printer, CheckCircle2,
+  Users, Plus, Pencil, Trash2, Phone, Wallet, Printer, CheckCircle2,
   AlertTriangle, Receipt, TrendingDown, Coins, ClipboardList, ShoppingBag, Eye,
-  FileBarChart,
+  FileBarChart, HandCoins,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -17,7 +17,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StatCard } from '@/components/shared/StatCard';
 import { ClientForm } from '@/components/shared/ClientForm';
-import { PayDebtModal } from '@/components/shared/PayDebtModal';
+import { VersementModal } from '@/components/shared/VersementModal';
 import { EditPaymentModal } from '@/components/shared/EditPaymentModal';
 import { EditSaleModal } from '@/components/shared/EditSaleModal';
 import { ClientStatementModal } from '@/components/shared/ClientStatementModal';
@@ -54,7 +54,7 @@ export default function ClientsPage() {
   const [editing, setEditing] = useState<Client | null>(null);
   const [history, setHistory] = useState<Client | null>(null);
   const [historyTab, setHistoryTab] = useState<HistoryTab>('payments');
-  const [paying, setPaying] = useState<Client | null>(null);
+  const [versing, setVersing] = useState<Client | null>(null);
   const [editPayment, setEditPayment] = useState<PartyPayment | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deletePaymentId, setDeletePaymentId] = useState<string | null>(null);
@@ -121,10 +121,10 @@ export default function ClientsPage() {
     setEditing(null);
   };
 
-  const handlePay = async (client: Client, amount: number, notes: string, paidAt: string) => {
+  const handleVersement = async (client: Client, amount: number, notes: string, paidAt: string) => {
     const payment = await payDebt(client.id, amount, paidAt, notes);
-    toast.success('Paiement enregistré');
-    setPaying(null);
+    toast.success('Versement enregistré — la dette du client a été réduite');
+    setVersing(null);
     if (payment) setPrintPrompt({ client, payment });
   };
 
@@ -133,7 +133,7 @@ export default function ClientsPage() {
     printPaymentReceipt(
       {
         kind: 'client',
-        receiptNumber: `RGC-${payment.id.slice(0, 8).toUpperCase()}`,
+        receiptNumber: `VER-${payment.id.slice(0, 8).toUpperCase()}`,
         partyName: client.name,
         partyPhone: client.phone,
         amount: payment.amount,
@@ -273,20 +273,22 @@ export default function ClientsPage() {
                   <div className="mt-auto space-y-2">
                     {can('clients', 'pay') && (
                       <Button
-                        variant={hasDebt ? 'gold' : 'secondary'}
-                        className="w-full"
-                        disabled={!hasDebt}
-                        onClick={() => setPaying(c)}
+                        variant="gold"
+                        className="w-full font-bold"
+                        onClick={() => setVersing(c)}
+                        title="Enregistrer un versement du client"
                       >
-                        <Wallet size={16} /> {hasDebt ? `Payer la dette (${formatCurrency(st.rest)})` : 'Aucune dette'}
+                        <HandCoins size={16} />
+                        {hasDebt ? `Versement (reste ${formatCurrency(st.rest)})` : 'Versement'}
                       </Button>
                     )}
                     <div className="grid grid-cols-2 gap-1.5">
                       <Button
                         size="sm" variant="secondary" className="text-xs"
                         onClick={() => { setHistory(c); setHistoryTab('payments'); }}
+                        title="Versements, ventes et commandes du client"
                       >
-                        <History size={14} /> Historique
+                        <Wallet size={14} /> Versements ({st.payments.length})
                       </Button>
                       <Button
                         size="sm" variant="secondary" className="text-xs"
@@ -331,12 +333,21 @@ export default function ClientsPage() {
                 <Tile label="Dette totale" value={formatCurrency(st.total)} />
                 <Tile label="Total payé" value={formatCurrency(st.paid)} color="text-pistachio" />
                 <Tile label="Reste à payer" value={formatCurrency(st.rest)} color="text-rose-deep" />
-                <Tile label="Règlements" value={String(st.payments.length)} color="text-gold-dark" />
+                <Tile label="Versements" value={String(st.payments.length)} color="text-gold-dark" />
               </div>
+
+              {can('clients', 'pay') && (
+                <Button
+                  variant="gold" className="w-full"
+                  onClick={() => { setVersing(history); setHistory(null); }}
+                >
+                  <HandCoins size={16} /> Nouveau versement
+                </Button>
+              )}
 
               <div className="flex gap-2 border-b border-gold/15 overflow-x-auto">
                 {([
-                  ['payments', `Règlements (${st.payments.length})`],
+                  ['payments', `Versements (${st.payments.length})`],
                   ['sales', `Ventes (${st.salesList.length})`],
                   ['commands', `Commandes (${st.commandsList.length})`],
                 ] as const).map(([key, label]) => (
@@ -354,7 +365,7 @@ export default function ClientsPage() {
 
               {historyTab === 'payments' && (
                 st.payments.length === 0 ? (
-                  <EmptyState message="Aucun règlement enregistré" icon={<Coins size={30} />} />
+                  <EmptyState message="Aucun versement enregistré" icon={<Coins size={30} />} />
                 ) : (
                   <div className="overflow-x-auto rounded-xl border border-gold/15">
                     <table className="w-full text-sm">
@@ -374,7 +385,7 @@ export default function ClientsPage() {
                             <td className="px-3 py-2 text-xs text-text-muted">{p.notes || '—'}</td>
                             <td className="px-3 py-2">
                               <div className="flex items-center justify-center gap-1">
-                                <Button size="icon" variant="ghost" title="Imprimer le reçu" onClick={() => doPrintReceipt(history, p)}>
+                                <Button size="icon" variant="ghost" title="Imprimer le reçu du versement" onClick={() => doPrintReceipt(history, p)}>
                                   <Printer size={15} />
                                 </Button>
                                 {can('clients', 'edit') && (
@@ -557,19 +568,18 @@ export default function ClientsPage() {
         )}
       </Modal>
 
-      {/* ---- Pay debt ---- */}
-      {paying && (() => {
-        const st = statsOf(paying.id);
+      {/* ---- Versement du client ---- */}
+      {versing && (() => {
+        const st = statsOf(versing.id);
         return (
-          <PayDebtModal
-            open={!!paying}
-            onClose={() => setPaying(null)}
-            reference=""
-            partyName={paying.name}
+          <VersementModal
+            open={!!versing}
+            onClose={() => setVersing(null)}
+            clientName={versing.name}
+            clientPhone={versing.phone}
             total={st.total}
             paid={st.paid}
-            title={`Payer la dette — ${paying.name}`}
-            onPay={(amount, notes, paidAt) => handlePay(paying, amount, notes, paidAt)}
+            onSubmit={(amount, notes, paidAt) => handleVersement(versing, amount, notes, paidAt)}
           />
         );
       })()}
@@ -595,7 +605,7 @@ export default function ClientsPage() {
         onSave={async (amount, paidAt, notes) => {
           if (!editPayment) return;
           await updatePayment(editPayment.id, amount, paidAt, notes);
-          toast.success('Règlement modifié');
+          toast.success('Versement modifié');
           setEditPayment(null);
         }}
       />
@@ -606,11 +616,11 @@ export default function ClientsPage() {
           <div className="h-14 w-14 rounded-full bg-pistachio/15 flex items-center justify-center mb-4">
             <CheckCircle2 size={30} className="text-pistachio" />
           </div>
-          <h3 className="font-display text-lg font-semibold text-text-primary mb-1">Paiement enregistré</h3>
+          <h3 className="font-display text-lg font-semibold text-text-primary mb-1">Versement enregistré</h3>
           <p className="text-sm text-text-secondary mb-1">
             {printPrompt && formatCurrency(printPrompt.payment.amount)} — {printPrompt?.client.name}
           </p>
-          <p className="text-sm text-text-muted mb-6">Voulez-vous imprimer le reçu de paiement ?</p>
+          <p className="text-sm text-text-muted mb-6">Voulez-vous imprimer le reçu de versement ?</p>
           <div className="flex gap-3 w-full">
             <Button variant="secondary" className="flex-1" onClick={() => setPrintPrompt(null)}>Non, merci</Button>
             <Button
@@ -644,8 +654,8 @@ export default function ClientsPage() {
       <ConfirmDialog
         open={!!deletePaymentId}
         onClose={() => setDeletePaymentId(null)}
-        onConfirm={() => { if (deletePaymentId) void deletePayment(deletePaymentId).then(() => toast.success('Règlement supprimé')); }}
-        title="Supprimer le règlement"
+        onConfirm={() => { if (deletePaymentId) void deletePayment(deletePaymentId).then(() => toast.success('Versement supprimé')); }}
+        title="Supprimer le versement"
         message="Le montant redeviendra dû et l'entrée de caisse sera annulée."
       />
     </div>

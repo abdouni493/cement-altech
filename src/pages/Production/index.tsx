@@ -1151,13 +1151,15 @@ function CreateProductionForm({ onClose, onSubmit }: { onClose: () => void; onSu
       return {
         ...u,
         // Use the resolved product's real id so stock consumption on save
-        // targets the actual product even if the recipe had a stale id.
-        productId: stockProd ? stockProd.id : u.productId,
+        // targets the actual product. An id that no longer exists is dropped:
+        // sending it would silently skip the decrement on the database side.
+        productId: isFiche ? u.productId : stockProd ? stockProd.id : '',
         isFiche,
         quantityUsed: Number(scaledQty.toFixed(4)),
         unitCost,
         lineCost: Number(lineCost.toFixed(2)),
         available,
+        resolved: isFiche || !!stockProd,
       };
     });
   }, [selectedFt, ratio, products]);
@@ -1200,12 +1202,26 @@ function CreateProductionForm({ onClose, onSubmit }: { onClose: () => void; onSu
     return scaledUsedProducts.some((u) => u.quantityUsed > u.available);
   }, [scaledUsedProducts]);
 
+  /** Ingrédients qui ne correspondent à aucun produit du stock : la production
+   *  serait enregistrée sans que rien ne soit déduit. */
+  const unknownIngredients = useMemo(
+    () => scaledUsedProducts.filter((u) => !u.resolved).map((u) => u.productName),
+    [scaledUsedProducts]
+  );
+
   const handleSave = () => {
     if (!selectedFt) { toast.error('Veuillez sélectionner une fiche technique'); return; }
     if (productionQuantity <= 0) { toast.error('La quantité de production doit être supérieure à 0'); return; }
     if (hasLoss) {
       if (realQuantity <= 0) { toast.error('La quantité réellement produite doit être supérieure à 0'); return; }
       if (realQuantity > productionQuantity) { toast.error('La quantité réelle ne peut pas dépasser la quantité prévue'); return; }
+    }
+    if (unknownIngredients.length > 0) {
+      toast.error(
+        `Matières introuvables dans le stock : ${unknownIngredients.join(', ')} — ` +
+        'rattachez-les à un produit existant, sinon leurs quantités ne seront pas déduites.'
+      );
+      return;
     }
     if (hasInsufficientStock) {
       toast.error('Certains ingrédients ont un stock insuffisant. Impossible de valider la production.');

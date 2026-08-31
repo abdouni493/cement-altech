@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
-  FileBarChart, Printer, ShoppingBag, Coins, ClipboardList, Wallet, RotateCcw,
+  FileBarChart, Printer, ShoppingBag, Coins, ClipboardList, Wallet, RotateCcw, Package,
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -77,8 +77,39 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     const versed = versements.reduce((s, x) => s + x.amount, 0);
     const articles = salesList.reduce((s, x) => s + x.products.length, 0);
 
+    // Quantités achetées par production, ventes ET commandes confondues — c'est
+    // le récapitulatif que le client attend en bas du compte rendu.
+    const purchasedByProduct = new Map<
+      string,
+      { name: string; unit?: string; soldQty: number; orderedQty: number; deliveredQty: number; amount: number }
+    >();
+    const bump = (name: string, unit: string | undefined) => {
+      const key = `${name.trim().toLowerCase()}|${unit ?? ''}`;
+      const cur = purchasedByProduct.get(key) ?? {
+        name: name.trim(), unit, soldQty: 0, orderedQty: 0, deliveredQty: 0, amount: 0,
+      };
+      purchasedByProduct.set(key, cur);
+      return cur;
+    };
+    salesList.forEach((sale) =>
+      sale.products.forEach((pr) => {
+        const line = bump(pr.productName || '—', pr.unit);
+        line.soldQty += pr.quantity;
+        line.amount += pr.quantity * pr.sellingPrice;
+      })
+    );
+    commandsList.forEach((cmd) =>
+      cmd.items.forEach((it) => {
+        const line = bump(it.productName || '—', it.sellByUnit ? it.sellUnit : undefined);
+        line.orderedQty += it.quantity;
+        line.deliveredQty += it.deliveredQuantity ?? 0;
+        line.amount += it.totalPrice;
+      })
+    );
+    const purchased = [...purchasedByProduct.values()].sort((a, b) => b.amount - a.amount);
+
     return {
-      salesList, commandsList, paymentsList, versements,
+      salesList, commandsList, paymentsList, versements, purchased,
       salesTotal, salesPaid, salesRest,
       commandsTotal, commandsPaid, commandsRest,
       settled, versed, articles,
@@ -176,8 +207,87 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       emptyLabel: 'Aucune commande sur la période',
     };
 
+    // Détail ligne par ligne des produits commandés — avec les quantités
+    const commandDetailSection: PrintTableSection = {
+      title: 'Détail des produits commandés',
+      icon: '🚚',
+      cols: [
+        { label: 'Commande / Produit' }, { label: 'Qté commandée', align: 'right' },
+        { label: 'Qté livrée', align: 'right' }, { label: 'Reste à livrer', align: 'right' },
+        { label: 'P.U.', align: 'right' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: data.commandsList.flatMap<PrintRow>((c) => [
+        {
+          cells: [
+            `${c.reference} — livraison ${c.receiveDate ? formatDate(c.receiveDate, language) : '—'}`,
+            formatCurrency(c.totalAmount),
+          ],
+          variant: 'category', span: true, tone: 'accent',
+        },
+        ...c.items.map<PrintRow>((it) => {
+          const u = it.sellByUnit && it.sellUnit ? ` ${it.sellUnit}` : '';
+          const done = it.deliveredQuantity ?? 0;
+          return {
+            cells: [
+              it.productName || '—',
+              `${it.quantity}${u}`,
+              `${done}${u}`,
+              `${Math.max(0, it.quantity - done)}${u}`,
+              formatCurrency(it.unitPrice),
+              formatCurrency(it.totalPrice),
+            ],
+            variant: 'detail',
+          };
+        }),
+      ]),
+      emptyLabel: 'Aucun produit commandé sur la période',
+    };
+
+    // Récapitulatif : combien de chaque production le client a pris
+    const purchasedSection: PrintTableSection = {
+      title: 'Quantités achetées par production',
+      icon: '🏗️',
+      note: 'Cumul des ventes et des commandes de la période, production par production.',
+      headerTotal: formatCurrency(data.purchased.reduce((s, x) => s + x.amount, 0)),
+      cols: [
+        { label: 'Production' }, { label: 'Qté vendue', align: 'right' },
+        { label: 'Qté commandée', align: 'right' }, { label: 'Qté livrée', align: 'right' },
+        { label: 'Qté totale', align: 'right' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: [
+        ...data.purchased.map<PrintRow>((x) => {
+          const u = x.unit ? ` ${x.unit}` : '';
+          return {
+            cells: [
+              x.name,
+              `${x.soldQty}${u}`,
+              `${x.orderedQty}${u}`,
+              `${x.deliveredQty}${u}`,
+              `${x.soldQty + x.orderedQty}${u}`,
+              formatCurrency(x.amount),
+            ],
+            tone: 'accent',
+          };
+        }),
+        ...(data.purchased.length
+          ? [{
+              cells: [
+                'TOTAL',
+                String(data.purchased.reduce((s, x) => s + x.soldQty, 0)),
+                String(data.purchased.reduce((s, x) => s + x.orderedQty, 0)),
+                String(data.purchased.reduce((s, x) => s + x.deliveredQty, 0)),
+                String(data.purchased.reduce((s, x) => s + x.soldQty + x.orderedQty, 0)),
+                formatCurrency(data.purchased.reduce((s, x) => s + x.amount, 0)),
+              ],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucune production achetée sur la période',
+    };
+
     const paymentsSection: PrintTableSection = {
-      title: 'Règlements de dette encaissés',
+      title: 'Versements encaissés du client',
       icon: '💰',
       headerTotal: formatCurrency(data.settled),
       cols: [
@@ -188,7 +298,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         ...data.paymentsList.map<PrintRow>((p) => ({
           cells: [
             formatDateTime(p.paidAt, language),
-            `RGC-${p.id.slice(0, 8).toUpperCase()}`,
+            `VER-${p.id.slice(0, 8).toUpperCase()}`,
             p.notes || '—',
             formatCurrency(p.amount),
           ],
@@ -244,7 +354,10 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
               data.salesList.length + data.commandsList.length + data.paymentsList.length + data.versements.length
             ) },
         ],
-        sections: [salesSection, detailSection, commandsSection, paymentsSection, versementsSection],
+        sections: [
+          salesSection, detailSection, commandsSection, commandDetailSection,
+          purchasedSection, paymentsSection, versementsSection,
+        ],
       },
       settings,
       language
@@ -344,13 +457,31 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
               />
 
               <ReportSection
-                title="Règlements de dette" icon={<Coins size={14} />}
+                title="Quantités achetées par production" icon={<Package size={14} />}
+                total={formatCurrency(data.purchased.reduce((s, x) => s + x.amount, 0))}
+                head={['Production', 'Qté vendue', 'Qté commandée', 'Qté livrée', 'Qté totale', 'Montant']}
+                empty="Aucune production achetée sur cette période"
+                rows={data.purchased.map((x) => {
+                  const u = x.unit ? ` ${x.unit}` : '';
+                  return [
+                    <span key="n" className="font-semibold">{x.name}</span>,
+                    `${x.soldQty}${u}`,
+                    `${x.orderedQty}${u}`,
+                    `${x.deliveredQty}${u}`,
+                    <span key="t" className="font-bold text-gold-dark">{x.soldQty + x.orderedQty}{u}</span>,
+                    formatCurrency(x.amount),
+                  ];
+                })}
+              />
+
+              <ReportSection
+                title="Versements du client" icon={<Coins size={14} />}
                 total={formatCurrency(data.settled)}
                 head={['Date et heure', 'Reçu n°', 'Note', 'Montant']}
                 empty="Aucun règlement sur cette période"
                 rows={data.paymentsList.map((p) => [
                   formatDateTime(p.paidAt, language),
-                  `RGC-${p.id.slice(0, 8).toUpperCase()}`,
+                  `VER-${p.id.slice(0, 8).toUpperCase()}`,
                   p.notes || '—',
                   <span key="a" className="font-bold text-pistachio">{formatCurrency(p.amount)}</span>,
                 ])}

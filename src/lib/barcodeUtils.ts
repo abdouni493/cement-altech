@@ -74,8 +74,9 @@ export function printBarcode(value: string, productName: string) {
       <head>
         <title>Code-barres — ${productName}</title>
         <style>
-          body { font-family: 'Inter', sans-serif; text-align: center; padding: 40px; }
-          h2 { font-family: serif; color: #2C1810; margin-bottom: 24px; }
+          @page { size: A4; margin: 9mm; }
+          body { font-family: 'Inter', Arial, sans-serif; text-align: center; padding: 32px; color: #000; font-weight: 700; }
+          h2 { font-family: serif; color: #000; font-size: 28px; font-weight: 900; margin-bottom: 22px; text-transform: uppercase; }
           svg { margin: 0 auto; }
         </style>
       </head>

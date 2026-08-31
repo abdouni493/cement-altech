@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   CreditCard, Plus, Minus, X, Search, ShoppingBag, UserPlus, FlaskConical,
   Printer, CheckCircle2, Tag, RotateCcw, FileText, Layers, AlertTriangle,
-  Factory, Phone, MapPin, Beaker, ClipboardList, Truck,
+  Factory, Phone, MapPin, Beaker, ClipboardList, Truck, User, Hash,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -18,13 +18,14 @@ import { VirtualKeyboard } from '@/components/shared/VirtualKeyboard';
 import { useComptoirStore } from '@/store/comptoirStore';
 import { useClientStore } from '@/store/clientStore';
 import { useSalesStore, type PosProductionInput } from '@/store/salesStore';
-import { useCommandStore } from '@/store/commandStore';
+import { useCommandStore, type Command } from '@/store/commandStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useStockStore } from '@/store/stockStore';
 import { useFicheTechnicStore, type FicheTechnic } from '@/store/ficheTechnicStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { formatCurrency, todayISO } from '@/lib/utils';
 import { printSaleInvoice, type InvoiceProductionDetail } from '@/lib/invoicePrint';
+import { printCommandOrder } from '@/lib/documents';
 import { toast } from '@/components/ui/Toast';
 import type { Sale, ComptoirItem, Product, UsedProduct, Client } from '@/types';
 
@@ -32,6 +33,9 @@ import type { Sale, ComptoirItem, Product, UsedProduct, Client } from '@/types';
 interface ScaledIngredient extends UsedProduct {
   isFiche: boolean;
   available: number;
+  /** false when the ingredient no longer matches any product of the stock:
+   *  the database would then have nothing to decrement. */
+  resolved: boolean;
 }
 
 interface CartLine {
@@ -79,12 +83,15 @@ function scaleIngredients(
     const unitCost = isFiche ? (u.unitCost ?? 0) : stockProd ? stockProd.purchasePrice : (u.unitCost ?? 0);
     return {
       ...u,
-      productId: stockProd ? stockProd.id : u.productId,
+      // Only a live product id may be sent: an id that no longer exists in the
+      // stock would silently skip the decrement on the database side.
+      productId: isFiche ? u.productId : stockProd ? stockProd.id : '',
       isFiche,
       quantityUsed,
       unitCost,
       lineCost: Number((quantityUsed * unitCost).toFixed(2)),
       available: isFiche ? Infinity : stockProd ? stockProd.currentQuantity : 0,
+      resolved: isFiche || !!stockProd,
     };
   });
 }
@@ -94,7 +101,7 @@ export default function POS() {
   const items = useComptoirStore((s) => s.items);
   const products = useStockStore((s) => s.products);
   const ficheTechnics = useFicheTechnicStore((s) => s.ficheTechnics);
-  const { clients, addClient, getOrCreatePassager } = useClientStore();
+  const { clients, addClient, updateClient, getOrCreatePassager } = useClientStore();
   const addPosSale = useSalesStore((s) => s.addPosSale);
   const addCommand = useCommandStore((s) => s.addCommand);
   const settings = useSettingsStore((s) => s.settings);
@@ -102,6 +109,8 @@ export default function POS() {
   const [printPrompt, setPrintPrompt] = useState<
     { sale: Sale; productions: InvoiceProductionDetail[]; client: Client | null } | null
   >(null);
+  /** Commande enregistrée depuis la caisse, en attente d'impression. */
+  const [commandPrompt, setCommandPrompt] = useState<Command | null>(null);
   const [search, setSearch] = useState('');
   const [source, setSource] = useState<'all' | 'comptoir' | 'fiche'>('all');
   const [keyboardEnabled, setKeyboardEnabled] = useState(
@@ -130,6 +139,12 @@ export default function POS() {
   const [receiveMinute, setReceiveMinute] = useState('30');
   const [cmdCustomTotal, setCmdCustomTotal] = useState<number | null>(null);
   const [versement, setVersement] = useState<number>(0);
+  /** Adresse de livraison — obligatoire pour chaque commande créée à la caisse. */
+  const [clientAddress, setClientAddress] = useState('');
+  const [addressError, setAddressError] = useState(false);
+  /** Chauffeur prévu (matricule facultatif). */
+  const [driverName, setDriverName] = useState('');
+  const [driverPlate, setDriverPlate] = useState('');
   /** Fiche technique being configured before it enters the cart. */
   const [ficheModal, setFicheModal] = useState<FicheTechnic | null>(null);
   /** Fiche line of the cart whose recipe is being inspected. */
@@ -209,6 +224,18 @@ export default function POS() {
       ),
     [plannedProductions]
   );
+
+  /** Ingredients of the cart that no longer exist in the stock: the batch could
+   *  be produced but nothing would be deducted, so the sale is blocked. */
+  const unknownIngredients = useMemo(() => {
+    const names = new Map<string, string>();
+    plannedProductions.forEach(({ line, ingredients }) =>
+      ingredients.forEach((i) => {
+        if (!i.resolved) names.set(`${line.productName}|${i.productName}`, `${i.productName} (${line.productName})`);
+      })
+    );
+    return [...names.values()];
+  }, [plannedProductions]);
 
   /** Raw materials missing to honour every fiche line of the cart. */
   const missingStock = useMemo(() => {
@@ -312,6 +339,16 @@ export default function POS() {
     setDocDate(todayISO()); setBonNumber('');
     setReceiveDate(todayISO()); setReceiveHour('14'); setReceiveMinute('30');
     setCmdCustomTotal(null); setVersement(0);
+    setClientAddress(''); setAddressError(false);
+    setDriverName(''); setDriverPlate('');
+  };
+
+  /** Sélection d'un client : son adresse connue est proposée, à confirmer. */
+  const selectClient = (c: Client) => {
+    setClientId(c.id);
+    setClientSearch(c.name);
+    setClientAddress(c.address || '');
+    setAddressError(false);
   };
 
   // ---------------------------------------------------------------- create --
@@ -319,6 +356,13 @@ export default function POS() {
     if (cart.length === 0) { toast.error('Panier vide'); return; }
     if (cart.some((c) => c.quantity <= 0)) { toast.error('Une ligne a une quantité nulle'); return; }
     if (rest > 0 && !clientId) { toast.error('Sélectionnez un client pour une vente à crédit'); return; }
+    if (unknownIngredients.length > 0) {
+      toast.error(
+        `Matières introuvables en stock : ${unknownIngredients.join(', ')} — corrigez la fiche technique, ` +
+        'sinon les quantités ne seraient pas déduites du stock'
+      );
+      return;
+    }
     if (missingStock.length > 0) {
       toast.error('Stock de matières premières insuffisant pour lancer la production');
       return;
@@ -416,6 +460,11 @@ export default function POS() {
     if (cart.some((c) => c.quantity <= 0)) { toast.error('Une ligne a une quantité nulle'); return; }
     if (Number(versement) < 0) { toast.error('Le versement ne peut pas être négatif'); return; }
     if (!receiveDate) { toast.error('Choisissez une date de livraison'); return; }
+    if (!clientAddress.trim()) {
+      setAddressError(true);
+      toast.error("L'adresse de livraison du client est obligatoire");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -428,10 +477,19 @@ export default function POS() {
           ? new Date(docDate + 'T12:00:00').toISOString()
           : undefined;
 
+      // l'adresse saisie devient l'adresse de référence du client
+      const address = clientAddress.trim();
+      if (address && address !== (client.address || '')) {
+        await updateClient(client.id, { address });
+      }
+
       const cmd = await addCommand({
         clientId: client.id,
         clientName: client.name,
         clientPhone: client.phone,
+        clientAddress: address,
+        driverName: driverName.trim() || undefined,
+        driverPlate: driverPlate.trim() || undefined,
         receiveDate, receiveHour, receiveMinute,
         items: cart.map((c) => ({
           // comptoir lines are neither a stock product nor a fiche → keep both ids null
@@ -451,12 +509,45 @@ export default function POS() {
       });
 
       toast.success(`Commande créée · ${cmd.reference}`);
+      setCommandPrompt(cmd);
       reset();
     } catch {
       /* the store already showed the error */
     } finally {
       setSaving(false);
     }
+  };
+
+  const printCommandBon = (cmd: Command) => {
+    printCommandOrder(
+      {
+        reference: cmd.reference,
+        bonNumber: cmd.bonNumber,
+        createdAt: cmd.createdAt,
+        receiveDate: cmd.receiveDate,
+        receiveHour: cmd.receiveHour,
+        receiveMinute: cmd.receiveMinute,
+        clientName: cmd.clientName,
+        clientPhone: cmd.clientPhone,
+        clientAddress: cmd.clientAddress,
+        driverName: cmd.driverName,
+        driverPlate: cmd.driverPlate,
+        notes: cmd.notes,
+        lines: cmd.items.map((l) => ({
+          productName: l.productName,
+          quantity: l.quantity,
+          deliveredQuantity: l.deliveredQuantity ?? 0,
+          unit: l.sellByUnit ? l.sellUnit : undefined,
+          unitPrice: l.unitPrice,
+          totalPrice: l.totalPrice,
+        })),
+        totalAmount: cmd.totalAmount,
+        paidAmount: cmd.paidAmount,
+        restAmount: cmd.restAmount,
+      },
+      settings
+    );
+    setCommandPrompt(null);
   };
 
   const handlePrintInvoice = (prompt: NonNullable<typeof printPrompt>) => {
@@ -702,7 +793,7 @@ export default function POS() {
                     {clientResults.map((c) => (
                       <button
                         key={c.id}
-                        onClick={() => { setClientId(c.id); setClientSearch(c.name); }}
+                        onClick={() => selectClient(c)}
                         className="w-full text-left px-3 py-2.5 text-sm hover:bg-gold/10 border-b border-gold/5 last:border-0"
                       >
                         <span className="font-medium text-text-primary">{c.name}</span>
@@ -734,7 +825,7 @@ export default function POS() {
                   )}
                 </div>
                 <button
-                  onClick={() => { setClientId(null); setClientSearch(''); }}
+                  onClick={() => { setClientId(null); setClientSearch(''); setClientAddress(''); }}
                   className="text-rose-deep shrink-0"
                   title="Retirer le client"
                 >
@@ -765,6 +856,62 @@ export default function POS() {
               className="h-11"
             />
           </div>
+
+          {/* ---- Adresse de livraison + chauffeur (commandes) ---- */}
+          {posMode === 'command' && (
+            <div className="mb-4 rounded-2xl border border-gold/20 bg-vanilla/40 p-4 space-y-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted flex items-center gap-1.5">
+                <MapPin size={13} className="text-gold" /> Adresse de livraison &amp; chauffeur
+              </p>
+              <Input
+                label="Adresse de livraison du client *"
+                placeholder="Ex : Cité 200 logements, Bt 4, Blida"
+                value={clientAddress}
+                icon={<MapPin size={15} />}
+                error={addressError ? 'Adresse obligatoire' : undefined}
+                onChange={(e) => { setClientAddress(e.target.value); setAddressError(false); }}
+                className="h-11"
+              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <Input
+                  label="Nom du chauffeur"
+                  placeholder="Ex : Karim B."
+                  value={driverName}
+                  icon={<User size={15} />}
+                  onChange={(e) => setDriverName(e.target.value)}
+                  className="h-11"
+                />
+                <Input
+                  label="Matricule (facultatif)"
+                  placeholder="Ex : 12345-116-09"
+                  value={driverPlate}
+                  icon={<Hash size={15} />}
+                  onChange={(e) => setDriverPlate(e.target.value)}
+                  className="h-11"
+                />
+              </div>
+              <p className="text-[11px] text-text-muted">
+                L'adresse est redemandée à chaque commande ; elle est imprimée sur le bon de
+                commande et reprise sur les bons de livraison.
+              </p>
+            </div>
+          )}
+
+          {/* ---- Ingrédients introuvables : le stock ne serait pas décrémenté ---- */}
+          {posMode === 'sale' && unknownIngredients.length > 0 && (
+            <div className="mb-3 rounded-xl border border-rose-deep/40 bg-rose-deep/10 px-3.5 py-2.5 text-xs text-rose-deep">
+              <p className="font-bold flex items-center gap-1.5">
+                <AlertTriangle size={13} /> Matières introuvables dans le stock
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {unknownIngredients.map((n) => <li key={n}>• {n}</li>)}
+              </ul>
+              <p className="mt-1">
+                Ces matières ne correspondent à aucun produit du stock : leurs quantités ne
+                pourraient pas être déduites. Corrigez la fiche technique avant de vendre.
+              </p>
+            </div>
+          )}
 
           {/* ---- Production warning (ventes uniquement) ---- */}
           {posMode === 'sale' && ficheLines > 0 && (
@@ -957,7 +1104,7 @@ export default function POS() {
                   variant={rest <= 0 ? 'gold' : 'rose'}
                   className="w-full h-12 text-base"
                   onClick={createSale}
-                  disabled={saving || cart.length === 0 || missingStock.length > 0}
+                  disabled={saving || cart.length === 0 || missingStock.length > 0 || unknownIngredients.length > 0}
                 >
                   {saving ? 'Enregistrement…' : rest <= 0 ? 'Valider la vente (payée)' : 'Valider la vente (dette)'}
                 </Button>
@@ -1101,15 +1248,36 @@ export default function POS() {
 
       <Modal open={showClientForm} onClose={() => setShowClientForm(false)} title="Nouveau client" size="sm">
         <ClientForm
+          requireAddress={posMode === 'command'}
           onSubmit={async (data) => {
             const c = await addClient(data);
-            setClientId(c.id);
-            setClientSearch(c.name);
+            selectClient(c);
             setShowClientForm(false);
             toast.success('Client créé');
           }}
           onCancel={() => setShowClientForm(false)}
         />
+      </Modal>
+
+      {/* ---- Print prompt after a command created at the till ---- */}
+      <Modal open={!!commandPrompt} onClose={() => setCommandPrompt(null)} size="sm">
+        <div className="flex flex-col items-center text-center py-2">
+          <div className="h-14 w-14 rounded-full bg-pistachio/15 flex items-center justify-center mb-4">
+            <CheckCircle2 size={30} className="text-pistachio" />
+          </div>
+          <h3 className="font-display text-lg font-semibold text-text-primary mb-1">Commande enregistrée</h3>
+          <p className="text-sm text-text-secondary mb-1">{commandPrompt?.reference}</p>
+          <p className="text-xs text-text-muted mb-6">Voulez-vous imprimer le bon de commande ?</p>
+          <div className="flex gap-3 w-full">
+            <Button variant="secondary" className="flex-1" onClick={() => setCommandPrompt(null)}>Non, merci</Button>
+            <Button
+              variant="gold" className="flex-1"
+              onClick={() => commandPrompt && printCommandBon(commandPrompt)}
+            >
+              <Printer size={16} /> Imprimer
+            </Button>
+          </div>
+        </div>
       </Modal>
 
       {/* ---- Print prompt after a successful sale ---- */}
@@ -1164,6 +1332,7 @@ function FicheSaleForm({
   const revenue = quantity * unitPrice;
   const gains = revenue - totalCost;
   const short = ingredients.filter((i) => !i.isFiche && i.quantityUsed > i.available + 1e-6);
+  const unknown = ingredients.filter((i) => !i.resolved);
   const su = fiche.sellByUnit && fiche.sellUnit ? ` ${fiche.sellUnit}` : '';
 
   return (
@@ -1205,6 +1374,21 @@ function FicheSaleForm({
         Modifier la quantité recalcule automatiquement les quantités de matières consommées.
       </p>
 
+      {unknown.length > 0 && (
+        <div className="rounded-xl border border-rose-deep/40 bg-rose-deep/10 p-3 text-xs text-rose-deep">
+          <p className="font-bold flex items-center gap-1.5">
+            <AlertTriangle size={13} /> Matières introuvables dans le stock
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {unknown.map((u) => <li key={u.productName}>• {u.productName}</li>)}
+          </ul>
+          <p className="mt-1">
+            Ces lignes ne pointent vers aucun produit du stock : leur quantité ne serait pas
+            déduite. Modifiez la fiche technique pour les rattacher à un produit existant.
+          </p>
+        </div>
+      )}
+
       {short.length > 0 && (
         <div className="rounded-xl border border-rose-deep/25 bg-rose-deep/8 p-3 text-xs text-rose-deep">
           <p className="font-bold flex items-center gap-1.5"><AlertTriangle size={13} /> Stock insuffisant</p>
@@ -1231,7 +1415,7 @@ function FicheSaleForm({
         <Button variant="secondary" onClick={onCancel}>Annuler</Button>
         <Button
           variant="gold"
-          disabled={quantity <= 0 || short.length > 0}
+          disabled={quantity <= 0 || short.length > 0 || unknown.length > 0}
           onClick={() => onConfirm(quantity, unitPrice)}
         >
           <ShoppingBag size={16} /> Ajouter au panier
@@ -1265,10 +1449,10 @@ function IngredientTable({ ingredients, outputQuantity, unit }: {
             </tr>
           </thead>
           <tbody>
-            {ingredients.map((i) => {
+            {ingredients.map((i, idx) => {
               const shortfall = !i.isFiche && i.quantityUsed > i.available + 1e-6;
               return (
-                <tr key={i.productId} className={`border-t border-gold/10 ${shortfall ? 'bg-rose-deep/5' : ''}`}>
+                <tr key={`${i.productId}-${idx}`} className={`border-t border-gold/10 ${shortfall || !i.resolved ? 'bg-rose-deep/5' : ''}`}>
                   <td className="px-3 py-2 font-medium">
                     <span className="flex items-center gap-1.5">
                       {i.isFiche && (
@@ -1283,7 +1467,7 @@ function IngredientTable({ ingredients, outputQuantity, unit }: {
                     {i.quantityUsed}{i.unit ? ` ${i.unit}` : ''}
                   </td>
                   <td className="px-3 py-2 text-right tabular text-text-muted">
-                    {i.isFiche ? '—' : `${i.available}${i.unit ? ` ${i.unit}` : ''}`}
+                    {i.isFiche ? '—' : i.resolved ? `${i.available}${i.unit ? ` ${i.unit}` : ''}` : 'Introuvable'}
                   </td>
                   <td className="px-3 py-2 text-right tabular">{formatCurrency(i.unitCost ?? 0)}</td>
                   <td className="px-3 py-2 text-right tabular text-rose-deep">{formatCurrency(i.lineCost ?? 0)}</td>

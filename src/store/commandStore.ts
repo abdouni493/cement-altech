@@ -32,6 +32,12 @@ export interface Command {
   clientId: string;
   clientName: string;
   clientPhone?: string;
+  /** Adresse de livraison — saisie obligatoirement à chaque commande. */
+  clientAddress?: string;
+  /** Chauffeur prévu pour emmener la commande. */
+  driverName?: string;
+  /** Immatriculation du camion — facultative. */
+  driverPlate?: string;
   items: CommandItem[];
   totalAmount: number;
   advancePaid: number;
@@ -83,15 +89,23 @@ interface CommandState {
     commandId: string,
     items: CommandDeliveryItem[],
     deliveredAt: string,
-    notes?: string
+    notes?: string,
+    driver?: DeliveryDriver
   ) => Promise<CommandDelivery>;
   updateDelivery: (
     id: string,
     items: CommandDeliveryItem[],
     deliveredAt: string,
-    notes?: string
+    notes?: string,
+    driver?: DeliveryDriver
   ) => Promise<void>;
   deleteDelivery: (id: string) => Promise<void>;
+}
+
+/** Chauffeur d'une livraison — repris de la commande ou saisi à la volée. */
+export interface DeliveryDriver {
+  driverName?: string;
+  driverPlate?: string;
 }
 
 const itemPayload = (i: CommandItem) => ({
@@ -130,6 +144,9 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         client_id: data.clientId,
         client_name: data.clientName,
         client_phone: data.clientPhone ?? null,
+        client_address: data.clientAddress ?? null,
+        driver_name: data.driverName ?? null,
+        driver_plate: data.driverPlate ?? null,
         receive_date: data.receiveDate || null,
         receive_hour: data.receiveHour,
         receive_minute: data.receiveMinute,
@@ -158,6 +175,10 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         receive_minute: data.receiveMinute,
         total_amount: data.totalAmount,
         notes: data.notes ?? null,
+        // champs facultatifs : ne jamais les effacer sur une mise à jour partielle
+        ...(data.clientAddress !== undefined ? { client_address: data.clientAddress || null } : {}),
+        ...(data.driverName !== undefined ? { driver_name: data.driverName || null } : {}),
+        ...(data.driverPlate !== undefined ? { driver_plate: data.driverPlate || null } : {}),
         ...(data.bonNumber !== undefined ? { bon_number: data.bonNumber || null } : {}),
         ...(data.createdAt ? { created_at: data.createdAt } : {}),
       })
@@ -196,12 +217,14 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     });
   },
 
-  addDelivery: async (commandId, items, deliveredAt, notes = '') => {
+  addDelivery: async (commandId, items, deliveredAt, notes = '', driver) => {
     const row = await save('commands.deliver', () =>
       rpc.createCommandDelivery({
         command_id: commandId,
         delivered_at: deliveredAt,
         notes,
+        driver_name: driver?.driverName ?? null,
+        driver_plate: driver?.driverPlate ?? null,
         items: items.map(deliveryItemPayload),
       })
     );
@@ -212,11 +235,13 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     return deliveries.find((d) => d.id === row.id) as CommandDelivery;
   },
 
-  updateDelivery: async (id, items, deliveredAt, notes = '') => {
+  updateDelivery: async (id, items, deliveredAt, notes = '', driver) => {
     await save('commands.delivery.update', () =>
       rpc.updateCommandDelivery(id, {
         delivered_at: deliveredAt,
         notes,
+        driver_name: driver?.driverName ?? null,
+        driver_plate: driver?.driverPlate ?? null,
         items: items.map(deliveryItemPayload),
       })
     );

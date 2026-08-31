@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Truck, PackageCheck, AlertTriangle, CalendarClock } from 'lucide-react';
+import { Truck, PackageCheck, AlertTriangle, CalendarClock, User, Hash, MapPin } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { formatCurrency } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
-import type { Command } from '@/store/commandStore';
+import type { Command, DeliveryDriver } from '@/store/commandStore';
 import type { CommandDelivery, CommandDeliveryItem } from '@/types';
 
 interface DeliveryModalProps {
@@ -15,7 +15,12 @@ interface DeliveryModalProps {
   /** When set the modal edits this delivery instead of creating a new one. */
   editing?: CommandDelivery | null;
   onClose: () => void;
-  onSave: (items: CommandDeliveryItem[], deliveredAt: string, notes: string) => Promise<void>;
+  onSave: (
+    items: CommandDeliveryItem[],
+    deliveredAt: string,
+    notes: string,
+    driver: DeliveryDriver
+  ) => Promise<void>;
 }
 
 function nowLocal(): string {
@@ -42,6 +47,10 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
   const [deliveredAt, setDeliveredAt] = useState(nowLocal());
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
+  /** Chauffeur : par défaut celui de la commande, sinon saisi ici. */
+  const [sameDriver, setSameDriver] = useState(true);
+  const [driverName, setDriverName] = useState('');
+  const [driverPlate, setDriverPlate] = useState('');
 
   useEffect(() => {
     if (!open || !command) return;
@@ -61,7 +70,28 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
     setQuantities(init);
     setDeliveredAt(editing ? toLocal(editing.deliveredAt) : nowLocal());
     setNotes(editing?.notes ?? '');
+
+    // Le chauffeur de la commande est proposé par défaut ; l'opérateur peut
+    // décocher « même chauffeur » pour en désigner un autre pour ce voyage.
+    const cmdName = command.driverName ?? '';
+    const cmdPlate = command.driverPlate ?? '';
+    const curName = editing?.driverName ?? cmdName;
+    const curPlate = editing?.driverPlate ?? cmdPlate;
+    setDriverName(curName);
+    setDriverPlate(curPlate);
+    setSameDriver(
+      !!(cmdName || cmdPlate) && curName === cmdName && curPlate === cmdPlate
+    );
   }, [open, command, editing]);
+
+  /** Coche « même chauffeur » → on recopie celui de la commande. */
+  const toggleSameDriver = (val: boolean) => {
+    setSameDriver(val);
+    if (val && command) {
+      setDriverName(command.driverName ?? '');
+      setDriverPlate(command.driverPlate ?? '');
+    }
+  };
 
   const rows = useMemo(() => {
     if (!command) return [];
@@ -103,7 +133,10 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
           quantity: r.now,
           sellUnit: r.item.sellUnit,
         }));
-      await onSave(items, new Date(deliveredAt).toISOString(), notes);
+      await onSave(items, new Date(deliveredAt).toISOString(), notes, {
+        driverName: driverName.trim() || undefined,
+        driverPlate: driverPlate.trim() || undefined,
+      });
       onClose();
     } finally {
       setSaving(false);
@@ -134,6 +167,16 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
             </div>
           </div>
 
+          {command.clientAddress && (
+            <div className="flex items-start gap-2 rounded-xl border border-gold/20 bg-vanilla/40 px-3.5 py-2.5 text-xs">
+              <MapPin size={14} className="text-gold shrink-0 mt-0.5" />
+              <span className="text-text-secondary">
+                <span className="font-bold uppercase tracking-wide text-text-muted">Adresse de livraison : </span>
+                <span className="font-semibold text-text-primary">{command.clientAddress}</span>
+              </span>
+            </div>
+          )}
+
           <Input
             label="Date et heure de la livraison"
             type="datetime-local"
@@ -141,6 +184,46 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
             onChange={(e) => setDeliveredAt(e.target.value)}
             icon={<CalendarClock size={15} />}
           />
+
+          {/* ---- Chauffeur de cette livraison ---- */}
+          <div className="rounded-2xl border border-gold/20 bg-vanilla/40 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-bold uppercase tracking-wider text-gold flex items-center gap-2">
+                <Truck size={14} /> Chauffeur de la livraison
+              </p>
+              {(command.driverName || command.driverPlate) && (
+                <label className="flex items-center gap-2 text-xs font-semibold text-text-secondary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sameDriver}
+                    onChange={(e) => toggleSameDriver(e.target.checked)}
+                    className="h-4 w-4 accent-[#B4881B]"
+                  />
+                  Même chauffeur que la commande
+                  <span className="text-text-muted font-normal">
+                    ({command.driverName || '—'}
+                    {command.driverPlate ? ` · ${command.driverPlate}` : ''})
+                  </span>
+                </label>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input
+                label="Nom du chauffeur"
+                value={driverName}
+                onChange={(e) => { setDriverName(e.target.value); setSameDriver(false); }}
+                placeholder="Ex : Karim B."
+                icon={<User size={15} />}
+              />
+              <Input
+                label="Matricule (facultatif)"
+                value={driverPlate}
+                onChange={(e) => { setDriverPlate(e.target.value); setSameDriver(false); }}
+                placeholder="Ex : 12345-116-09"
+                icon={<Hash size={15} />}
+              />
+            </div>
+          </div>
 
           <div className="overflow-x-auto rounded-xl border border-gold/15">
             <table className="w-full text-sm">
@@ -199,7 +282,7 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
             label="Observations (optionnel)"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
-            placeholder="Chauffeur, immatriculation, remarques du client…"
+            placeholder="Remarques du client, état de la marchandise…"
             rows={2}
           />
 

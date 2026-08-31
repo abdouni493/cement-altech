@@ -186,6 +186,8 @@ const toCommandDelivery = (r: any): CommandDelivery => ({
   date: r.date,
   deliveredAt: r.delivered_at ?? r.created_at,
   notes: r.notes ?? '',
+  driverName: r.driver_name ?? undefined,
+  driverPlate: r.driver_plate ?? undefined,
   createdBy: r.created_by ?? undefined,
   items: (r.command_delivery_items ?? []).map((i: any) => ({
     commandItemId: i.command_item_id ?? undefined,
@@ -379,6 +381,9 @@ const toCommand = (r: any): Command => ({
   clientId: r.client_id ?? '',
   clientName: r.client_name,
   clientPhone: r.client_phone ?? undefined,
+  clientAddress: r.client_address ?? undefined,
+  driverName: r.driver_name ?? undefined,
+  driverPlate: r.driver_plate ?? undefined,
   totalAmount: num(r.total_amount),
   advancePaid: num(r.advance_paid),
   paidAmount: num(r.paid_amount),

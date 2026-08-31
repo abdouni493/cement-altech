@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShoppingCart, Plus, Search, Calendar, Clock, Eye, Pencil, Trash2, CheckCircle2,
   AlertTriangle, Printer, UserPlus, X, Coins, User, Phone, Receipt, Truck,
-  PackageCheck, History, ClipboardList,
+  PackageCheck, History, ClipboardList, MapPin, Hash,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -18,15 +18,17 @@ import { SearchBar } from '@/components/ui/SearchBar';
 import { StatCard } from '@/components/shared/StatCard';
 import { toast } from '@/components/ui/Toast';
 import { DeliveryModal } from './DeliveryModal';
-import { useCommandStore, deliveryStatus, type Command, type CommandLine } from '@/store/commandStore';
+import {
+  useCommandStore, deliveryStatus,
+  type Command, type CommandLine, type DeliveryDriver,
+} from '@/store/commandStore';
 import { useClientStore } from '@/store/clientStore';
 import { useFicheTechnicStore } from '@/store/ficheTechnicStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime, todayISO } from '@/lib/utils';
-import { printDocument } from '@/lib/print';
-import { printDeliveryNote } from '@/lib/documents';
+import { printCommandOrder, printDeliveryNote } from '@/lib/documents';
 import { cardVariants } from '@/lib/animations';
 import type { CommandDelivery } from '@/types';
 
@@ -42,7 +44,7 @@ export default function CommandsPage() {
     commands, deliveries, addCommand, updateCommand, deleteCommand, payDebt,
     addDelivery, updateDelivery, deleteDelivery,
   } = useCommandStore();
-  const { clients, addClient } = useClientStore();
+  const { clients, addClient, updateClient } = useClientStore();
   const { ficheTechnics } = useFicheTechnicStore();
   const settings = useSettingsStore((s) => s.settings);
 
@@ -57,10 +59,18 @@ export default function CommandsPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [clientSearch, setClientSearch] = useState('');
-  const [selectedClient, setSelectedClient] = useState<{ id: string; name: string; phone?: string } | null>(null);
+  const [selectedClient, setSelectedClient] =
+    useState<{ id: string; name: string; phone?: string; address?: string } | null>(null);
   const [showNewClientForm, setShowNewClientForm] = useState(false);
   const [newClientName, setNewClientName] = useState('');
   const [newClientPhone, setNewClientPhone] = useState('');
+  const [newClientAddress, setNewClientAddress] = useState('');
+  /** Adresse de livraison — redemandée à CHAQUE commande. */
+  const [clientAddress, setClientAddress] = useState('');
+  const [addressError, setAddressError] = useState(false);
+  /** Chauffeur qui emmènera la commande (matricule facultatif). */
+  const [driverName, setDriverName] = useState('');
+  const [driverPlate, setDriverPlate] = useState('');
   const [recipeSearch, setRecipeSearch] = useState('');
   const [selectedItems, setSelectedItems] = useState<CommandLine[]>([]);
   const [receiveDate, setReceiveDate] = useState(todayISO());
@@ -157,10 +167,26 @@ export default function CommandsPage() {
   /* ---------------------------------------------------------------- form */
   const handleCreateClientInline = async () => {
     if (!newClientName.trim()) { toast.error('Nom du client requis'); return; }
-    const newCli = await addClient({ name: newClientName.trim(), phone: newClientPhone.trim() });
+    if (!newClientAddress.trim()) { toast.error('Adresse du client requise'); return; }
+    const newCli = await addClient({
+      name: newClientName.trim(),
+      phone: newClientPhone.trim(),
+      address: newClientAddress.trim(),
+    });
     setSelectedClient(newCli);
-    setNewClientName(''); setNewClientPhone(''); setShowNewClientForm(false);
+    setClientAddress(newCli.address || newClientAddress.trim());
+    setAddressError(false);
+    setNewClientName(''); setNewClientPhone(''); setNewClientAddress('');
+    setShowNewClientForm(false);
     toast.success('Client créé et sélectionné');
+  };
+
+  /** Sélection d'un client : son adresse connue est proposée, jamais imposée. */
+  const handleSelectClient = (cli: { id: string; name: string; phone?: string; address?: string }) => {
+    setSelectedClient(cli);
+    setClientAddress(cli.address || '');
+    setAddressError(false);
+    setClientSearch('');
   };
 
   const handleAddRecipeLine = (ft: (typeof ficheTechnics)[0]) => {
@@ -197,12 +223,24 @@ export default function CommandsPage() {
     setReceiveDate(todayISO()); setReceiveHour('14'); setReceiveMinute('30');
     setCustomTotal(null); setVersement(0); setClientSearch(''); setRecipeSearch('');
     setBonNumber(''); setCreatedDate(todayISO()); setOriginalCreatedDate(todayISO());
+    // l'adresse et le chauffeur sont redemandés à chaque nouvelle commande
+    setClientAddress(''); setAddressError(false);
+    setDriverName(''); setDriverPlate('');
+    setNewClientName(''); setNewClientPhone(''); setNewClientAddress('');
     setShowNewClientForm(false); setFormOpen(true);
   };
 
   const handleOpenEditForm = (cmd: Command) => {
     setEditingId(cmd.id);
-    setSelectedClient({ id: cmd.clientId, name: cmd.clientName, phone: cmd.clientPhone });
+    const known = clients.find((c) => c.id === cmd.clientId);
+    setSelectedClient({
+      id: cmd.clientId, name: cmd.clientName, phone: cmd.clientPhone,
+      address: cmd.clientAddress ?? known?.address,
+    });
+    setClientAddress(cmd.clientAddress || known?.address || '');
+    setAddressError(false);
+    setDriverName(cmd.driverName || '');
+    setDriverPlate(cmd.driverPlate || '');
     setSelectedItems(cmd.items);
     setReceiveDate(cmd.receiveDate); setReceiveHour(cmd.receiveHour); setReceiveMinute(cmd.receiveMinute);
     setCustomTotal(cmd.totalAmount); setVersement(cmd.paidAmount);
@@ -213,6 +251,11 @@ export default function CommandsPage() {
 
   const handleSaveCommand = async () => {
     if (!selectedClient) { toast.error('Veuillez sélectionner un client'); return; }
+    if (!clientAddress.trim()) {
+      setAddressError(true);
+      toast.error("L'adresse de livraison du client est obligatoire");
+      return;
+    }
     if (selectedItems.length === 0) { toast.error('Ajoutez au moins un produit'); return; }
     if (versement < 0) { toast.error('Le versement ne peut pas être négatif'); return; }
 
@@ -226,10 +269,19 @@ export default function CommandsPage() {
           ? new Date(createdDate + 'T12:00:00').toISOString()
           : undefined;
 
+      const address = clientAddress.trim();
+      // l'adresse saisie devient l'adresse de référence du client
+      if (address && address !== (clients.find((c) => c.id === selectedClient.id)?.address || '')) {
+        await updateClient(selectedClient.id, { address });
+      }
+
       const cmdData = {
         clientId: selectedClient.id,
         clientName: selectedClient.name,
         clientPhone: selectedClient.phone,
+        clientAddress: address,
+        driverName: driverName.trim() || undefined,
+        driverPlate: driverPlate.trim() || undefined,
         receiveDate, receiveHour, receiveMinute,
         items: selectedItems,
         totalAmount: finalTotalAmount,
@@ -260,17 +312,18 @@ export default function CommandsPage() {
   const handleSaveDelivery = async (
     items: Parameters<typeof addDelivery>[1],
     deliveredAt: string,
-    notes: string
+    notes: string,
+    driver: DeliveryDriver
   ) => {
     if (!deliverCmd) return;
     if (editingDelivery) {
-      await updateDelivery(editingDelivery.id, items, deliveredAt, notes);
+      await updateDelivery(editingDelivery.id, items, deliveredAt, notes, driver);
       toast.success('Livraison modifiée');
       setEditingDelivery(null);
       setDeliverCmd(null);
       return;
     }
-    const delivery = await addDelivery(deliverCmd.id, items, deliveredAt, notes);
+    const delivery = await addDelivery(deliverCmd.id, items, deliveredAt, notes, driver);
     const refreshed = useCommandStore.getState().commands.find((c) => c.id === deliverCmd.id) ?? deliverCmd;
     toast.success('Livraison enregistrée');
     setDeliverCmd(null);
@@ -282,10 +335,14 @@ export default function CommandsPage() {
       {
         reference: delivery.reference,
         commandReference: cmd.reference,
+        bonNumber: cmd.bonNumber,
         clientName: cmd.clientName,
         clientPhone: cmd.clientPhone,
+        clientAddress: cmd.clientAddress,
         deliveredAt: delivery.deliveredAt,
         notes: delivery.notes,
+        driverName: delivery.driverName || cmd.driverName,
+        driverPlate: delivery.driverPlate || cmd.driverPlate,
         lines: cmd.items.map((it) => {
           const line = delivery.items.find(
             (l) => (l.commandItemId && l.commandItemId === it.id) || l.productName === it.productName
@@ -315,81 +372,35 @@ export default function CommandsPage() {
   };
 
   /* -------------------------------------------------- printing (command) */
-  const printBonDeCommande = (cmd: Command) => {
-    const rows = cmd.items
-      .map((l) => {
-        const delivered = l.deliveredQuantity ?? 0;
-        const u = l.sellByUnit && l.sellUnit ? ` ${l.sellUnit}` : '';
-        return `<tr>
-          <td style="padding:9px;border:1px solid #ddd;font-weight:bold;">${l.productName}</td>
-          <td style="padding:9px;border:1px solid #ddd;text-align:center;">${l.quantity}${u}</td>
-          <td style="padding:9px;border:1px solid #ddd;text-align:center;">${delivered}${u}</td>
-          <td style="padding:9px;border:1px solid #ddd;text-align:right;">${formatCurrency(l.unitPrice)}</td>
-          <td style="padding:9px;border:1px solid #ddd;text-align:right;font-weight:bold;">${formatCurrency(l.totalPrice)}</td>
-        </tr>`;
-      })
-      .join('');
-
-    const logoHtml = settings.logo
-      ? `<img src="${settings.logo}" style="max-height:70px;margin-bottom:5px;" />`
-      : `<div style="font-size:30px;font-weight:bold;">🏗️ ${settings.name || 'ALTECH PRODUCTION'}</div>`;
-
-    const d = deliveryStatus(cmd);
-
-    printDocument(
-      `<div style="font-family:Arial,sans-serif;color:#000;padding:24px;max-width:800px;margin:0 auto;border:2px solid #000;border-radius:8px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #000;padding-bottom:14px;margin-bottom:18px;">
-          <div>
-            ${logoHtml}
-            <h2 style="margin:5px 0 2px 0;font-size:19px;">${settings.name || 'ALTECH PRODUCTION'}</h2>
-            <p style="margin:2px 0;font-size:12px;">📍 ${settings.address || '—'}</p>
-            <p style="margin:2px 0;font-size:12px;">📞 ${settings.phone || '—'}</p>
-            ${settings.nif ? `<p style="margin:2px 0;font-size:11px;">NIF: ${settings.nif} | NIS: ${settings.nis || ''} | RC: ${settings.rc || ''}</p>` : ''}
-          </div>
-          <div style="text-align:right;">
-            <h1 style="margin:0;font-size:20px;background:#000;color:#fff;padding:6px 16px;border-radius:4px;display:inline-block;">BON DE COMMANDE</h1>
-            <p style="margin:8px 0 2px 0;font-size:14px;font-weight:bold;">Réf: ${cmd.reference}</p>
-            ${cmd.bonNumber ? `<p style="margin:2px 0;font-size:13px;font-weight:bold;">N° Bon: ${cmd.bonNumber}</p>` : ''}
-            <p style="margin:2px 0;font-size:12px;">Créée le: ${formatDate(cmd.createdAt.slice(0, 10), 'fr')}</p>
-            <p style="margin:2px 0;font-size:12px;font-weight:bold;">Livraison prévue: ${formatDate(cmd.receiveDate, 'fr')} à ${cmd.receiveHour}h${cmd.receiveMinute}</p>
-          </div>
-        </div>
-
-        <div style="background:#f8f9fa;border:1px solid #ddd;padding:11px 14px;border-radius:6px;margin-bottom:18px;font-size:13px;">
-          <p style="margin:0 0 4px 0;"><strong>CLIENT :</strong> ${cmd.clientName}</p>
-          ${cmd.clientPhone ? `<p style="margin:0;"><strong>TÉLÉPHONE :</strong> ${cmd.clientPhone}</p>` : ''}
-        </div>
-
-        <table style="width:100%;border-collapse:collapse;margin-bottom:18px;font-size:12.5px;">
-          <thead><tr style="background:#efefef;">
-            <th style="border:1px solid #ddd;padding:9px;text-align:left;">Désignation</th>
-            <th style="border:1px solid #ddd;padding:9px;text-align:center;">Commandé</th>
-            <th style="border:1px solid #ddd;padding:9px;text-align:center;">Livré</th>
-            <th style="border:1px solid #ddd;padding:9px;text-align:right;">P.U.</th>
-            <th style="border:1px solid #ddd;padding:9px;text-align:right;">Total</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:26px;">
-          <div style="border:2px solid ${d.isFull ? '#0a7d43' : '#b45309'};color:${d.isFull ? '#0a7d43' : '#b45309'};border-radius:6px;padding:6px 14px;font-weight:bold;font-size:13px;">
-            ${d.isFull ? 'COMMANDE ENTIÈREMENT LIVRÉE' : d.isPartial ? `LIVRAISON PARTIELLE — ${d.percent.toFixed(0)}%` : 'NON LIVRÉE'}
-          </div>
-          <div style="width:300px;border:1px solid #000;border-radius:6px;overflow:hidden;font-size:13px;">
-            <div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid #ddd;"><span>Total Commande:</span><strong>${formatCurrency(cmd.totalAmount)}</strong></div>
-            <div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid #ddd;background:#e9f7ef;"><span>Acompte Versé:</span><strong>${formatCurrency(cmd.paidAmount)}</strong></div>
-            <div style="display:flex;justify-content:space-between;padding:9px 12px;background:#fdecef;font-weight:bold;"><span>Reste à Payer:</span><strong>${formatCurrency(cmd.restAmount)}</strong></div>
-          </div>
-        </div>
-
-        <div style="display:flex;justify-content:space-between;text-align:center;font-size:12px;margin-top:36px;">
-          <div style="width:45%;border:1px solid #000;padding:14px;height:90px;border-radius:6px;"><p style="margin:0 0 50px 0;font-weight:bold;">Signature Client</p></div>
-          <div style="width:45%;border:1px solid #000;padding:14px;height:90px;border-radius:6px;"><p style="margin:0 0 50px 0;font-weight:bold;">Cachet &amp; Signature Entreprise</p></div>
-        </div>
-      </div>`,
-      `Bon_de_Commande_${cmd.reference}`
+  const printBonDeCommande = (cmd: Command) =>
+    printCommandOrder(
+      {
+        reference: cmd.reference,
+        bonNumber: cmd.bonNumber,
+        createdAt: cmd.createdAt,
+        receiveDate: cmd.receiveDate,
+        receiveHour: cmd.receiveHour,
+        receiveMinute: cmd.receiveMinute,
+        clientName: cmd.clientName,
+        clientPhone: cmd.clientPhone,
+        clientAddress: cmd.clientAddress,
+        driverName: cmd.driverName,
+        driverPlate: cmd.driverPlate,
+        notes: cmd.notes,
+        lines: cmd.items.map((l) => ({
+          productName: l.productName,
+          quantity: l.quantity,
+          deliveredQuantity: l.deliveredQuantity ?? 0,
+          unit: l.sellByUnit ? l.sellUnit : undefined,
+          unitPrice: l.unitPrice,
+          totalPrice: l.totalPrice,
+        })),
+        totalAmount: cmd.totalAmount,
+        paidAmount: cmd.paidAmount,
+        restAmount: cmd.restAmount,
+      },
+      settings
     );
-  };
 
   return (
     <div className="space-y-6">
@@ -521,6 +532,18 @@ export default function CommandsPage() {
                       {cmd.clientPhone && (
                         <p className="text-xs text-text-muted flex items-center gap-1 mt-0.5">
                           <Phone size={11} /> {cmd.clientPhone}
+                        </p>
+                      )}
+                      {cmd.clientAddress && (
+                        <p className="text-xs text-text-muted flex items-start gap-1 mt-0.5">
+                          <MapPin size={11} className="shrink-0 mt-0.5" />
+                          <span className="truncate">{cmd.clientAddress}</span>
+                        </p>
+                      )}
+                      {(cmd.driverName || cmd.driverPlate) && (
+                        <p className="text-xs text-gold-dark font-semibold flex items-center gap-1 mt-0.5">
+                          <Truck size={11} /> {cmd.driverName || 'Chauffeur'}
+                          {cmd.driverPlate ? ` · ${cmd.driverPlate}` : ''}
                         </p>
                       )}
                     </div>
@@ -663,14 +686,29 @@ export default function CommandsPage() {
               <User size={15} /> 1. Client
             </h3>
             {selectedClient ? (
-              <div className="flex items-center justify-between p-3 rounded-xl bg-vanilla/60 border border-gold/30">
-                <div>
-                  <p className="font-bold text-sm text-text-primary">{selectedClient.name}</p>
-                  {selectedClient.phone && <p className="text-xs text-text-muted">📞 {selectedClient.phone}</p>}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 rounded-xl bg-vanilla/60 border border-gold/30">
+                  <div>
+                    <p className="font-bold text-sm text-text-primary">{selectedClient.name}</p>
+                    {selectedClient.phone && <p className="text-xs text-text-muted">📞 {selectedClient.phone}</p>}
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => { setSelectedClient(null); setClientAddress(''); }}>
+                    <X size={14} /> Changer
+                  </Button>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => setSelectedClient(null)}>
-                  <X size={14} /> Changer
-                </Button>
+                <Input
+                  label="Adresse de livraison du client *"
+                  placeholder="Ex : Cité 200 logements, Bt 4, Blida"
+                  value={clientAddress}
+                  icon={<MapPin size={15} />}
+                  error={addressError ? 'Adresse obligatoire' : undefined}
+                  onChange={(e) => { setClientAddress(e.target.value); setAddressError(false); }}
+                />
+                <p className="text-[11px] text-text-muted -mt-1">
+                  L'adresse est demandée à chaque commande : vérifiez-la ou corrigez-la, elle sera
+                  imprimée sur le bon de commande et sur les bons de livraison, et mise à jour sur
+                  la fiche du client.
+                </p>
               </div>
             ) : (
               <div className="space-y-3">
@@ -700,6 +738,11 @@ export default function CommandsPage() {
                         <Input placeholder="Nom du client *" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} />
                         <Input placeholder="Téléphone" value={newClientPhone} onChange={(e) => setNewClientPhone(e.target.value)} />
                       </div>
+                      <Input
+                        placeholder="Adresse du client *"
+                        value={newClientAddress}
+                        onChange={(e) => setNewClientAddress(e.target.value)}
+                      />
                       <div className="flex justify-end gap-2">
                         <Button size="sm" variant="secondary" onClick={() => setShowNewClientForm(false)}>Annuler</Button>
                         <Button size="sm" variant="gold" onClick={handleCreateClientInline}>Créer &amp; sélectionner</Button>
@@ -712,7 +755,7 @@ export default function CommandsPage() {
                     {clientSearchResults.map((cli) => (
                       <button
                         key={cli.id}
-                        onClick={() => { setSelectedClient(cli); setClientSearch(''); }}
+                        onClick={() => handleSelectClient(cli)}
                         className="w-full text-left p-3 hover:bg-gold/20 border-b border-gold/10 last:border-b-0 text-xs text-text-primary flex items-center justify-between"
                       >
                         <span className="font-bold">{cli.name}</span>
@@ -778,10 +821,37 @@ export default function CommandsPage() {
             </div>
           </div>
 
+          {/* Chauffeur */}
+          <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40">
+            <h3 className="text-xs font-bold text-gold uppercase tracking-wider mb-3 flex items-center gap-2">
+              <Truck size={15} /> 4. Chauffeur qui emmènera la commande
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input
+                label="Nom du chauffeur"
+                placeholder="Ex : Karim B."
+                value={driverName}
+                icon={<User size={15} />}
+                onChange={(e) => setDriverName(e.target.value)}
+              />
+              <Input
+                label="Matricule du camion (facultatif)"
+                placeholder="Ex : 12345-116-09"
+                value={driverPlate}
+                icon={<Hash size={15} />}
+                onChange={(e) => setDriverPlate(e.target.value)}
+              />
+            </div>
+            <p className="text-[11px] text-text-muted mt-2">
+              Ce chauffeur sera proposé par défaut pour chaque livraison de cette commande ; vous
+              pourrez en désigner un autre au moment de livrer.
+            </p>
+          </div>
+
           {/* Products */}
           <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40 space-y-3">
             <h3 className="text-xs font-bold text-gold uppercase tracking-wider mb-2 flex items-center gap-2">
-              <Receipt size={15} /> 4. Produits commandés
+              <Receipt size={15} /> 5. Produits commandés
             </h3>
             {editingId && deliveriesOf(editingId).length > 0 && (
               <div className="flex items-start gap-2 rounded-xl border border-caramel/40 bg-caramel/10 px-3 py-2.5 text-xs text-caramel">
@@ -912,6 +982,13 @@ export default function CommandsPage() {
                 <Row label="Client" value={viewingCmd.clientName} strong />
                 {viewingCmd.bonNumber && <Row label="N° bon de commande" value={viewingCmd.bonNumber} strong />}
                 {viewingCmd.clientPhone && <Row label="Téléphone" value={viewingCmd.clientPhone} />}
+                <Row label="Adresse de livraison" value={viewingCmd.clientAddress || '—'} strong />
+                {(viewingCmd.driverName || viewingCmd.driverPlate) && (
+                  <Row
+                    label="Chauffeur"
+                    value={`${viewingCmd.driverName || '—'}${viewingCmd.driverPlate ? ` · ${viewingCmd.driverPlate}` : ''}`}
+                  />
+                )}
                 <Row
                   label="Livraison prévue"
                   value={`${formatDate(viewingCmd.receiveDate, 'fr')} à ${viewingCmd.receiveHour}h${viewingCmd.receiveMinute}`}
@@ -1020,6 +1097,12 @@ export default function CommandsPage() {
                             <Truck size={14} className="text-gold" /> {dl.reference}
                           </p>
                           <p className="text-[11px] text-text-muted">{formatDateTime(dl.deliveredAt)}</p>
+                          {(dl.driverName || dl.driverPlate) && (
+                            <p className="text-[11px] font-semibold text-gold-dark flex items-center gap-1">
+                              <Truck size={11} /> {dl.driverName || 'Chauffeur'}
+                              {dl.driverPlate ? ` · ${dl.driverPlate}` : ''}
+                            </p>
+                          )}
                         </div>
                         <div className="flex items-center gap-1">
                           <Button size="icon" variant="ghost" title="Imprimer le bon de livraison"
