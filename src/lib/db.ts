@@ -259,6 +259,7 @@ const toSale = (r: any): Sale => ({
   reference: r.reference,
   clientId: r.client_id ?? null,
   date: r.date,
+  bonNumber: r.bon_number ?? undefined,
   totalAmount: num(r.total_amount),
   reduction: num(r.reduction),
   finalAmount: num(r.final_amount),
@@ -370,6 +371,7 @@ const toClientDebt = (r: any): ClientDebt => ({
 const toCommand = (r: any): Command => ({
   id: r.id,
   reference: r.reference,
+  bonNumber: r.bon_number ?? undefined,
   createdAt: r.created_at,
   receiveDate: r.receive_date ?? '',
   receiveHour: r.receive_hour ?? '',

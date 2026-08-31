@@ -68,6 +68,9 @@ export default function CommandsPage() {
   const [receiveMinute, setReceiveMinute] = useState('30');
   const [customTotal, setCustomTotal] = useState<number | null>(null);
   const [versement, setVersement] = useState(0);
+  const [bonNumber, setBonNumber] = useState('');
+  const [createdDate, setCreatedDate] = useState(todayISO());
+  const [originalCreatedDate, setOriginalCreatedDate] = useState(todayISO());
   const [saving, setSaving] = useState(false);
 
   // Interaction modals
@@ -89,10 +92,12 @@ export default function CommandsPage() {
   /* --------------------------------------------------------------- filters */
   const filteredCommands = useMemo(() => {
     return commands.filter((c) => {
+      const q = search.toLowerCase();
       const matchesSearch =
-        c.clientName.toLowerCase().includes(search.toLowerCase()) ||
-        c.reference.toLowerCase().includes(search.toLowerCase()) ||
-        (c.clientPhone && c.clientPhone.includes(search));
+        c.clientName.toLowerCase().includes(q) ||
+        c.reference.toLowerCase().includes(q) ||
+        (c.bonNumber || '').toLowerCase().includes(q) ||
+        (c.clientPhone ? c.clientPhone.includes(search) : false);
 
       const d = deliveryStatus(c);
       let matchesStatus = true;
@@ -191,6 +196,7 @@ export default function CommandsPage() {
     setEditingId(null); setSelectedClient(null); setSelectedItems([]);
     setReceiveDate(todayISO()); setReceiveHour('14'); setReceiveMinute('30');
     setCustomTotal(null); setVersement(0); setClientSearch(''); setRecipeSearch('');
+    setBonNumber(''); setCreatedDate(todayISO()); setOriginalCreatedDate(todayISO());
     setShowNewClientForm(false); setFormOpen(true);
   };
 
@@ -199,7 +205,10 @@ export default function CommandsPage() {
     setSelectedClient({ id: cmd.clientId, name: cmd.clientName, phone: cmd.clientPhone });
     setSelectedItems(cmd.items);
     setReceiveDate(cmd.receiveDate); setReceiveHour(cmd.receiveHour); setReceiveMinute(cmd.receiveMinute);
-    setCustomTotal(cmd.totalAmount); setVersement(cmd.paidAmount); setFormOpen(true);
+    setCustomTotal(cmd.totalAmount); setVersement(cmd.paidAmount);
+    setBonNumber(cmd.bonNumber || '');
+    setCreatedDate(cmd.createdAt.slice(0, 10)); setOriginalCreatedDate(cmd.createdAt.slice(0, 10));
+    setFormOpen(true);
   };
 
   const handleSaveCommand = async () => {
@@ -209,6 +218,14 @@ export default function CommandsPage() {
 
     setSaving(true);
     try {
+      // Back-date the command only when the operator actually changed the date;
+      // otherwise the real timestamp (create) or the original one (edit) is kept.
+      const baseline = editingId ? originalCreatedDate : todayISO();
+      const createdAtOverride =
+        createdDate && createdDate !== baseline
+          ? new Date(createdDate + 'T12:00:00').toISOString()
+          : undefined;
+
       const cmdData = {
         clientId: selectedClient.id,
         clientName: selectedClient.name,
@@ -218,6 +235,8 @@ export default function CommandsPage() {
         totalAmount: finalTotalAmount,
         advancePaid: versement,
         paidAmount: versement,
+        bonNumber: bonNumber.trim() || undefined,
+        createdAt: createdAtOverride,
       };
 
       if (editingId) {
@@ -330,6 +349,7 @@ export default function CommandsPage() {
           <div style="text-align:right;">
             <h1 style="margin:0;font-size:20px;background:#000;color:#fff;padding:6px 16px;border-radius:4px;display:inline-block;">BON DE COMMANDE</h1>
             <p style="margin:8px 0 2px 0;font-size:14px;font-weight:bold;">Réf: ${cmd.reference}</p>
+            ${cmd.bonNumber ? `<p style="margin:2px 0;font-size:13px;font-weight:bold;">N° Bon: ${cmd.bonNumber}</p>` : ''}
             <p style="margin:2px 0;font-size:12px;">Créée le: ${formatDate(cmd.createdAt.slice(0, 10), 'fr')}</p>
             <p style="margin:2px 0;font-size:12px;font-weight:bold;">Livraison prévue: ${formatDate(cmd.receiveDate, 'fr')} à ${cmd.receiveHour}h${cmd.receiveMinute}</p>
           </div>
@@ -404,7 +424,7 @@ export default function CommandsPage() {
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div className="md:col-span-2">
-              <SearchBar value={search} onChange={setSearch} placeholder="Rechercher par client, téléphone ou référence…" />
+              <SearchBar value={search} onChange={setSearch} placeholder="Rechercher par client, téléphone, référence ou n° bon de commande…" />
             </div>
             <select
               value={statusFilter}
@@ -496,6 +516,7 @@ export default function CommandsPage() {
                   <div className="flex justify-between items-start mb-3 gap-2">
                     <div className="min-w-0">
                       <span className="text-xs font-bold text-gold">{cmd.reference}</span>
+                      {cmd.bonNumber && <span className="text-[10px] font-semibold text-text-muted ml-1.5">· Bon N° {cmd.bonNumber}</span>}
                       <h3 className="font-display font-semibold text-text-primary text-base truncate">{cmd.clientName}</h3>
                       {cmd.clientPhone && (
                         <p className="text-xs text-text-muted flex items-center gap-1 mt-0.5">
@@ -737,10 +758,30 @@ export default function CommandsPage() {
             </div>
           </div>
 
+          {/* Creation date + bon de commande number */}
+          <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40">
+            <h3 className="text-xs font-bold text-gold uppercase tracking-wider mb-3 flex items-center gap-2">
+              <ClipboardList size={15} /> 3. Date de création & n° de bon de commande
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input
+                label="Date de création de la commande"
+                type="date" value={createdDate}
+                onChange={(e) => setCreatedDate(e.target.value)}
+              />
+              <Input
+                label="N° bon de commande (facultatif)"
+                placeholder="Ex : BC-2026-014"
+                value={bonNumber}
+                onChange={(e) => setBonNumber(e.target.value)}
+              />
+            </div>
+          </div>
+
           {/* Products */}
           <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40 space-y-3">
             <h3 className="text-xs font-bold text-gold uppercase tracking-wider mb-2 flex items-center gap-2">
-              <Receipt size={15} /> 3. Produits commandés
+              <Receipt size={15} /> 4. Produits commandés
             </h3>
             {editingId && deliveriesOf(editingId).length > 0 && (
               <div className="flex items-start gap-2 rounded-xl border border-caramel/40 bg-caramel/10 px-3 py-2.5 text-xs text-caramel">
@@ -869,6 +910,7 @@ export default function CommandsPage() {
             <div className="space-y-4">
               <div className="bg-vanilla/50 p-3 rounded-xl border border-gold/20 space-y-1 text-xs">
                 <Row label="Client" value={viewingCmd.clientName} strong />
+                {viewingCmd.bonNumber && <Row label="N° bon de commande" value={viewingCmd.bonNumber} strong />}
                 {viewingCmd.clientPhone && <Row label="Téléphone" value={viewingCmd.clientPhone} />}
                 <Row
                   label="Livraison prévue"

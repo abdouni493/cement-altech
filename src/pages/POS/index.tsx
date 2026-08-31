@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   CreditCard, Plus, Minus, X, Search, ShoppingBag, UserPlus, FlaskConical,
   Printer, CheckCircle2, Tag, RotateCcw, FileText, Layers, AlertTriangle,
-  Factory, Phone, MapPin, Beaker,
+  Factory, Phone, MapPin, Beaker, ClipboardList, Truck,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -18,11 +18,12 @@ import { VirtualKeyboard } from '@/components/shared/VirtualKeyboard';
 import { useComptoirStore } from '@/store/comptoirStore';
 import { useClientStore } from '@/store/clientStore';
 import { useSalesStore, type PosProductionInput } from '@/store/salesStore';
+import { useCommandStore } from '@/store/commandStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useStockStore } from '@/store/stockStore';
 import { useFicheTechnicStore, type FicheTechnic } from '@/store/ficheTechnicStore';
 import { useLanguage } from '@/hooks/useLanguage';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, todayISO } from '@/lib/utils';
 import { printSaleInvoice, type InvoiceProductionDetail } from '@/lib/invoicePrint';
 import { toast } from '@/components/ui/Toast';
 import type { Sale, ComptoirItem, Product, UsedProduct, Client } from '@/types';
@@ -95,6 +96,7 @@ export default function POS() {
   const ficheTechnics = useFicheTechnicStore((s) => s.ficheTechnics);
   const { clients, addClient, getOrCreatePassager } = useClientStore();
   const addPosSale = useSalesStore((s) => s.addPosSale);
+  const addCommand = useCommandStore((s) => s.addCommand);
   const settings = useSettingsStore((s) => s.settings);
 
   const [printPrompt, setPrintPrompt] = useState<
@@ -116,6 +118,18 @@ export default function POS() {
   const [paidEdited, setPaidEdited] = useState(false);
   const [showClientForm, setShowClientForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  // ---- document mode : vente directe vs commande ----
+  const [posMode, setPosMode] = useState<'sale' | 'command'>('sale');
+  /** Creation date shared by both modes (editable / back-datable). */
+  const [docDate, setDocDate] = useState(todayISO());
+  /** Manual "N° bon de commande" — searchable in /sales and /clients/commands. */
+  const [bonNumber, setBonNumber] = useState('');
+  // ---- command-only fields (mirror the "Nouvelle commande" form) ----
+  const [receiveDate, setReceiveDate] = useState(todayISO());
+  const [receiveHour, setReceiveHour] = useState('14');
+  const [receiveMinute, setReceiveMinute] = useState('30');
+  const [cmdCustomTotal, setCmdCustomTotal] = useState<number | null>(null);
+  const [versement, setVersement] = useState<number>(0);
   /** Fiche technique being configured before it enters the cart. */
   const [ficheModal, setFicheModal] = useState<FicheTechnic | null>(null);
   /** Fiche line of the cart whose recipe is being inspected. */
@@ -295,6 +309,9 @@ export default function POS() {
   const reset = () => {
     setCart([]); setReduction(0); setReductionEnabled(false);
     setPaid(0); setPaidEdited(false); setClientId(null); setClientSearch('');
+    setDocDate(todayISO()); setBonNumber('');
+    setReceiveDate(todayISO()); setReceiveHour('14'); setReceiveMinute('30');
+    setCmdCustomTotal(null); setVersement(0);
   };
 
   // ---------------------------------------------------------------- create --
@@ -353,7 +370,8 @@ export default function POS() {
 
       const sale = await addPosSale({
         clientId: saleClientId,
-        date: new Date().toISOString(),
+        date: docDate,
+        bonNumber: bonNumber.trim() || undefined,
         reduction: reductionEnabled ? Number(reduction) : 0,
         paidAmount: Number(effectivePaid),
         products: cart.map((c) => ({
@@ -379,6 +397,60 @@ export default function POS() {
         productions: invoiceProductions,
         client: clients.find((c) => c.id === saleClientId) ?? null,
       });
+      reset();
+    } catch {
+      /* the store already showed the error */
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ---- command total (mirrors the "Nouvelle commande" pricing) ----
+  const cmdComputedTotal = subtotal;
+  const cmdFinalTotal = cmdCustomTotal !== null ? cmdCustomTotal : cmdComputedTotal;
+  const cmdRest = Math.max(0, cmdFinalTotal - (Number(versement) || 0));
+
+  // --------------------------------------------------------- create command --
+  const createCommandFromCart = async () => {
+    if (cart.length === 0) { toast.error('Panier vide'); return; }
+    if (cart.some((c) => c.quantity <= 0)) { toast.error('Une ligne a une quantité nulle'); return; }
+    if (Number(versement) < 0) { toast.error('Le versement ne peut pas être négatif'); return; }
+    if (!receiveDate) { toast.error('Choisissez une date de livraison'); return; }
+
+    setSaving(true);
+    try {
+      // A command may be placed for the walk-in client, exactly like a sale.
+      const client = selectedClient ?? (await getOrCreatePassager(t('walkInClient')));
+
+      // Back-date only when the operator changed the creation date.
+      const createdAtOverride =
+        docDate && docDate !== todayISO()
+          ? new Date(docDate + 'T12:00:00').toISOString()
+          : undefined;
+
+      const cmd = await addCommand({
+        clientId: client.id,
+        clientName: client.name,
+        clientPhone: client.phone,
+        receiveDate, receiveHour, receiveMinute,
+        items: cart.map((c) => ({
+          // comptoir lines are neither a stock product nor a fiche → keep both ids null
+          ficheTechnicId: c.kind === 'fiche' ? c.refId : undefined,
+          productName: c.productName,
+          quantity: c.quantity,
+          unitPrice: c.unitPrice,
+          totalPrice: c.quantity * c.unitPrice,
+          sellByUnit: c.sellByUnit,
+          sellUnit: c.unit,
+        })),
+        totalAmount: cmdFinalTotal,
+        advancePaid: Number(versement) || 0,
+        paidAmount: Number(versement) || 0,
+        bonNumber: bonNumber.trim() || undefined,
+        createdAt: createdAtOverride,
+      });
+
+      toast.success(`Commande créée · ${cmd.reference}`);
       reset();
     } catch {
       /* the store already showed the error */
@@ -583,7 +655,7 @@ export default function POS() {
 
         {/* ---------------- Panier ---------------- */}
         <div className="xl:col-span-2 bg-gradient-card border border-gold/20 rounded-2xl p-5 shadow-card h-fit xl:sticky xl:top-20">
-          <h3 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2 mb-4">
+          <h3 className="font-display text-lg font-semibold text-text-primary flex items-center gap-2 mb-3">
             <ShoppingBag size={20} /> Panier
             <span className="text-sm font-normal text-text-muted">({cart.length})</span>
             {priceOverrides > 0 && (
@@ -592,6 +664,26 @@ export default function POS() {
               </Badge>
             )}
           </h3>
+
+          {/* Mode : vente directe ou commande client */}
+          <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-gold/20 bg-vanilla/40 p-1">
+            {([
+              ['sale', 'Vente directe', <CreditCard key="i" size={14} />],
+              ['command', 'Commande', <ClipboardList key="i" size={14} />],
+            ] as const).map(([key, label, icon]) => (
+              <button
+                key={key}
+                onClick={() => setPosMode(key)}
+                className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all ${
+                  posMode === key
+                    ? 'bg-gradient-button text-stone-950 shadow-gold'
+                    : 'text-text-muted hover:text-text-primary'
+                }`}
+              >
+                {icon} {label}
+              </button>
+            ))}
+          </div>
 
           {/* ---- Client ---- */}
           <div className="mb-4 rounded-2xl border border-gold/20 bg-vanilla/40 p-4">
@@ -651,13 +743,31 @@ export default function POS() {
               </div>
             ) : (
               <p className="text-xs text-text-muted mt-2.5">
-                Aucun client sélectionné — la vente sera enregistrée pour « {t('walkInClient')} ».
+                Aucun client sélectionné — {posMode === 'command' ? 'la commande' : 'la vente'} sera enregistrée pour « {t('walkInClient')} ».
               </p>
             )}
           </div>
 
-          {/* ---- Production warning ---- */}
-          {ficheLines > 0 && (
+          {/* ---- Date de création + n° bon de commande (les deux modes) ---- */}
+          <div className="mb-4 rounded-2xl border border-gold/20 bg-vanilla/40 p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              label={posMode === 'command' ? 'Date de création' : 'Date de la vente'}
+              type="date"
+              value={docDate}
+              onChange={(e) => setDocDate(e.target.value)}
+              className="h-11"
+            />
+            <Input
+              label="N° bon de commande"
+              placeholder="Facultatif"
+              value={bonNumber}
+              onChange={(e) => setBonNumber(e.target.value)}
+              className="h-11"
+            />
+          </div>
+
+          {/* ---- Production warning (ventes uniquement) ---- */}
+          {posMode === 'sale' && ficheLines > 0 && (
             <div className={`mb-3 rounded-xl border px-3.5 py-2.5 text-xs ${
               missingStock.length > 0
                 ? 'border-rose-deep/30 bg-rose-deep/8 text-rose-deep'
@@ -800,58 +910,154 @@ export default function POS() {
             )}
           </div>
 
-          {/* ---- Totals ---- */}
-          <div className="border-t border-gold/15 pt-4 space-y-2.5 text-sm">
-            <div className="flex justify-between">
-              <span className="text-text-muted">Sous-total</span>
-              <span className="tabular font-semibold">{formatCurrency(subtotal)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <Switch checked={reductionEnabled} onChange={setReductionEnabled} label="Réduction" />
-              {reductionEnabled && (
+          {/* ======================= VENTE DIRECTE ======================= */}
+          {posMode === 'sale' && (
+            <>
+              {/* ---- Totals ---- */}
+              <div className="border-t border-gold/15 pt-4 space-y-2.5 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-text-muted">Sous-total</span>
+                  <span className="tabular font-semibold">{formatCurrency(subtotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <Switch checked={reductionEnabled} onChange={setReductionEnabled} label="Réduction" />
+                  {reductionEnabled && (
+                    <Input
+                      type="number" value={reduction}
+                      onChange={(e) => setReduction(Number(e.target.value))}
+                      className="max-w-[120px] h-9"
+                    />
+                  )}
+                </div>
+                <div className="flex justify-between items-center text-lg font-bold border-y border-gold/15 py-2.5">
+                  <span>Total</span>
+                  <span className="tabular text-gold-dark">{formatCurrency(finalAmount)}</span>
+                </div>
                 <Input
-                  type="number" value={reduction}
-                  onChange={(e) => setReduction(Number(e.target.value))}
-                  className="max-w-[120px] h-9"
+                  label="Le client paie"
+                  type="number"
+                  className="h-11 text-base"
+                  value={effectivePaid}
+                  onChange={(e) => { setPaid(Number(e.target.value)); setPaidEdited(true); }}
                 />
-              )}
-            </div>
-            <div className="flex justify-between items-center text-lg font-bold border-y border-gold/15 py-2.5">
-              <span>Total</span>
-              <span className="tabular text-gold-dark">{formatCurrency(finalAmount)}</span>
-            </div>
-            <Input
-              label="Le client paie"
-              type="number"
-              className="h-11 text-base"
-              value={effectivePaid}
-              onChange={(e) => { setPaid(Number(e.target.value)); setPaidEdited(true); }}
-            />
-            <div className="flex justify-between">
-              <span className="text-text-muted">Monnaie à rendre</span>
-              <span className="tabular font-semibold text-pistachio">{formatCurrency(change)}</span>
-            </div>
-            {rest > 0 && (
-              <div className="flex justify-between">
-                <span className="text-text-muted">Reste (dette)</span>
-                <span className="tabular text-rose-deep font-bold">{formatCurrency(rest)}</span>
+                <div className="flex justify-between">
+                  <span className="text-text-muted">Monnaie à rendre</span>
+                  <span className="tabular font-semibold text-pistachio">{formatCurrency(change)}</span>
+                </div>
+                {rest > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-text-muted">Reste (dette)</span>
+                    <span className="tabular text-rose-deep font-bold">{formatCurrency(rest)}</span>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <div className="mt-4 space-y-2">
-            <Button
-              variant={rest <= 0 ? 'gold' : 'rose'}
-              className="w-full h-12 text-base"
-              onClick={createSale}
-              disabled={saving || cart.length === 0 || missingStock.length > 0}
-            >
-              {saving ? 'Enregistrement…' : rest <= 0 ? 'Valider la vente (payée)' : 'Valider la vente (dette)'}
-            </Button>
-            {cart.length > 0 && (
-              <Button variant="ghost" className="w-full" onClick={reset} disabled={saving}>Annuler</Button>
-            )}
-          </div>
+              <div className="mt-4 space-y-2">
+                <Button
+                  variant={rest <= 0 ? 'gold' : 'rose'}
+                  className="w-full h-12 text-base"
+                  onClick={createSale}
+                  disabled={saving || cart.length === 0 || missingStock.length > 0}
+                >
+                  {saving ? 'Enregistrement…' : rest <= 0 ? 'Valider la vente (payée)' : 'Valider la vente (dette)'}
+                </Button>
+                {cart.length > 0 && (
+                  <Button variant="ghost" className="w-full" onClick={reset} disabled={saving}>Annuler</Button>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* ========================= COMMANDE ========================= */}
+          {posMode === 'command' && (
+            <>
+              {/* Delivery date / time */}
+              <div className="border-t border-gold/15 pt-4">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted mb-2 flex items-center gap-1.5">
+                  <Truck size={13} className="text-gold" /> Livraison prévue
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <Input
+                    label="Date" type="date" value={receiveDate}
+                    onChange={(e) => setReceiveDate(e.target.value)} className="h-10"
+                  />
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-1.5">Heure</label>
+                    <select
+                      value={receiveHour}
+                      onChange={(e) => setReceiveHour(e.target.value)}
+                      className="w-full h-10 px-3 rounded-xl border border-gold/20 bg-[--surface-input] text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
+                    >
+                      {Array.from({ length: 24 }).map((_, h) => {
+                        const val = String(h).padStart(2, '0');
+                        return <option key={val} value={val}>{val}h</option>;
+                      })}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-1.5">Minute</label>
+                    <select
+                      value={receiveMinute}
+                      onChange={(e) => setReceiveMinute(e.target.value)}
+                      className="w-full h-10 px-3 rounded-xl border border-gold/20 bg-[--surface-input] text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
+                    >
+                      {['00', '15', '30', '45'].map((m) => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Command totals */}
+              <div className="border-t border-gold/15 mt-4 pt-4 space-y-2.5 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-text-muted">Total calculé</span>
+                  <span className="tabular font-semibold">{formatCurrency(cmdComputedTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-text-muted">Ajuster le total</span>
+                  <Input
+                    type="number"
+                    value={cmdCustomTotal !== null ? cmdCustomTotal : ''}
+                    placeholder={String(cmdComputedTotal)}
+                    onChange={(e) => setCmdCustomTotal(e.target.value ? Number(e.target.value) : null)}
+                    className="max-w-[140px] h-9"
+                  />
+                </div>
+                <div className="flex justify-between items-center text-lg font-bold border-y border-gold/15 py-2.5">
+                  <span>Total commande</span>
+                  <span className="tabular text-gold-dark">{formatCurrency(cmdFinalTotal)}</span>
+                </div>
+                <Input
+                  label="Acompte / versement"
+                  type="number"
+                  className="h-11 text-base"
+                  value={versement}
+                  onChange={(e) => setVersement(Number(e.target.value))}
+                />
+                <div className="flex justify-between">
+                  <span className="text-text-muted">Reste à payer (dette)</span>
+                  <span className={`tabular font-bold ${cmdRest > 0 ? 'text-rose-deep' : 'text-pistachio'}`}>
+                    {formatCurrency(cmdRest)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-4 space-y-2">
+                <Button
+                  variant="gold"
+                  className="w-full h-12 text-base"
+                  onClick={createCommandFromCart}
+                  disabled={saving || cart.length === 0}
+                >
+                  <ClipboardList size={18} />
+                  {saving ? 'Enregistrement…' : 'Enregistrer la commande'}
+                </Button>
+                {cart.length > 0 && (
+                  <Button variant="ghost" className="w-full" onClick={reset} disabled={saving}>Annuler</Button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
 

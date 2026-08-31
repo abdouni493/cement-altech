@@ -40,7 +40,12 @@ export default function SalesPage() {
   const filtered = useMemo(
     () => sales.filter((s) => {
       const cl = clients.find((c) => c.id === s.clientId);
-      const match = (cl?.name || '').toLowerCase().includes(search.toLowerCase()) || (cl?.phone || '').includes(search) || s.reference.toLowerCase().includes(search.toLowerCase());
+      const q = search.toLowerCase();
+      const match =
+        (cl?.name || '').toLowerCase().includes(q) ||
+        (cl?.phone || '').includes(search) ||
+        s.reference.toLowerCase().includes(q) ||
+        (s.bonNumber || '').toLowerCase().includes(q);
       return match && matchesDateFilter(s.date, dateFilter);
     }),
     [sales, search, dateFilter, clients]
@@ -66,7 +71,7 @@ export default function SalesPage() {
       <PageHeader title={t('sales')} icon={<Receipt size={24} />} subtitle={`${sales.length} ventes`} />
 
       <div className="flex flex-wrap items-center gap-3 mb-6">
-        <div className="flex-1 min-w-[200px]"><SearchBar value={search} onChange={setSearch} placeholder={`${t('search')} ${t('client')}`} /></div>
+        <div className="flex-1 min-w-[200px]"><SearchBar value={search} onChange={setSearch} placeholder="Rechercher par client, n° facture ou n° bon de commande…" /></div>
         <Select value={dateFilter} onChange={(e) => setDateFilter(e.target.value as DateFilter)}
           options={[{ value: 'all', label: t('all') }, { value: 'today', label: t('today') }, { value: 'week', label: t('week') }, { value: 'month', label: t('month') }]} className="max-w-[180px]" />
         <ViewToggle view={view} onChange={setView} />
@@ -81,6 +86,7 @@ export default function SalesPage() {
                 <span className="text-xs text-text-muted">{formatDateTime(s.date, language)}</span>
               </div>
               <p className="text-sm text-text-secondary mb-1">{clientName(s.clientId)}</p>
+              {s.bonNumber && <p className="text-xs text-gold-dark font-semibold mb-1">🧾 Bon N° {s.bonNumber}</p>}
               <p className="text-xs text-text-muted mb-1">{s.products.length} article(s)</p>
               {s.createdBy && <p className="text-xs text-text-muted mb-3">{t('createdBy')}: {s.createdBy}</p>}
               <div className="bg-vanilla/40 rounded-xl p-3 space-y-1 text-sm mb-3">
@@ -125,6 +131,7 @@ export default function SalesPage() {
         {viewing && (
           <div className="space-y-4">
             <p className="text-sm text-text-secondary">{clientName(viewing.clientId)} — {formatDateTime(viewing.date, language)}</p>
+            {viewing.bonNumber && <p className="text-xs text-gold-dark font-semibold">🧾 Bon de commande N° {viewing.bonNumber}</p>}
             {viewing.createdBy && <p className="text-xs text-text-muted">{t('createdBy')}: {viewing.createdBy}</p>}
             <div className="overflow-x-auto rounded-xl border border-gold/15">
               <table className="w-full text-sm">

@@ -41,9 +41,18 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       .filter((s) => s.clientId === client.id && inPeriod(s.date, f, t))
       .sort((a, b) => a.date.localeCompare(b.date));
 
+    // Une commande entre dans le compte rendu si sa date de livraison prévue OU
+    // sa date de création tombe dans la période — et on la trie/affiche par
+    // date de livraison.
     const commandsList = commands
-      .filter((c) => c.clientId === client.id && inPeriod(c.createdAt, f, t))
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      .filter(
+        (c) =>
+          c.clientId === client.id &&
+          (inPeriod(c.receiveDate, f, t) || inPeriod(c.createdAt, f, t))
+      )
+      .sort((a, b) =>
+        (a.receiveDate || a.createdAt.slice(0, 10)).localeCompare(b.receiveDate || b.createdAt.slice(0, 10))
+      );
 
     const paymentsList = payments
       .filter((p) => p.partyId === client.id && inPeriod(p.paidAt, f, t))
@@ -144,25 +153,21 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       icon: '📋',
       headerTotal: formatCurrency(data.commandsTotal),
       cols: [
-        { label: 'N° commande' }, { label: 'Créée le' }, { label: 'Livraison' },
+        { label: 'N° commande' }, { label: 'Date de livraison' },
         { label: 'Total', align: 'right' }, { label: 'Payé', align: 'right' }, { label: 'Reste', align: 'right' },
       ],
       rows: [
-        ...data.commandsList.map<PrintRow>((c) => {
-          const d = deliveryStatus(c);
-          return {
-            cells: [
-              c.reference,
-              formatDate(c.createdAt.slice(0, 10), language),
-              d.isFull ? 'Livrée' : d.isPartial ? `Partielle ${d.percent.toFixed(0)}%` : 'Non livrée',
-              formatCurrency(c.totalAmount), formatCurrency(c.paidAmount), formatCurrency(c.restAmount),
-            ],
-            tone: c.restAmount > 0 ? 'neg' : 'pos',
-          };
-        }),
+        ...data.commandsList.map<PrintRow>((c) => ({
+          cells: [
+            c.reference,
+            c.receiveDate ? formatDate(c.receiveDate, language) : '—',
+            formatCurrency(c.totalAmount), formatCurrency(c.paidAmount), formatCurrency(c.restAmount),
+          ],
+          tone: c.restAmount > 0 ? 'neg' : 'pos',
+        })),
         ...(data.commandsList.length
           ? [{
-              cells: ['TOTAL COMMANDES', '', '', formatCurrency(data.commandsTotal),
+              cells: ['TOTAL COMMANDES', '', formatCurrency(data.commandsTotal),
                 formatCurrency(data.commandsPaid), formatCurrency(data.commandsRest)],
               variant: 'total' as const,
             }]
@@ -319,13 +324,13 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
               <ReportSection
                 title="Commandes" icon={<ClipboardList size={14} />}
                 total={formatCurrency(data.commandsTotal)}
-                head={['N° commande', 'Créée le', 'Livraison', 'Total', 'Payé', 'Reste']}
+                head={['N° commande', 'Date de livraison', 'Livraison', 'Total', 'Payé', 'Reste']}
                 empty="Aucune commande sur cette période"
                 rows={data.commandsList.map((c) => {
                   const d = deliveryStatus(c);
                   return [
                     <span key="r" className="font-semibold">{c.reference}</span>,
-                    formatDate(c.createdAt.slice(0, 10), language),
+                    c.receiveDate ? formatDate(c.receiveDate, language) : '—',
                     <Badge key="d" variant={d.isFull ? 'success' : d.isPartial ? 'warning' : 'danger'}>
                       {d.isFull ? 'Livrée' : d.isPartial ? `${d.percent.toFixed(0)}%` : 'Non livrée'}
                     </Badge>,

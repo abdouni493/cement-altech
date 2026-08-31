@@ -23,6 +23,8 @@ export type CommandLine = CommandItem;
 export interface Command {
   id: string;
   reference: string;
+  /** N° de bon de commande saisi manuellement (repère client, recherche). */
+  bonNumber?: string;
   createdAt: string;
   receiveDate: string;
   receiveHour: string;
@@ -47,6 +49,8 @@ export type AddCommandInput = Omit<
   createdBy?: string;
   advancePaid?: number;
   paidAmount?: number;
+  /** Optional manual creation date (ISO) — lets the POS back-date a command. */
+  createdAt?: string;
 };
 
 /** Ordered vs delivered summary of a command — drives the card alert. */
@@ -132,6 +136,8 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         total_amount: data.totalAmount,
         advance_paid: advance,
         notes: data.notes ?? null,
+        bon_number: data.bonNumber ?? null,
+        created_at: data.createdAt ?? null,
         items: data.items.map(itemPayload),
       })
     );
@@ -152,6 +158,8 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         receive_minute: data.receiveMinute,
         total_amount: data.totalAmount,
         notes: data.notes ?? null,
+        ...(data.bonNumber !== undefined ? { bon_number: data.bonNumber || null } : {}),
+        ...(data.createdAt ? { created_at: data.createdAt } : {}),
       })
     );
     // Lines are replaced (delete + insert) so they must NOT be touched once a

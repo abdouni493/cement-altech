@@ -153,6 +153,8 @@ export interface Sale {
   reference: string;
   clientId: string | null;
   date: string;
+  /** N° de bon de commande saisi manuellement (repère client, recherche). */
+  bonNumber?: string;
   products: SaleLine[];
   totalAmount: number;
   reduction: number;

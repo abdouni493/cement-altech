@@ -43,6 +43,8 @@ export type PosSaleLine = SaleLine & { lineKey?: string };
 export interface AddPosSaleInput {
   clientId: string | null;
   date?: string;
+  /** N° de bon de commande saisi manuellement (facultatif). */
+  bonNumber?: string;
   reduction?: number;
   paidAmount: number;
   products: PosSaleLine[];
@@ -102,6 +104,7 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
       rpc.createSale({
         client_id: s.clientId,
         date: saleDate.slice(0, 10),
+        bon_number: s.bonNumber ?? null,
         reduction: red,
         total_amount: total,
         final_amount: final,
@@ -156,6 +159,7 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
       return get().addSale({
         clientId: input.clientId,
         date: input.date,
+        bonNumber: input.bonNumber,
         products: input.products,
         reduction: red,
         paidAmount: paid,
@@ -181,6 +185,7 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
     const payload = {
       client_id: input.clientId,
       date: saleDate,
+      bon_number: input.bonNumber ?? null,
       reduction: red,
       total_amount: total,
       final_amount: final,
@@ -235,6 +240,7 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
         const sale = await rpc.createSale({
           client_id: input.clientId,
           date: saleDate,
+          bon_number: input.bonNumber ?? null,
           reduction: red,
           total_amount: total,
           final_amount: final,
@@ -275,6 +281,7 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
         reference: row.reference,
         clientId: input.clientId,
         date: saleDate,
+        bonNumber: input.bonNumber,
         products: input.products,
         totalAmount: total,
         reduction: red,
