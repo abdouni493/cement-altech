@@ -18,6 +18,8 @@ interface InvoiceData {
   bonNumber?: string;
   /** Immatriculation du camion qui a livré (achats) */
   driverPlate?: string;
+  /** Facture antérieure saisie a posteriori — le stock n'a pas été mouvementé. */
+  historical?: boolean;
   lines: InvoiceLine[];
   total: number;
   reduction?: number;
@@ -141,6 +143,7 @@ export function printInvoice(data: InvoiceData, store: StoreSettings) {
               Date: ${data.type === 'sale' ? formatDateTime(data.date) : formatDate(data.date)}
               ${data.bonNumber ? `<br/>Bon n° ${data.bonNumber}` : ''}
               ${data.driverPlate ? `<br/>Matricule: ${data.driverPlate}` : ''}
+              ${data.historical ? '<br/>Saisie rétroactive — stock non mouvementé' : ''}
             </div>
           </div>
 

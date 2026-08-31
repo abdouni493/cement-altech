@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Purchase } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
+import { toast } from '@/components/ui/Toast';
 import { useStockStore } from './stockStore';
 
 export type AddPurchaseInput = Omit<
@@ -52,12 +53,15 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
 
       // create_purchase() writes the invoice + its lines, feeds the stock
       // (trg_purchase_line_stock) and books the caisse withdrawal.
+      // « Ancien achat » (is_historical) : la facture est enregistrée à sa date
+      // d'origine mais ni le stock ni la caisse ne bougent.
       const row = await save('purchases.create', () =>
         rpc.createPurchase({
           supplier_id: p.supplierId,
           date: purDate,
           driver_plate: p.driverPlate?.trim() || null,
           bon_number: p.bonNumber?.trim() || null,
+          is_historical: p.isHistorical ?? false,
           total_amount: total,
           paid_amount: paid,
           products: p.products.map((l) => ({
@@ -79,12 +83,23 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
       const [purchases] = await Promise.all([db.purchases.list(), useStockStore.getState().load()]);
       set({ purchases });
 
+      // Filet de sécurité : « ancien achat » n'existe que si
+      // altech_production_update_anciens_achats_ventes_tva.sql a été exécuté.
+      const saved = purchases.find((x) => x.id === row.id);
+      if (p.isHistorical && saved && !saved.isHistorical) {
+        toast.error(
+          "Base de données non mise à jour : la facture a été enregistrée normalement " +
+          "(stock alimenté). Exécutez altech_production_update_anciens_achats_ventes_tva.sql."
+        );
+      }
+
       return (
         purchases.find((x) => x.id === row.id) ?? {
           ...(p as unknown as Purchase),
           id: row.id,
           reference: row.reference,
           date: purDate,
+          isHistorical: p.isHistorical ?? false,
           totalAmount: total,
           paidAmount: paid,
           restAmount: Math.max(0, total - paid),

@@ -65,7 +65,8 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
       rows: [
         ...data.purchasesList.map<PrintRow>((p) => ({
           cells: [
-            p.reference, formatDate(p.date, language), p.bonNumber || '—', p.driverPlate || '—',
+            `${p.reference}${p.isHistorical ? ' (ancien achat)' : ''}`,
+            formatDate(p.date, language), p.bonNumber || '—', p.driverPlate || '—',
             formatCurrency(p.totalAmount), formatCurrency(p.paidAmount), formatCurrency(p.restAmount),
           ],
           tone: p.restAmount > 0 ? 'neg' : 'pos',
@@ -210,7 +211,12 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                 head={['N° facture', 'Date', 'Bon n°', 'Matricule', 'Total', 'Payé', 'Reste']}
                 empty="Aucune facture sur cette période"
                 rows={data.purchasesList.map((p) => [
-                  <span key="r" className="font-semibold">{p.reference}</span>,
+                  <span key="r" className="font-semibold">
+                    {p.reference}
+                    {p.isHistorical && (
+                      <span className="ml-1.5 text-[10px] font-medium text-gold-dark">(ancien achat)</span>
+                    )}
+                  </span>,
                   formatDate(p.date, language),
                   p.bonNumber || '—',
                   p.driverPlate || '—',

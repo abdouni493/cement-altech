@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Search, Plus, X, Truck, Package, Wallet, Ruler, Check, FileText, CarFront } from 'lucide-react';
+import { Search, Plus, X, Truck, Package, Wallet, Ruler, Check, FileText, CarFront, History, AlertTriangle } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
@@ -17,6 +17,13 @@ import type { PurchaseLine, Product, Purchase } from '@/types';
 interface CreatePurchaseProps {
   onClose: () => void;
   onCreated?: (purchase: Purchase) => void;
+  /**
+   * « Ancien achat » : la facture est saisie a posteriori pour reconstituer
+   * l'historique du fournisseur. Même formulaire que l'achat normal, mais les
+   * quantités NE SONT PAS ajoutées au stock actuel et la caisse n'est pas
+   * mouvementée — seuls le fournisseur, ses dettes et les rapports suivent.
+   */
+  historical?: boolean;
 }
 
 interface Line extends PurchaseLine {
@@ -25,7 +32,7 @@ interface Line extends PurchaseLine {
   stockBefore: number;
 }
 
-export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
+export function CreatePurchase({ onClose, onCreated, historical = false }: CreatePurchaseProps) {
   const products = useStockStore((s) => s.products);
   const addProduct = useStockStore((s) => s.addProduct);
   const { suppliers, addSupplier } = useSupplierStore();
@@ -37,6 +44,7 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
   const [supplierId, setSupplierId] = useState('');
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [date, setDate] = useState(todayISO());
+  const [dateTouched, setDateTouched] = useState(false);
   const [driverPlate, setDriverPlate] = useState('');
   const [bonNumber, setBonNumber] = useState('');
   const [showProductForm, setShowProductForm] = useState(false);
@@ -113,6 +121,11 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
       toast.error('Chaque produit doit avoir une quantité supérieure à 0');
       return;
     }
+    if (!date) { toast.error('Choisissez la date de la facture'); return; }
+    if (historical && !dateTouched) {
+      toast.warning("Indiquez la date d'origine de cet ancien achat");
+      return;
+    }
     setSaving(true);
     try {
       const purchase = await addPurchase({
@@ -120,6 +133,7 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
         date,
         driverPlate: driverPlate.trim(),
         bonNumber: bonNumber.trim(),
+        isHistorical: historical,
         products: lines.map(({ _key, stockBefore, ...l }) => ({
           ...l,
           quantity: Number(l.quantity),
@@ -127,7 +141,11 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
         })),
         paidAmount: Number(paidAmount),
       });
-      toast.success('Facture enregistrée — quantités du stock mises à jour');
+      toast.success(
+        historical
+          ? "Ancien achat enregistré — stock actuel inchangé, historique du fournisseur mis à jour"
+          : 'Facture enregistrée — quantités du stock mises à jour'
+      );
       onCreated?.(purchase);
       onClose();
     } catch {
@@ -139,6 +157,30 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
 
   return (
     <div className="space-y-5">
+      {/* Bandeau « ancien achat » — rappelle en permanence que le stock ne bouge pas */}
+      {historical && (
+        <div className="rounded-2xl border-2 border-caramel/50 bg-caramel/10 p-4">
+          <p className="flex items-center gap-2 font-display font-bold text-gold-dark">
+            <History size={18} /> Mode « ancien achat » — saisie rétroactive
+          </p>
+          <ul className="mt-2 space-y-1 text-xs font-medium text-text-secondary">
+            <li className="flex items-start gap-1.5">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0 text-caramel" />
+              Les quantités de cette facture <b>ne seront pas ajoutées au stock actuel</b>.
+            </li>
+            <li className="flex items-start gap-1.5">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0 text-caramel" />
+              Aucune écriture de caisse n'est générée : la facture est déjà réglée dans le passé.
+            </li>
+            <li className="flex items-start gap-1.5">
+              <Check size={13} className="mt-0.5 shrink-0 text-pistachio" />
+              Elle apparaît dans l'<b>historique et le compte rendu du fournisseur</b> ainsi que dans les
+              <b> rapports généraux</b>, à la date que vous indiquez ci-dessous.
+            </li>
+          </ul>
+        </div>
+      )}
+
       {/* 1 — Produits */}
       <section className="bg-vanilla/30 rounded-2xl p-4 border border-gold/15">
         <h3 className="font-display font-semibold text-text-primary mb-3 flex items-center gap-2 text-sm">
@@ -240,10 +282,18 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
                   </div>
                   <div className="flex items-center gap-4 text-right">
                     <div>
-                      <p className="text-[10px] text-text-muted leading-none">Nouveau stock</p>
-                      <p className="text-xs font-bold tabular text-pistachio">
-                        {l.stockBefore} + {qty} = {l.stockBefore + qty}{unit ? ` ${unit}` : ''}
+                      <p className="text-[10px] text-text-muted leading-none">
+                        {historical ? 'Stock actuel' : 'Nouveau stock'}
                       </p>
+                      {historical ? (
+                        <p className="text-xs font-bold tabular text-caramel">
+                          {l.stockBefore}{unit ? ` ${unit}` : ''} · inchangé
+                        </p>
+                      ) : (
+                        <p className="text-xs font-bold tabular text-pistachio">
+                          {l.stockBefore} + {qty} = {l.stockBefore + qty}{unit ? ` ${unit}` : ''}
+                        </p>
+                      )}
                     </div>
                     <div>
                       <p className="text-[10px] text-text-muted leading-none">Total ligne</p>
@@ -266,6 +316,9 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
       <section className="bg-vanilla/30 rounded-2xl p-4 border border-gold/15">
         <h3 className="font-display font-semibold text-text-primary mb-3 flex items-center gap-2 text-sm">
           <Truck size={16} className="text-gold" /> 2. Fournisseur, date &amp; livraison
+          {historical && (
+            <Badge variant="warning" className="ml-1 text-[10px]">date d'origine obligatoire</Badge>
+          )}
         </h3>
         <div className="flex flex-wrap gap-2">
           <div className="relative flex-1 min-w-[220px]">
@@ -291,7 +344,13 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
               </div>
             )}
           </div>
-          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="max-w-[180px]" />
+          <Input
+            type="date"
+            value={date}
+            max={historical ? todayISO() : undefined}
+            onChange={(e) => { setDate(e.target.value); setDateTouched(true); }}
+            className={`max-w-[180px] ${historical && !dateTouched ? 'border-caramel' : ''}`}
+          />
           <Button variant="secondary" onClick={() => setShowSupplierForm(true)}>
             <Plus size={16} /> Fournisseur
           </Button>
@@ -358,7 +417,11 @@ export function CreatePurchase({ onClose, onCreated }: CreatePurchaseProps) {
       <div className="flex justify-end gap-3">
         <Button variant="secondary" onClick={onClose} disabled={saving}>Annuler</Button>
         <Button variant="gold" onClick={handleCreate} disabled={saving}>
-          {saving ? 'Enregistrement…' : 'Créer la facture & mettre à jour le stock'}
+          {saving
+            ? 'Enregistrement…'
+            : historical
+              ? "Enregistrer l'ancien achat (sans toucher au stock)"
+              : 'Créer la facture & mettre à jour le stock'}
         </Button>
       </div>
 

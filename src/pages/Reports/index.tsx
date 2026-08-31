@@ -4,7 +4,7 @@ import {
   TrendingUp, FileText, Printer, Wallet, ShoppingCart, Banknote, Package,
   Receipt, AlertTriangle, Flame, HardHat, Truck, Users, FlaskConical, Beaker,
   ArrowDownLeft, ArrowUpRight, Scale, ChevronRight, Coins, Trophy, TrendingDown,
-  ChevronDown, ChevronUp, Tag, Clock
+  ChevronDown, ChevronUp, Tag, Clock, History, Percent
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -105,6 +105,22 @@ export default function ReportsPage() {
     );
     const destroyedValue = rDestructions.reduce((s, d) => s + d.value, 0);
     const netProfit = totalSales - totalPurchases - totalExpenses - workerPayments - destroyedValue;
+
+    // ---- Saisies rétroactives & TVA ----------------------------------------
+    // Anciennes ventes / anciens achats : enregistrés a posteriori, ils comptent
+    // dans le chiffre d'affaires et les dettes de la période mais n'ont jamais
+    // touché le stock actuel ni la caisse. On les isole pour pouvoir lire le
+    // rapport « hors reprise d'historique ».
+    const historicalSales = rSales.filter((x) => x.isHistorical);
+    const historicalPurchases = rPurchases.filter((x) => x.isHistorical);
+    const historicalSalesTotal = historicalSales.reduce((a, x) => a + x.finalAmount, 0);
+    const historicalPurchasesTotal = historicalPurchases.reduce((a, x) => a + x.totalAmount, 0);
+    const currentSalesTotal = totalSales - historicalSalesTotal;
+    const currentPurchasesTotal = totalPurchases - historicalPurchasesTotal;
+
+    const tvaSales = rSales.filter((x) => x.tvaEnabled);
+    const tvaCollected = rSales.reduce((a, x) => a + (x.tvaAmount || 0), 0);
+    const salesHT = rSales.reduce((a, x) => a + Math.max(0, x.totalAmount - x.reduction), 0);
 
     const clientDebts = rSales.filter((s) => s.restAmount > 0);
     const supplierDebts = rPurchases.filter((p) => p.restAmount > 0);
@@ -211,6 +227,9 @@ export default function ReportsPage() {
       stockValue, lowStock, comptoirValue, deposits, withdrawals, depositsTotal, withdrawalsTotal,
       reportCalcs, totalDecalage, soldRanked, productSalesRevenue, restItems,
       purchasesByCategory,
+      historicalSales, historicalPurchases, historicalSalesTotal, historicalPurchasesTotal,
+      currentSalesTotal, currentPurchasesTotal,
+      tvaSales, tvaCollected, salesHT,
       lossProductions, totalLossQty, totalLossValue,
       expensesByCategory, depositsByCategory, withdrawalsByCategory,
     };
@@ -235,7 +254,13 @@ export default function ReportsPage() {
       cols: [{ label: t('amount') }, { label: t('total'), align: 'right' }],
       rows: [
         { cells: [t('totalSales'), money(report.totalSales)], tone: 'pos' },
+        { cells: ['dont ventes courantes (stock déduit)', money(report.currentSalesTotal)], tone: 'muted' },
+        { cells: ['dont anciennes ventes (saisie rétroactive)', money(report.historicalSalesTotal)], tone: 'muted' },
+        { cells: ['Ventes hors taxes (base imposable)', money(report.salesHT)], tone: 'muted' },
+        { cells: ['TVA collectée sur les ventes', money(report.tvaCollected)], tone: 'accent' },
         { cells: [t('totalPurchasesAmount'), money(report.totalPurchases)], tone: 'neg' },
+        { cells: ['dont achats courants (stock alimenté)', money(report.currentPurchasesTotal)], tone: 'muted' },
+        { cells: ['dont anciens achats (saisie rétroactive)', money(report.historicalPurchasesTotal)], tone: 'muted' },
         { cells: [t('totalExpenses'), money(report.totalExpenses)], tone: 'neg' },
         { cells: [t('workerSalaries'), money(report.workerPayments)], tone: 'neg' },
         { cells: [t('acomptes'), money(report.workerAcomptes)], tone: 'neg' },
@@ -329,6 +354,72 @@ export default function ReportsPage() {
         { cells: [t('total'), '', '', money(salesTotFinal), money(salesTotPaid), money(salesTotRest)], variant: 'total', tone: 'neg' },
       ],
       emptyLabel: t('noData'),
+    });
+
+    // ---- 5 bis. TVA collectée ----
+    sections.push({
+      title: 'TVA collectée sur les ventes', icon: '🧮', headerTotal: money(report.tvaCollected),
+      cols: [
+        { label: t('reference') }, { label: t('client') }, { label: t('date') },
+        { label: 'Base HT', align: 'right' }, { label: 'Taux', align: 'right' },
+        { label: 'TVA', align: 'right' }, { label: 'Net TTC', align: 'right' },
+      ],
+      rows: [
+        ...report.tvaSales
+          .slice()
+          .sort((a, b) => (a.date < b.date ? 1 : -1))
+          .map((x): PrintRow => ({
+            cells: [
+              x.reference, clientName(x.clientId), formatDate(x.date, language),
+              money(Math.max(0, x.totalAmount - x.reduction)), `${x.tvaRate ?? 0} %`,
+              money(x.tvaAmount || 0), money(x.finalAmount),
+            ],
+            tone: 'accent',
+          })),
+        ...(report.tvaSales.length
+          ? [{
+              cells: ['TOTAL TVA', '', '', money(report.salesHT), '', money(report.tvaCollected), money(salesTotFinal)],
+              variant: 'total' as const, tone: 'accent' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucune vente soumise à la TVA sur la période',
+    });
+
+    // ---- 5 ter. Saisies rétroactives (anciennes ventes / anciens achats) ----
+    sections.push({
+      title: 'Saisies rétroactives — historique repris', icon: '🕘',
+      headerTotal: money(report.historicalSalesTotal + report.historicalPurchasesTotal),
+      cols: [
+        { label: 'Type' }, { label: t('reference') }, { label: 'Tiers' }, { label: t('date') },
+        { label: t('total'), align: 'right' }, { label: t('rest'), align: 'right' },
+      ],
+      rows: [
+        ...report.historicalSales.map((x): PrintRow => ({
+          cells: [
+            'Ancienne vente', x.reference, clientName(x.clientId), formatDate(x.date, language),
+            money(x.finalAmount), money(x.restAmount),
+          ],
+          tone: 'pos',
+        })),
+        ...report.historicalPurchases.map((x): PrintRow => ({
+          cells: [
+            'Ancien achat', x.reference, supplierName(x.supplierId), formatDate(x.date, language),
+            money(x.totalAmount), money(x.restAmount),
+          ],
+          tone: 'neg',
+        })),
+        ...(report.historicalSales.length + report.historicalPurchases.length
+          ? [{
+              cells: [
+                'TOTAL', '', '', '',
+                money(report.historicalSalesTotal + report.historicalPurchasesTotal), '',
+              ],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucune saisie rétroactive sur la période',
     });
 
     // ---- 6. Ventes par produit ----
@@ -609,6 +700,28 @@ export default function ReportsPage() {
             <DrillCard icon={<Truck size={20} />} accent="lavender" label={t('suppliers')} value={suppliers.length} count={suppliers.length} isCount
               onClick={() => setDrill({ title: t('suppliers'), rows: suppliers.map((s) => ({ title: s.name, sub: s.phone, value: report.rPurchases.filter((p) => p.supplierId === s.id).reduce((a, p) => a + p.totalAmount, 0) })) })} />
           </div>
+
+          {/* ===== TVA & saisies rétroactives ===== */}
+          <SectionTitle icon={<Percent size={18} />} title="TVA & saisies rétroactives" />
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <DrillCard icon={<Percent size={20} />} accent="gold" label="TVA collectée" value={report.tvaCollected} count={report.tvaSales.length}
+              onClick={() => setDrill({ title: 'TVA collectée', rows: report.tvaSales.map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `Base HT ${formatCurrency(Math.max(0, x.totalAmount - x.reduction))} · taux ${x.tvaRate ?? 0}% · ${formatDate(x.date, language)}`, value: x.tvaAmount || 0 })) })} />
+            <DrillCard icon={<Receipt size={20} />} accent="pistachio" label="Ventes HT (base imposable)" value={report.salesHT} count={report.rSales.length}
+              onClick={() => setDrill({ title: 'Ventes hors taxes', rows: report.rSales.map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `${x.tvaEnabled ? `TVA ${x.tvaRate}%` : 'Sans TVA'} · ${formatDate(x.date, language)}`, value: Math.max(0, x.totalAmount - x.reduction) })) })} />
+            <DrillCard icon={<History size={20} />} accent="lavender" label="Anciennes ventes" value={report.historicalSalesTotal} count={report.historicalSales.length}
+              onClick={() => setDrill({ title: 'Anciennes ventes (saisie rétroactive)', rows: report.historicalSales.map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `${x.products.length} article(s) · ${formatDate(x.date, language)} · stock non modifié`, value: x.finalAmount })) })} />
+            <DrillCard icon={<History size={20} />} accent="caramel" label="Anciens achats" value={report.historicalPurchasesTotal} count={report.historicalPurchases.length}
+              onClick={() => setDrill({ title: 'Anciens achats (saisie rétroactive)', rows: report.historicalPurchases.map((x) => ({ title: `${x.reference} — ${supplierName(x.supplierId)}`, sub: `${x.products.length} article(s) · ${formatDate(x.date, language)} · stock non modifié`, value: x.totalAmount })) })} />
+          </div>
+          {(report.historicalSales.length > 0 || report.historicalPurchases.length > 0) && (
+            <p className="-mt-2 rounded-xl border border-caramel/30 bg-caramel/10 px-3.5 py-2 text-xs font-medium text-gold-dark">
+              <History size={12} className="inline mr-1" />
+              Les saisies rétroactives sont comptées dans le chiffre d'affaires, les dettes et les
+              comptes rendus de la période, mais elles n'ont jamais modifié le stock actuel ni la caisse.
+              Ventes courantes : <b>{formatCurrency(report.currentSalesTotal)}</b> · achats courants :{' '}
+              <b>{formatCurrency(report.currentPurchasesTotal)}</b>.
+            </p>
+          )}
 
           {/* ===== Stock & alerts ===== */}
           <SectionTitle icon={<Package size={18} />} title={t('stockReport')} />

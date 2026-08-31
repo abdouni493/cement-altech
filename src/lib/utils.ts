@@ -117,3 +117,35 @@ export function getMonthLabel(dateStr: string): string {
   const d = new Date(dateStr);
   return `${months[d.getMonth()]} ${d.getFullYear()}`;
 }
+
+// ============================================================================
+//  TVA — option activable à la caisse (19 % par défaut, taux modifiable)
+// ----------------------------------------------------------------------------
+//  Le net à payer d'une vente est toujours :
+//     base HT = total des lignes − réduction
+//     TVA     = base HT × taux / 100   (0 quand l'option est désactivée)
+//     TTC     = base HT + TVA
+//  Cette fonction est la référence unique : caisse, magasin des ventes,
+//  facture imprimée et base de données appliquent exactement le même calcul.
+// ============================================================================
+
+/** Taux de TVA proposé par défaut lorsque l'option est activée. */
+export const DEFAULT_TVA_RATE = 19;
+
+export interface TvaBreakdown {
+  /** Base hors taxes : total des lignes moins la réduction. */
+  baseHT: number;
+  /** Taux réellement appliqué (0 quand l'option est désactivée). */
+  rate: number;
+  /** Montant de la TVA, arrondi au centime. */
+  tvaAmount: number;
+  /** Net à payer toutes taxes comprises. */
+  totalTTC: number;
+}
+
+export function computeTva(total: number, reduction = 0, enabled = false, rate = DEFAULT_TVA_RATE): TvaBreakdown {
+  const baseHT = Math.max(0, (Number(total) || 0) - (Number(reduction) || 0));
+  const appliedRate = enabled ? Math.max(0, Number(rate) || 0) : 0;
+  const tvaAmount = enabled ? Math.round(baseHT * appliedRate) / 100 : 0;
+  return { baseHT, rate: appliedRate, tvaAmount, totalTTC: Math.round((baseHT + tvaAmount) * 100) / 100 };
+}

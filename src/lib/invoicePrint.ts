@@ -46,6 +46,15 @@ export interface SaleInvoiceData {
   productions?: InvoiceProductionDetail[];
   total: number;
   reduction: number;
+  /** TVA appliquée à la vente (option activable à la caisse). */
+  tvaEnabled?: boolean;
+  /** Taux appliqué, en pourcentage (19 par défaut). */
+  tvaRate?: number;
+  /** Montant de TVA = (total − réduction) × taux / 100. */
+  tvaAmount?: number;
+  /** Vente antérieure saisie a posteriori (ne touche ni stock ni caisse). */
+  historical?: boolean;
+  /** Net à payer : TTC quand la TVA est active. */
   final: number;
   paid: number;
   rest: number;
@@ -203,6 +212,10 @@ const CSS = `
   .sign .hint{ font-size:11px; color:#444; font-weight:700; margin-top:auto; text-align:center; font-style:italic; }
   .sign.stamp{ border-style:dashed; background:#FCFBF7; }
 
+  .flag{ display:inline-block; border:2px solid #000; border-radius:6px; padding:3px 9px; font-size:11.5px; font-weight:900; text-transform:uppercase; letter-spacing:.8px; margin-top:6px; background:#F7EDD4; }
+  .flag.hist{ background:#FBDDE3; }
+  .totals .tva{ background:#F7EDD4; font-weight:900; }
+
   .foot{ margin-top:18px; padding-top:12px; border-top:2px dashed #000; text-align:center; font-size:12.5px; font-weight:700; color:#222; }
   .foot .social{ color:#000; font-weight:900; }
 
@@ -262,6 +275,13 @@ function productionHtml(p: InvoiceProductionDetail): string {
 export function printSaleInvoice(data: SaleInvoiceData, store: StoreSettings) {
   const win = window.open('', '_blank', 'width=900,height=1040');
   if (!win) return;
+
+  // Décomposition TVA — recalculée si la vente n'a pas mémorisé le montant.
+  const baseHT = Math.max(0, (data.total || 0) - (data.reduction || 0));
+  const tvaRate = data.tvaEnabled ? (data.tvaRate ?? 0) : 0;
+  const tvaAmount = data.tvaEnabled
+    ? (data.tvaAmount ?? Math.round(baseHT * tvaRate) / 100)
+    : 0;
 
   const rows = data.lines
     .map((l, i) => {
@@ -326,7 +346,7 @@ export function printSaleInvoice(data: SaleInvoiceData, store: StoreSettings) {
       </div>
 
       <div class="titlebar">
-        <div class="t">FACTURE DE VENTE</div>
+        <div class="t">${data.tvaEnabled ? 'FACTURE DE VENTE (TTC)' : 'FACTURE DE VENTE'}</div>
         <div class="s">
           <b>N° ${esc(data.reference)}</b><br/>
           Date : ${esc(formatDateTime(data.date))}
@@ -347,6 +367,8 @@ export function printSaleInvoice(data: SaleInvoiceData, store: StoreSettings) {
             <div class="nm">${data.rest > 0 ? 'Vente à crédit' : 'Réglée intégralement'}</div>
             <div class="ln">Payé : ${formatCurrency(data.paid)} · Reste : ${formatCurrency(data.rest)}</div>
             <div class="ln">${data.lines.length} article(s) facturé(s)</div>
+            ${data.tvaEnabled ? `<div class="flag">TVA ${esc(tvaRate)} % — facture TTC</div>` : '<div class="flag">Facture sans TVA</div>'}
+            ${data.historical ? '<div class="flag hist">Vente antérieure — saisie rétroactive</div>' : ''}
           </div>
         </div>
 
@@ -372,9 +394,11 @@ export function printSaleInvoice(data: SaleInvoiceData, store: StoreSettings) {
             <div class="v">${esc(amountInWords(data.final))}</div>
           </div>
           <div class="totals">
-            <div><span>Total brut</span><span>${formatCurrency(data.total)}</span></div>
+            <div><span>${data.tvaEnabled ? 'Total brut HT' : 'Total brut'}</span><span>${formatCurrency(data.total)}</span></div>
             ${data.reduction ? `<div><span>Réduction</span><span>− ${formatCurrency(data.reduction)}</span></div>` : ''}
-            <div class="grand"><span>Net à payer</span><span>${formatCurrency(data.final)}</span></div>
+            ${data.tvaEnabled ? `<div><span>Base imposable HT</span><span>${formatCurrency(baseHT)}</span></div>` : ''}
+            ${data.tvaEnabled ? `<div class="tva"><span>TVA ${esc(tvaRate)} %</span><span>+ ${formatCurrency(tvaAmount)}</span></div>` : ''}
+            <div class="grand"><span>${data.tvaEnabled ? 'Net à payer TTC' : 'Net à payer'}</span><span>${formatCurrency(data.final)}</span></div>
             <div><span>Montant versé</span><span>${formatCurrency(data.paid)}</span></div>
             <div class="${data.rest > 0 ? 'due' : 'ok'}"><span>Reste à payer</span><span>${formatCurrency(data.rest)}</span></div>
           </div>

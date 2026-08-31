@@ -4,6 +4,7 @@ import {
   CreditCard, Plus, Minus, X, Search, ShoppingBag, UserPlus, FlaskConical,
   Printer, CheckCircle2, Tag, RotateCcw, FileText, Layers, AlertTriangle,
   Factory, Phone, MapPin, Beaker, ClipboardList, Truck, User, Hash,
+  History, Percent,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -23,7 +24,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useStockStore } from '@/store/stockStore';
 import { useFicheTechnicStore, type FicheTechnic } from '@/store/ficheTechnicStore';
 import { useLanguage } from '@/hooks/useLanguage';
-import { formatCurrency, todayISO } from '@/lib/utils';
+import { formatCurrency, todayISO, computeTva, DEFAULT_TVA_RATE } from '@/lib/utils';
 import { printSaleInvoice, type InvoiceProductionDetail } from '@/lib/invoicePrint';
 import { printCommandOrder } from '@/lib/documents';
 import { toast } from '@/components/ui/Toast';
@@ -123,6 +124,15 @@ export default function POS() {
   const [clientId, setClientId] = useState<string | null>(null);
   const [reductionEnabled, setReductionEnabled] = useState(false);
   const [reduction, setReduction] = useState<number>(0);
+  /**
+   * Caisse « ancienne vente » : même interface que la caisse normale, mais la
+   * vente est enregistrée à une date passée SANS rien déduire du comptoir ni
+   * du stock, sans lancer de production et sans mouvement de caisse.
+   */
+  const [historicalMode, setHistoricalMode] = useState(false);
+  /** Option TVA — désactivée par défaut, 19 % quand on l'active. */
+  const [tvaEnabled, setTvaEnabled] = useState(false);
+  const [tvaRate, setTvaRate] = useState<number>(DEFAULT_TVA_RATE);
   const [paid, setPaid] = useState<number>(0);
   const [paidEdited, setPaidEdited] = useState(false);
   const [showClientForm, setShowClientForm] = useState(false);
@@ -165,11 +175,12 @@ export default function POS() {
         ? []
         : items.filter(
             (i) =>
-              i.quantity > 0 &&
+              // une ancienne vente porte souvent sur un article aujourd'hui épuisé
+              (historicalMode || i.quantity > 0) &&
               i.productName.toLowerCase().includes(search.toLowerCase()) &&
               (!categoryFilter || i.categoryName === categoryFilter)
           ),
-    [items, search, categoryFilter, source]
+    [items, search, categoryFilter, source, historicalMode]
   );
 
   const availableFiches = useMemo(
@@ -199,7 +210,12 @@ export default function POS() {
   );
 
   const subtotal = useMemo(() => cart.reduce((s, l) => s + l.quantity * l.unitPrice, 0), [cart]);
-  const finalAmount = Math.max(0, subtotal - (reductionEnabled ? reduction : 0));
+  /** Base HT, TVA et net à payer TTC — calcul unique partagé avec la facture. */
+  const tva = useMemo(
+    () => computeTva(subtotal, reductionEnabled ? reduction : 0, tvaEnabled, tvaRate),
+    [subtotal, reductionEnabled, reduction, tvaEnabled, tvaRate]
+  );
+  const finalAmount = tva.totalTTC;
   const effectivePaid = paidEdited ? paid : finalAmount;
   const change = Math.max(0, effectivePaid - finalAmount);
   const rest = Math.max(0, finalAmount - effectivePaid);
@@ -207,13 +223,15 @@ export default function POS() {
   /** Fiche lines resolved into the batches that will be produced on validation. */
   const plannedProductions = useMemo(
     () =>
-      cart
-        .filter((l): l is CartLine & { fiche: FicheTechnic } => l.kind === 'fiche' && !!l.fiche)
-        .map((l) => ({
-          line: l,
-          ingredients: scaleIngredients(l.fiche, l.quantity, products),
-        })),
-    [cart, products]
+      historicalMode
+        ? []
+        : cart
+            .filter((l): l is CartLine & { fiche: FicheTechnic } => l.kind === 'fiche' && !!l.fiche)
+            .map((l) => ({
+              line: l,
+              ingredients: scaleIngredients(l.fiche, l.quantity, products),
+            })),
+    [cart, products, historicalMode]
   );
 
   const productionCost = useMemo(
@@ -254,10 +272,16 @@ export default function POS() {
   }, [plannedProductions]);
 
   // ------------------------------------------------------------------ cart --
+  /** Plafond de quantité d'une ligne — illimité pour une ancienne vente. */
+  const ceilingOf = (line: CartLine) => (historicalMode ? Infinity : line.available);
+
   const addComptoirToCart = (item: ComptoirItem) => {
     const existing = cart.find((c) => c.kind === 'comptoir' && c.refId === item.id);
     if (existing) {
-      if (existing.quantity >= item.quantity) { toast.warning('Stock comptoir insuffisant'); return; }
+      if (!historicalMode && existing.quantity >= item.quantity) {
+        toast.warning('Stock comptoir insuffisant');
+        return;
+      }
       setCart(cart.map((c) => (c.key === existing.key ? { ...c, quantity: c.quantity + 1 } : c)));
       return;
     }
@@ -271,7 +295,7 @@ export default function POS() {
         basePrice: item.unitPrice,
         unitPrice: item.unitPrice,
         quantity: 1,
-        available: item.quantity,
+        available: historicalMode ? Infinity : item.quantity,
         sellByUnit: item.sellByUnit,
         unit: item.unit,
       },
@@ -312,7 +336,7 @@ export default function POS() {
       prev.map((c) => {
         if (c.key !== key) return c;
         const q = c.quantity + delta;
-        if (q > c.available) { toast.warning('Stock comptoir insuffisant'); return c; }
+        if (q > ceilingOf(c)) { toast.warning('Stock comptoir insuffisant'); return c; }
         return { ...c, quantity: Math.max(c.kind === 'fiche' ? 0.001 : 1, q) };
       })
     );
@@ -321,7 +345,8 @@ export default function POS() {
     setCart((prev) =>
       prev.map((c) => {
         if (c.key !== key) return c;
-        if (value > c.available) { toast.warning('Stock comptoir insuffisant'); return { ...c, quantity: c.available }; }
+        const max = ceilingOf(c);
+        if (value > max) { toast.warning('Stock comptoir insuffisant'); return { ...c, quantity: max }; }
         return { ...c, quantity: value < 0 ? 0 : value };
       })
     );
@@ -334,6 +359,8 @@ export default function POS() {
     setCart((prev) => prev.map((c) => (c.key === key ? { ...c, unitPrice: c.basePrice } : c)));
 
   const reset = () => {
+    // l'option TVA et le mode « ancienne vente » restent actifs entre deux
+    // tickets : le caissier enchaîne généralement plusieurs saisies du même type
     setCart([]); setReduction(0); setReductionEnabled(false);
     setPaid(0); setPaidEdited(false); setClientId(null); setClientSearch('');
     setDocDate(todayISO()); setBonNumber('');
@@ -356,14 +383,21 @@ export default function POS() {
     if (cart.length === 0) { toast.error('Panier vide'); return; }
     if (cart.some((c) => c.quantity <= 0)) { toast.error('Une ligne a une quantité nulle'); return; }
     if (rest > 0 && !clientId) { toast.error('Sélectionnez un client pour une vente à crédit'); return; }
-    if (unknownIngredients.length > 0) {
+    // Une ancienne vente doit obligatoirement porter une date passée : c'est
+    // tout l'intérêt du mode (rattacher la vente au bon mois du client).
+    if (historicalMode && !docDate) { toast.error("Choisissez la date d'origine de l'ancienne vente"); return; }
+    if (historicalMode && docDate > todayISO()) {
+      toast.error("La date d'une ancienne vente ne peut pas être dans le futur");
+      return;
+    }
+    if (!historicalMode && unknownIngredients.length > 0) {
       toast.error(
         `Matières introuvables en stock : ${unknownIngredients.join(', ')} — corrigez la fiche technique, ` +
         'sinon les quantités ne seraient pas déduites du stock'
       );
       return;
     }
-    if (missingStock.length > 0) {
+    if (!historicalMode && missingStock.length > 0) {
       toast.error('Stock de matières premières insuffisant pour lancer la production');
       return;
     }
@@ -418,6 +452,9 @@ export default function POS() {
         bonNumber: bonNumber.trim() || undefined,
         reduction: reductionEnabled ? Number(reduction) : 0,
         paidAmount: Number(effectivePaid),
+        historical: historicalMode,
+        tvaEnabled,
+        tvaRate: Number(tvaRate),
         products: cart.map((c) => ({
           lineKey: c.kind === 'fiche' ? c.key : undefined,
           productId: c.refId,
@@ -432,9 +469,11 @@ export default function POS() {
       });
 
       toast.success(
-        productions.length > 0
-          ? `Vente créée · ${productions.length} production(s) lancée(s)`
-          : rest > 0 ? 'Vente créée (dette client)' : 'Vente créée et payée'
+        historicalMode
+          ? 'Ancienne vente enregistrée — stock et comptoir inchangés, historique du client mis à jour'
+          : productions.length > 0
+            ? `Vente créée · ${productions.length} production(s) lancée(s)`
+            : rest > 0 ? 'Vente créée (dette client)' : 'Vente créée et payée'
       );
       setPrintPrompt({
         sale,
@@ -571,6 +610,10 @@ export default function POS() {
         productions: prompt.productions,
         total: sale.totalAmount,
         reduction: sale.reduction,
+        tvaEnabled: sale.tvaEnabled,
+        tvaRate: sale.tvaRate,
+        tvaAmount: sale.tvaAmount,
+        historical: sale.isHistorical,
         final: sale.finalAmount,
         paid: sale.paidAmount,
         rest: sale.restAmount,
@@ -587,23 +630,73 @@ export default function POS() {
   return (
     <div>
       <PageHeader
-        title="Point de vente"
-        icon={<CreditCard size={24} />}
-        subtitle="Comptoir et fiches techniques — la production est lancée automatiquement à la vente"
+        title={historicalMode ? 'Point de vente — ancienne vente' : 'Point de vente'}
+        icon={historicalMode ? <History size={24} /> : <CreditCard size={24} />}
+        subtitle={
+          historicalMode
+            ? 'Saisie rétroactive : la vente alimente uniquement l’historique du client et les rapports'
+            : 'Comptoir et fiches techniques — la production est lancée automatiquement à la vente'
+        }
         actions={
-          <div className="flex items-center gap-2 rounded-xl border border-gold/15 bg-gradient-card px-3 py-1.5 shadow-sm">
-            <span className="text-xs font-semibold text-text-secondary">{t('virtualKeyboard')}</span>
-            <Switch
-              checked={keyboardEnabled}
-              onChange={(val) => {
-                setKeyboardEnabled(val);
-                localStorage.setItem('pos_keyboard_enabled', String(val));
-                if (!val) setShowKeyboard(false);
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant={historicalMode ? 'rose' : 'secondary'}
+              onClick={() => {
+                const next = !historicalMode;
+                setHistoricalMode(next);
+                // une commande ne se saisit jamais rétroactivement
+                if (next) setPosMode('sale');
+                toast.info(
+                  next
+                    ? 'Caisse « ancienne vente » activée — aucune quantité ne sera déduite du stock'
+                    : 'Retour à la caisse normale — les ventes déduisent à nouveau le stock'
+                );
               }}
-            />
+              title="Enregistrer une vente passée sans toucher au stock actuel"
+            >
+              <History size={18} /> {historicalMode ? 'Quitter l’ancienne vente' : 'Ancienne vente'}
+            </Button>
+            <div className="flex items-center gap-2 rounded-xl border border-gold/15 bg-gradient-card px-3 py-1.5 shadow-sm">
+              <span className="text-xs font-semibold text-text-secondary">{t('virtualKeyboard')}</span>
+              <Switch
+                checked={keyboardEnabled}
+                onChange={(val) => {
+                  setKeyboardEnabled(val);
+                  localStorage.setItem('pos_keyboard_enabled', String(val));
+                  if (!val) setShowKeyboard(false);
+                }}
+              />
+            </div>
           </div>
         }
       />
+
+      {/* ============ ALERTE PERMANENTE — caisse « ancienne vente » ============ */}
+      {historicalMode && (
+        <div className="mb-5 rounded-2xl border-2 border-rose-deep/45 bg-rose-deep/8 p-4 animate-fadeIn">
+          <p className="flex items-center gap-2 font-display text-base font-bold text-rose-deep">
+            <AlertTriangle size={18} /> Vous êtes sur la caisse des ANCIENNES VENTES
+          </p>
+          <ul className="mt-2 grid grid-cols-1 gap-1 text-xs font-medium text-text-secondary sm:grid-cols-2">
+            <li className="flex items-start gap-1.5">
+              <X size={13} className="mt-0.5 shrink-0 text-rose-deep" />
+              Rien n’est déduit du <b>stock actuel</b> ni du <b>comptoir</b>.
+            </li>
+            <li className="flex items-start gap-1.5">
+              <X size={13} className="mt-0.5 shrink-0 text-rose-deep" />
+              Aucune <b>production</b> n’est lancée et la <b>caisse</b> n’est pas mouvementée.
+            </li>
+            <li className="flex items-start gap-1.5">
+              <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-pistachio" />
+              La vente apparaît dans l’<b>historique et le compte rendu du client</b>.
+            </li>
+            <li className="flex items-start gap-1.5">
+              <CheckCircle2 size={13} className="mt-0.5 shrink-0 text-pistachio" />
+              Elle est comptée dans les <b>rapports généraux</b> à la date que vous indiquez.
+            </li>
+          </ul>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 xl:grid-cols-5 gap-5">
         {/* ---------------- Catalogue ---------------- */}
@@ -757,24 +850,30 @@ export default function POS() {
           </h3>
 
           {/* Mode : vente directe ou commande client */}
-          <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-gold/20 bg-vanilla/40 p-1">
-            {([
-              ['sale', 'Vente directe', <CreditCard key="i" size={14} />],
-              ['command', 'Commande', <ClipboardList key="i" size={14} />],
-            ] as const).map(([key, label, icon]) => (
-              <button
-                key={key}
-                onClick={() => setPosMode(key)}
-                className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all ${
-                  posMode === key
-                    ? 'bg-gradient-button text-stone-950 shadow-gold'
-                    : 'text-text-muted hover:text-text-primary'
-                }`}
-              >
-                {icon} {label}
-              </button>
-            ))}
-          </div>
+          {historicalMode ? (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border-2 border-rose-deep/40 bg-rose-deep/10 px-3 py-2.5 text-xs font-bold text-rose-deep">
+              <History size={14} /> Ancienne vente — le stock ne sera pas modifié
+            </div>
+          ) : (
+            <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl border border-gold/20 bg-vanilla/40 p-1">
+              {([
+                ['sale', 'Vente directe', <CreditCard key="i" size={14} />],
+                ['command', 'Commande', <ClipboardList key="i" size={14} />],
+              ] as const).map(([key, label, icon]) => (
+                <button
+                  key={key}
+                  onClick={() => setPosMode(key)}
+                  className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all ${
+                    posMode === key
+                      ? 'bg-gradient-button text-stone-950 shadow-gold'
+                      : 'text-text-muted hover:text-text-primary'
+                  }`}
+                >
+                  {icon} {label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* ---- Client ---- */}
           <div className="mb-4 rounded-2xl border border-gold/20 bg-vanilla/40 p-4">
@@ -842,11 +941,16 @@ export default function POS() {
           {/* ---- Date de création + n° bon de commande (les deux modes) ---- */}
           <div className="mb-4 rounded-2xl border border-gold/20 bg-vanilla/40 p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input
-              label={posMode === 'command' ? 'Date de création' : 'Date de la vente'}
+              label={
+                historicalMode
+                  ? "Date d'origine de la vente *"
+                  : posMode === 'command' ? 'Date de création' : 'Date de la vente'
+              }
               type="date"
               value={docDate}
+              max={historicalMode ? todayISO() : undefined}
               onChange={(e) => setDocDate(e.target.value)}
-              className="h-11"
+              className={`h-11 ${historicalMode ? 'border-rose-deep/50' : ''}`}
             />
             <Input
               label="N° bon de commande"
@@ -898,7 +1002,7 @@ export default function POS() {
           )}
 
           {/* ---- Ingrédients introuvables : le stock ne serait pas décrémenté ---- */}
-          {posMode === 'sale' && unknownIngredients.length > 0 && (
+          {posMode === 'sale' && !historicalMode && unknownIngredients.length > 0 && (
             <div className="mb-3 rounded-xl border border-rose-deep/40 bg-rose-deep/10 px-3.5 py-2.5 text-xs text-rose-deep">
               <p className="font-bold flex items-center gap-1.5">
                 <AlertTriangle size={13} /> Matières introuvables dans le stock
@@ -913,8 +1017,21 @@ export default function POS() {
             </div>
           )}
 
+          {/* ---- Ancienne vente : rappel sur les lignes « fiche technique » ---- */}
+          {historicalMode && ficheLines > 0 && (
+            <div className="mb-3 rounded-xl border border-caramel/40 bg-caramel/10 px-3.5 py-2.5 text-xs text-gold-dark">
+              <p className="font-bold flex items-center gap-1.5">
+                <History size={13} /> {ficheLines} ligne(s) « fiche technique » dans le panier
+              </p>
+              <p className="mt-0.5 text-text-secondary">
+                En saisie rétroactive, aucune production n'est lancée et aucune matière n'est
+                consommée : ces lignes sont simplement facturées au client.
+              </p>
+            </div>
+          )}
+
           {/* ---- Production warning (ventes uniquement) ---- */}
-          {posMode === 'sale' && ficheLines > 0 && (
+          {posMode === 'sale' && !historicalMode && ficheLines > 0 && (
             <div className={`mb-3 rounded-xl border px-3.5 py-2.5 text-xs ${
               missingStock.length > 0
                 ? 'border-rose-deep/30 bg-rose-deep/8 text-rose-deep'
@@ -1063,7 +1180,7 @@ export default function POS() {
               {/* ---- Totals ---- */}
               <div className="border-t border-gold/15 pt-4 space-y-2.5 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-text-muted">Sous-total</span>
+                  <span className="text-text-muted">Sous-total {tvaEnabled ? 'HT' : ''}</span>
                   <span className="tabular font-semibold">{formatCurrency(subtotal)}</span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -1076,8 +1193,48 @@ export default function POS() {
                     />
                   )}
                 </div>
+
+                {/* ---- Option TVA : activable, 19 % par défaut, taux modifiable ---- */}
+                <div className="rounded-xl border border-gold/20 bg-vanilla/40 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Switch
+                      checked={tvaEnabled}
+                      onChange={(v) => { setTvaEnabled(v); if (v && !tvaRate) setTvaRate(DEFAULT_TVA_RATE); }}
+                      label="Appliquer la TVA"
+                    />
+                    {tvaEnabled && (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          type="number" step="any" min={0} max={100}
+                          value={tvaRate}
+                          onChange={(e) => setTvaRate(Math.max(0, Number(e.target.value)))}
+                          className="w-20 h-9 rounded-lg border-2 border-gold/25 bg-[--surface-input] px-2 text-sm font-bold tabular text-text-primary text-right focus:outline-none focus:ring-2 focus:ring-gold/30"
+                        />
+                        <Percent size={14} className="text-gold-dark" />
+                      </div>
+                    )}
+                  </div>
+                  {tvaEnabled ? (
+                    <>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-text-muted">Base HT (après réduction)</span>
+                        <span className="tabular font-semibold">{formatCurrency(tva.baseHT)}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-text-muted">TVA {tva.rate}%</span>
+                        <span className="tabular font-bold text-gold-dark">+ {formatCurrency(tva.tvaAmount)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <p className="text-[11px] text-text-muted">
+                      Désactivée — la facture est établie sans TVA. Activez l'option pour facturer en TTC
+                      (19 % par défaut, taux modifiable).
+                    </p>
+                  )}
+                </div>
+
                 <div className="flex justify-between items-center text-lg font-bold border-y border-gold/15 py-2.5">
-                  <span>Total</span>
+                  <span>{tvaEnabled ? 'Total TTC' : 'Total'}</span>
                   <span className="tabular text-gold-dark">{formatCurrency(finalAmount)}</span>
                 </div>
                 <Input
@@ -1101,12 +1258,20 @@ export default function POS() {
 
               <div className="mt-4 space-y-2">
                 <Button
-                  variant={rest <= 0 ? 'gold' : 'rose'}
+                  variant={historicalMode ? 'rose' : rest <= 0 ? 'gold' : 'rose'}
                   className="w-full h-12 text-base"
                   onClick={createSale}
-                  disabled={saving || cart.length === 0 || missingStock.length > 0 || unknownIngredients.length > 0}
+                  disabled={
+                    saving ||
+                    cart.length === 0 ||
+                    (!historicalMode && (missingStock.length > 0 || unknownIngredients.length > 0))
+                  }
                 >
-                  {saving ? 'Enregistrement…' : rest <= 0 ? 'Valider la vente (payée)' : 'Valider la vente (dette)'}
+                  {saving
+                    ? 'Enregistrement…'
+                    : historicalMode
+                      ? "Enregistrer l'ancienne vente (sans toucher au stock)"
+                      : rest <= 0 ? 'Valider la vente (payée)' : 'Valider la vente (dette)'}
                 </Button>
                 {cart.length > 0 && (
                   <Button variant="ghost" className="w-full" onClick={reset} disabled={saving}>Annuler</Button>
@@ -1219,6 +1384,7 @@ export default function POS() {
           <FicheSaleForm
             fiche={ficheModal}
             products={products}
+            historical={historicalMode}
             initialQuantity={cart.find((c) => c.kind === 'fiche' && c.refId === ficheModal.id)?.quantity}
             initialPrice={cart.find((c) => c.kind === 'fiche' && c.refId === ficheModal.id)?.unitPrice}
             onCancel={() => setFicheModal(null)}
@@ -1286,8 +1452,20 @@ export default function POS() {
           <div className="h-14 w-14 rounded-full bg-pistachio/15 flex items-center justify-center mb-4">
             <CheckCircle2 size={30} className="text-pistachio" />
           </div>
-          <h3 className="font-display text-lg font-semibold text-text-primary mb-1">Vente enregistrée</h3>
+          <h3 className="font-display text-lg font-semibold text-text-primary mb-1">
+            {printPrompt?.sale.isHistorical ? 'Ancienne vente enregistrée' : 'Vente enregistrée'}
+          </h3>
           <p className="text-sm text-text-secondary mb-1">{printPrompt?.sale.reference}</p>
+          {printPrompt?.sale.isHistorical && (
+            <p className="text-xs text-rose-deep mb-1">
+              Stock et comptoir inchangés — visible dans l'historique du client et les rapports
+            </p>
+          )}
+          {printPrompt?.sale.tvaEnabled && (
+            <p className="text-xs text-gold-dark mb-1">
+              TVA {printPrompt.sale.tvaRate}% appliquée · {formatCurrency(printPrompt.sale.tvaAmount ?? 0)}
+            </p>
+          )}
           {!!printPrompt?.productions.length && (
             <p className="text-xs text-pistachio mb-1">
               {printPrompt.productions.length} production(s) créée(s) et visible(s) dans « Production »
@@ -1310,12 +1488,14 @@ export default function POS() {
 //  Configure the batch produced from a fiche technique
 // ---------------------------------------------------------------------------
 function FicheSaleForm({
-  fiche, products, initialQuantity, initialPrice, onCancel, onConfirm,
+  fiche, products, initialQuantity, initialPrice, historical = false, onCancel, onConfirm,
 }: {
   fiche: FicheTechnic;
   products: Product[];
   initialQuantity?: number;
   initialPrice?: number;
+  /** Saisie rétroactive : aucune matière n'est consommée, donc aucun blocage. */
+  historical?: boolean;
   onCancel: () => void;
   onConfirm: (quantity: number, unitPrice: number) => void;
 }) {
@@ -1331,8 +1511,8 @@ function FicheSaleForm({
   const costPerUnit = quantity > 0 ? totalCost / quantity : 0;
   const revenue = quantity * unitPrice;
   const gains = revenue - totalCost;
-  const short = ingredients.filter((i) => !i.isFiche && i.quantityUsed > i.available + 1e-6);
-  const unknown = ingredients.filter((i) => !i.resolved);
+  const short = historical ? [] : ingredients.filter((i) => !i.isFiche && i.quantityUsed > i.available + 1e-6);
+  const unknown = historical ? [] : ingredients.filter((i) => !i.resolved);
   const su = fiche.sellByUnit && fiche.sellUnit ? ` ${fiche.sellUnit}` : '';
 
   return (
@@ -1348,6 +1528,16 @@ function FicheSaleForm({
           Facteur {ratio.toFixed(2)}×
         </Badge>
       </div>
+
+      {historical && (
+        <div className="rounded-xl border border-rose-deep/35 bg-rose-deep/8 p-3 text-xs font-medium text-rose-deep">
+          <p className="flex items-center gap-1.5 font-bold"><History size={13} /> Ancienne vente</p>
+          <p className="mt-0.5 text-text-secondary">
+            Aucune production ne sera lancée et aucune matière ne sera consommée : la formule
+            ci-dessous n'est affichée qu'à titre indicatif.
+          </p>
+        </div>
+      )}
 
       {fiche.description && (
         <p className="text-xs text-text-secondary bg-vanilla/40 p-2.5 rounded-lg italic">« {fiche.description} »</p>

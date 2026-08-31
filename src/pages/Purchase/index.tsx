@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ShoppingCart, Plus, Eye, Wallet, Printer, Trash2, Calendar, Folder, DollarSign, TrendingDown, CheckCircle2, FileText, CarFront } from 'lucide-react';
+import { ShoppingCart, Plus, Eye, Wallet, Printer, Trash2, Calendar, Folder, DollarSign, TrendingDown, CheckCircle2, FileText, CarFront, History } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Select } from '@/components/ui/Select';
@@ -38,6 +38,8 @@ export default function PurchasePage() {
   const [unitFilter, setUnitFilter] = useState('');
 
   const [createOpen, setCreateOpen] = useState(false);
+  /** Ouvre le même formulaire en mode « ancien achat » (saisie rétroactive). */
+  const [createHistoricalOpen, setCreateHistoricalOpen] = useState(false);
   const [viewing, setViewing] = useState<Purchase | null>(null);
   const [paying, setPaying] = useState<Purchase | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -92,7 +94,7 @@ export default function PurchasePage() {
     printInvoice({
       type: 'purchase', reference: p.reference, date: p.date,
       partyName: sup?.name || '—', partyPhone: sup?.phone, partyAddress: sup?.address,
-      bonNumber: p.bonNumber, driverPlate: p.driverPlate,
+      bonNumber: p.bonNumber, driverPlate: p.driverPlate, historical: p.isHistorical,
       lines: p.products.map((l) => ({ designation: l.productName || '', quantity: l.quantity, unitPrice: l.purchasePrice })),
       total: p.totalAmount, paid: p.paidAmount, rest: p.restAmount,
     }, settings);
@@ -101,7 +103,18 @@ export default function PurchasePage() {
   return (
     <div>
       <PageHeader title={t('purchase')} icon={<ShoppingCart size={24} />} subtitle={`${purchases.length} factures`}
-        actions={can('purchase', 'create') && <Button variant="gold" onClick={() => setCreateOpen(true)}><Plus size={18} /> {t('newPurchase')}</Button>}
+        actions={can('purchase', 'create') && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="gold" onClick={() => setCreateOpen(true)}><Plus size={18} /> {t('newPurchase')}</Button>
+            <Button
+              variant="secondary"
+              onClick={() => setCreateHistoricalOpen(true)}
+              title="Saisir une facture d'achat antérieure sans toucher au stock actuel"
+            >
+              <History size={18} /> Ancien achat
+            </Button>
+          </div>
+        )}
       />
 
       {/* Stats Cards Section */}
@@ -199,7 +212,14 @@ export default function PurchasePage() {
             return (
               <Card key={p.id} index={i} hoverable className="flex flex-col border border-gold/10 hover:border-gold/30 transition-all duration-300">
                 <div className="flex justify-between items-start mb-2">
-                  <h3 className="font-display font-semibold text-text-primary">{p.reference}</h3>
+                  <h3 className="font-display font-semibold text-text-primary flex items-center gap-1.5">
+                    {p.reference}
+                    {p.isHistorical && (
+                      <Badge variant="warning" className="text-[9px] px-1.5 py-0">
+                        <History size={9} /> Ancien
+                      </Badge>
+                    )}
+                  </h3>
                   <span className="text-xs text-text-muted">{formatDate(p.date, language)}</span>
                 </div>
                 <p className="text-sm font-semibold text-text-secondary mb-1">{supplierName(p.supplierId)}</p>
@@ -269,10 +289,30 @@ export default function PurchasePage() {
         <CreatePurchase onClose={() => setCreateOpen(false)} onCreated={(pur) => setViewing(pur)} />
       </Modal>
 
+      <Modal
+        open={createHistoricalOpen}
+        onClose={() => setCreateHistoricalOpen(false)}
+        title="Ancien achat — saisie rétroactive"
+        size="lg"
+      >
+        <CreatePurchase
+          historical
+          onClose={() => setCreateHistoricalOpen(false)}
+          onCreated={(pur) => setViewing(pur)}
+        />
+      </Modal>
+
       <Modal open={!!viewing} onClose={() => setViewing(null)} title={viewing?.reference} size="md">
         {viewing && (
           <div className="space-y-4">
             <p className="text-sm text-text-secondary">{supplierName(viewing.supplierId)} — {formatDate(viewing.date, language)}</p>
+            {viewing.isHistorical && (
+              <div className="rounded-xl border border-caramel/40 bg-caramel/10 px-3 py-2 text-xs font-medium text-gold-dark">
+                <span className="flex items-center gap-1.5 font-bold"><History size={13} /> Ancien achat (saisie rétroactive)</span>
+                Les quantités de cette facture n'ont pas été ajoutées au stock actuel ; elle ne sert
+                qu'à l'historique du fournisseur et aux rapports.
+              </div>
+            )}
             {(viewing.bonNumber || viewing.driverPlate) && (
               <div className="flex flex-wrap gap-2">
                 {viewing.bonNumber && (

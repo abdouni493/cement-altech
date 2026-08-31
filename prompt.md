@@ -9,3 +9,16 @@ Make sure to make it display also the details of selling let it display all the 
 With make button for see the history of deposits and withdrawal the money from the caisse and every small details about it 
 
 Fix the interface of display the productions add button action for edit the production 
+
+
+fix the interface of purchase add new button for create old purchase make sure to make it like the same interface of create new normal purchase but let the user set the date and make sure to make it when user create the old purchase then make sure to make it do not add that quantities on the current storage make it save on the history of that suppliers and make them will display the general repports interface 
+
+fix the interface of pos add new button for create old selling make sure to make it when user click on it then its will display for him interface like the interface of normal pos and make sure to make it display alert that will tell the user that you are on the old selling pos when you will sell from this interface then its will not minus from the current storage of the products 
+then make sure to make it user can create the selling normally like its on the normal pos but let him set the date and make new option on the old pos and the normal pos let the user can activate it or inactivate it its for the tva let the user can ectivate it and make it 19% by default and let the user can edit and make sure to make it when user activate it then its will calculate the ttc after the tva and make sure to make it display on the history of salles with tva and make sure to make it when user print the selling invoice then m
+ake sure to make it display the tva and the same for the old selling pos for th enew option 
+and make sure to make it when user create selling on the old saler for the clients and he save them then make sure to make them display on the history of that clients 
+and make sure to make it do not minus from the current storage 
+just make it display on the history of the client and make sure to make it display on the repports interface 
+
+apply this updates then give me the sql code that i have to run for this new updates 
+then push all updates to rpeo with merge code directly without pull request 

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Receipt, Eye, Wallet, Printer, Trash2 } from 'lucide-react';
+import { Receipt, Eye, Wallet, Printer, Trash2, History, Percent } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Select } from '@/components/ui/Select';
@@ -62,6 +62,8 @@ export default function SalesPage() {
         unitPrice: l.sellingPrice, basePrice: l.basePrice,
       })),
       total: s.totalAmount, reduction: s.reduction, final: s.finalAmount,
+      tvaEnabled: s.tvaEnabled, tvaRate: s.tvaRate, tvaAmount: s.tvaAmount,
+      historical: s.isHistorical,
       paid: s.paidAmount, rest: s.restAmount, createdBy: s.createdBy,
     }, settings);
   };
@@ -82,7 +84,19 @@ export default function SalesPage() {
           {filtered.map((s, i) => (
             <Card key={s.id} index={i} hoverable className="flex flex-col">
               <div className="flex justify-between items-start mb-1">
-                <h3 className="font-display font-semibold text-text-primary">{s.reference}</h3>
+                <h3 className="font-display font-semibold text-text-primary flex flex-wrap items-center gap-1.5">
+                  {s.reference}
+                  {s.isHistorical && (
+                    <Badge variant="warning" className="text-[9px] px-1.5 py-0">
+                      <History size={9} /> Ancienne
+                    </Badge>
+                  )}
+                  {s.tvaEnabled && (
+                    <Badge variant="info" className="text-[9px] px-1.5 py-0">
+                      <Percent size={9} /> TVA {s.tvaRate}%
+                    </Badge>
+                  )}
+                </h3>
                 <span className="text-xs text-text-muted">{formatDateTime(s.date, language)}</span>
               </div>
               <p className="text-sm text-text-secondary mb-1">{clientName(s.clientId)}</p>
@@ -90,7 +104,13 @@ export default function SalesPage() {
               <p className="text-xs text-text-muted mb-1">{s.products.length} article(s)</p>
               {s.createdBy && <p className="text-xs text-text-muted mb-3">{t('createdBy')}: {s.createdBy}</p>}
               <div className="bg-vanilla/40 rounded-xl p-3 space-y-1 text-sm mb-3">
-                <div className="flex justify-between"><span className="text-text-muted">{t('total')}</span><span className="tabular font-medium">{formatCurrency(s.finalAmount)}</span></div>
+                {s.tvaEnabled && (
+                  <>
+                    <div className="flex justify-between text-xs"><span className="text-text-muted">Total HT</span><span className="tabular">{formatCurrency(Math.max(0, s.totalAmount - s.reduction))}</span></div>
+                    <div className="flex justify-between text-xs"><span className="text-text-muted">TVA {s.tvaRate}%</span><span className="tabular text-gold-dark font-semibold">+ {formatCurrency(s.tvaAmount || 0)}</span></div>
+                  </>
+                )}
+                <div className="flex justify-between"><span className="text-text-muted">{s.tvaEnabled ? 'Total TTC' : t('total')}</span><span className="tabular font-medium">{formatCurrency(s.finalAmount)}</span></div>
                 <div className="flex justify-between"><span className="text-text-muted">{t('paid')}</span><span className="tabular text-pistachio">{formatCurrency(s.paidAmount)}</span></div>
                 <div className="flex justify-between"><span className="text-text-muted">{t('rest')}</span><span className={`tabular font-bold ${s.restAmount > 0 ? 'text-rose-deep' : 'text-pistachio'}`}>{formatCurrency(s.restAmount)}</span></div>
               </div>
@@ -113,7 +133,13 @@ export default function SalesPage() {
             </tr></thead>
             <tbody>{filtered.map((s) => (
               <tr key={s.id} className="border-t border-gold/10 hover:bg-gold/5">
-                <td className="px-4 py-3 font-medium">{s.reference}</td><td className="px-4 py-3">{clientName(s.clientId)}</td><td className="px-4 py-3">{formatDateTime(s.date, language)}</td>
+                <td className="px-4 py-3 font-medium">
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    {s.reference}
+                    {s.isHistorical && <Badge variant="warning" className="text-[9px] px-1.5 py-0"><History size={9} /> Ancienne</Badge>}
+                    {s.tvaEnabled && <Badge variant="info" className="text-[9px] px-1.5 py-0">TVA {s.tvaRate}%</Badge>}
+                  </span>
+                </td><td className="px-4 py-3">{clientName(s.clientId)}</td><td className="px-4 py-3">{formatDateTime(s.date, language)}</td>
                 <td className="px-4 py-3 text-right tabular">{formatCurrency(s.finalAmount)}</td>
                 <td className="px-4 py-3 text-right tabular"><span className={s.restAmount > 0 ? 'text-rose-deep font-bold' : ''}>{formatCurrency(s.restAmount)}</span></td>
                 <td className="px-4 py-3"><div className="flex justify-center gap-1">
@@ -131,6 +157,13 @@ export default function SalesPage() {
         {viewing && (
           <div className="space-y-4">
             <p className="text-sm text-text-secondary">{clientName(viewing.clientId)} — {formatDateTime(viewing.date, language)}</p>
+            {viewing.isHistorical && (
+              <div className="rounded-xl border border-rose-deep/35 bg-rose-deep/8 px-3 py-2 text-xs font-medium text-rose-deep">
+                <span className="flex items-center gap-1.5 font-bold"><History size={13} /> Ancienne vente (saisie rétroactive)</span>
+                Ni le stock ni le comptoir n'ont été modifiés ; cette vente sert à l'historique du
+                client et aux rapports.
+              </div>
+            )}
             {viewing.bonNumber && <p className="text-xs text-gold-dark font-semibold">🧾 Bon de commande N° {viewing.bonNumber}</p>}
             {viewing.createdBy && <p className="text-xs text-text-muted">{t('createdBy')}: {viewing.createdBy}</p>}
             <div className="overflow-x-auto rounded-xl border border-gold/15">
@@ -171,8 +204,15 @@ export default function SalesPage() {
               </table>
             </div>
             <div className="grid grid-cols-2 gap-2 text-sm">
-              <Tile label={t('total')} value={formatCurrency(viewing.totalAmount)} />
+              <Tile label={viewing.tvaEnabled ? 'Total brut HT' : t('total')} value={formatCurrency(viewing.totalAmount)} />
               <Tile label={t('reduction')} value={formatCurrency(viewing.reduction)} />
+              {viewing.tvaEnabled && (
+                <>
+                  <Tile label="Base imposable HT" value={formatCurrency(Math.max(0, viewing.totalAmount - viewing.reduction))} />
+                  <Tile label={`TVA ${viewing.tvaRate}%`} value={formatCurrency(viewing.tvaAmount || 0)} />
+                  <Tile label="Net à payer TTC" value={formatCurrency(viewing.finalAmount)} />
+                </>
+              )}
               <Tile label={t('paid')} value={formatCurrency(viewing.paidAmount)} />
               <Tile label={t('rest')} value={formatCurrency(viewing.restAmount)} />
             </div>

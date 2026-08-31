@@ -1,7 +1,9 @@
 import { create } from 'zustand';
 import type { Sale, SaleLine, UsedProduct } from '@/types';
 import { db, rpc } from '@/lib/db';
+import { computeTva, DEFAULT_TVA_RATE } from '@/lib/utils';
 import { save, trySave } from '@/lib/persist';
+import { toast } from '@/components/ui/Toast';
 import { useComptoirStore } from './comptoirStore';
 import { useProductionStore } from './productionStore';
 import { useStockStore } from './stockStore';
@@ -49,6 +51,15 @@ export interface AddPosSaleInput {
   paidAmount: number;
   products: PosSaleLine[];
   productions: PosProductionInput[];
+  /**
+   * Caisse « ancienne vente » : la vente est enregistrée à sa date d'origine
+   * mais rien n'est déduit du comptoir ni du stock, aucune production n'est
+   * lancée et la caisse n'est pas mouvementée.
+   */
+  historical?: boolean;
+  /** Option TVA de la caisse. */
+  tvaEnabled?: boolean;
+  tvaRate?: number;
 }
 
 export interface UpdateSaleInput {
@@ -84,6 +95,28 @@ function isMissingFunction(message: string): boolean {
   return /PGRST202|Could not find the function|does not exist|schema cache/i.test(message);
 }
 
+/**
+ * Filet de sécurité : « ancienne vente » et TVA n'existent que si
+ * `altech_production_update_anciens_achats_ventes_tva.sql` a été exécuté.
+ * Si la vente revient sans les drapeaux demandés, la base tourne encore sur
+ * l'ancienne version — le stock A DONC été décrémenté. On prévient l'opérateur
+ * au lieu de le laisser croire le contraire.
+ */
+function warnIfFlagsMissing(saved: Sale | undefined, historical: boolean, tvaEnabled: boolean) {
+  if (!saved) return;
+  if (historical && !saved.isHistorical) {
+    toast.error(
+      "Base de données non mise à jour : la vente a été enregistrée normalement " +
+      "(stock décrémenté). Exécutez altech_production_update_anciens_achats_ventes_tva.sql."
+    );
+  } else if (tvaEnabled && !saved.tvaEnabled) {
+    toast.warning(
+      "Base de données non mise à jour : la TVA n'a pas été mémorisée. " +
+      'Exécutez altech_production_update_anciens_achats_ventes_tva.sql.'
+    );
+  }
+}
+
 export const useSalesStore = create<SalesState>()((set, get) => ({
   sales: [],
 
@@ -92,19 +125,28 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
   addSale: async (s) => {
     const total = s.totalAmount ?? s.products.reduce((acc, p) => acc + p.quantity * p.sellingPrice, 0);
     const red = s.reduction || 0;
-    const final = s.finalAmount ?? Math.max(0, total - red);
+    const tvaEnabled = s.tvaEnabled ?? false;
+    const tva = computeTva(total, red, tvaEnabled, s.tvaRate ?? DEFAULT_TVA_RATE);
+    const final = s.finalAmount ?? tva.totalTTC;
     const paid = s.paidAmount || 0;
     const saleDate = s.date || new Date().toISOString();
+    const historical = s.isHistorical ?? false;
 
     const comptoirItems = useComptoirStore.getState().items;
 
     // create_sale() writes the sale, its lines and its payment, decrements the
     // comptoir/stock and books the caisse deposit — all in one transaction.
+    // Une « ancienne vente » (is_historical) saute les deux derniers points :
+    // ni le comptoir/stock ni la caisse ne sont touchés.
     const row = await save('sales.create', () =>
       rpc.createSale({
         client_id: s.clientId,
         date: saleDate.slice(0, 10),
         bon_number: s.bonNumber ?? null,
+        is_historical: historical,
+        tva_enabled: tvaEnabled,
+        tva_rate: tva.rate,
+        tva_amount: tva.tvaAmount,
         reduction: red,
         total_amount: total,
         final_amount: final,
@@ -112,7 +154,7 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
         products: s.products.map((p) => {
           const comptoir = comptoirItems.find((it) => it.id === p.productId);
           return {
-            product_id: comptoir ? null : p.productId,
+            product_id: comptoir ? null : p.productId || null,
             comptoir_id: comptoir ? p.productId : null,
             product_name: p.productName,
             quantity: p.quantity,
@@ -134,12 +176,18 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
     ]);
     set({ sales });
 
+    warnIfFlagsMissing(sales.find((x) => x.id === row.id), historical, tvaEnabled);
+
     return (
       sales.find((x) => x.id === row.id) ?? {
         ...(s as unknown as Sale),
         id: row.id,
         reference: row.reference,
         date: saleDate,
+        isHistorical: historical,
+        tvaEnabled,
+        tvaRate: tva.rate,
+        tvaAmount: tva.tvaAmount,
         totalAmount: total,
         reduction: red,
         finalAmount: final,
@@ -152,10 +200,15 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
   },
 
   addPosSale: async (input) => {
-    const { productions } = input;
+    const historical = input.historical ?? false;
+    // Une ancienne vente ne relance jamais de production : elle ne ferait que
+    // consommer le stock actuel, ce que ce mode doit justement éviter.
+    const productions = historical ? [] : input.productions;
     const total = input.products.reduce((acc, p) => acc + p.quantity * p.sellingPrice, 0);
     const red = input.reduction || 0;
-    const final = Math.max(0, total - red);
+    const tvaEnabled = input.tvaEnabled ?? false;
+    const tva = computeTva(total, red, tvaEnabled, input.tvaRate ?? DEFAULT_TVA_RATE);
+    const final = tva.totalTTC;
     const paid = input.paidAmount || 0;
     const saleDate = (input.date || new Date().toISOString()).slice(0, 10);
 
@@ -165,9 +218,18 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
         clientId: input.clientId,
         date: input.date,
         bonNumber: input.bonNumber,
-        products: input.products,
+        // en mode historique une ligne « fiche technique » n'a plus d'article
+        // rattaché : elle est facturée par son seul libellé.
+        products: input.products.map((p) =>
+          historical && p.lineKey ? { ...p, productId: '' } : p
+        ),
         reduction: red,
         paidAmount: paid,
+        isHistorical: historical,
+        tvaEnabled,
+        tvaRate: tva.rate,
+        tvaAmount: tva.tvaAmount,
+        finalAmount: final,
       } as AddSaleInput);
     }
 
@@ -191,6 +253,10 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
       client_id: input.clientId,
       date: saleDate,
       bon_number: input.bonNumber ?? null,
+      is_historical: historical,
+      tva_enabled: tvaEnabled,
+      tva_rate: tva.rate,
+      tva_amount: tva.tvaAmount,
       reduction: red,
       total_amount: total,
       final_amount: final,
@@ -246,6 +312,10 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
           client_id: input.clientId,
           date: saleDate,
           bon_number: input.bonNumber ?? null,
+          is_historical: historical,
+          tva_enabled: tvaEnabled,
+          tva_rate: tva.rate,
+          tva_amount: tva.tvaAmount,
           reduction: red,
           total_amount: total,
           final_amount: final,
@@ -280,6 +350,8 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
     ]);
     set({ sales });
 
+    warnIfFlagsMissing(sales.find((x) => x.id === row.id), historical, tvaEnabled);
+
     return (
       sales.find((x) => x.id === row.id) ?? {
         id: row.id,
@@ -287,6 +359,10 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
         clientId: input.clientId,
         date: saleDate,
         bonNumber: input.bonNumber,
+        isHistorical: historical,
+        tvaEnabled,
+        tvaRate: tva.rate,
+        tvaAmount: tva.tvaAmount,
         products: input.products,
         totalAmount: total,
         reduction: red,

@@ -123,6 +123,13 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     ? `Du ${formatDate(period.from, language)} au ${formatDate(period.to, language)}`
     : '';
 
+  /** Mentions portées sur une facture : TVA appliquée et saisie rétroactive. */
+  const saleTags = (sale: { tvaEnabled?: boolean; tvaRate?: number; isHistorical?: boolean }) =>
+    [
+      sale.tvaEnabled ? `TVA ${sale.tvaRate ?? 0}%` : '',
+      sale.isHistorical ? 'ancienne vente' : '',
+    ].filter(Boolean).join(' · ');
+
   const doPrint = () => {
     if (!client || !data || !period) return;
 
@@ -132,20 +139,25 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       headerTotal: formatCurrency(data.salesTotal),
       cols: [
         { label: 'N° facture' }, { label: 'Date' }, { label: 'Articles', align: 'right' },
+        { label: 'TVA', align: 'right' },
         { label: 'Total', align: 'right' }, { label: 'Payé', align: 'right' },
         { label: 'Reste', align: 'right' },
       ],
       rows: [
         ...data.salesList.map<PrintRow>((s) => ({
           cells: [
-            s.reference, formatDate(s.date, language), String(s.products.length),
+            `${s.reference}${s.isHistorical ? ' (ancienne vente)' : ''}`,
+            formatDate(s.date, language), String(s.products.length),
+            s.tvaEnabled ? `${formatCurrency(s.tvaAmount || 0)} (${s.tvaRate ?? 0}%)` : '—',
             formatCurrency(s.finalAmount), formatCurrency(s.paidAmount), formatCurrency(s.restAmount),
           ],
           tone: s.restAmount > 0 ? 'neg' : 'pos',
         })),
         ...(data.salesList.length
           ? [{
-              cells: ['TOTAL VENTES', '', String(data.articles), formatCurrency(data.salesTotal),
+              cells: ['TOTAL VENTES', '', String(data.articles),
+                formatCurrency(data.salesList.reduce((a, x) => a + (x.tvaAmount || 0), 0)),
+                formatCurrency(data.salesTotal),
                 formatCurrency(data.salesPaid), formatCurrency(data.salesRest)],
               variant: 'total' as const,
             }]
@@ -420,12 +432,18 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
               <ReportSection
                 title="Ventes" icon={<ShoppingBag size={14} />}
                 total={formatCurrency(data.salesTotal)}
-                head={['N° facture', 'Date', 'Articles', 'Total', 'Payé', 'Reste']}
+                head={['N° facture', 'Date', 'Articles', 'TVA', 'Total', 'Payé', 'Reste']}
                 empty="Aucune vente sur cette période"
                 rows={data.salesList.map((s) => [
-                  <span key="r" className="font-semibold">{s.reference}</span>,
+                  <span key="r" className="font-semibold">
+                    {s.reference}
+                    {saleTags(s) && (
+                      <span className="ml-1.5 text-[10px] font-medium text-gold-dark">({saleTags(s)})</span>
+                    )}
+                  </span>,
                   formatDate(s.date, language),
                   s.products.length,
+                  s.tvaEnabled ? formatCurrency(s.tvaAmount || 0) : '—',
                   formatCurrency(s.finalAmount),
                   <span key="p" className="text-pistachio">{formatCurrency(s.paidAmount)}</span>,
                   <span key="x" className={s.restAmount > 0 ? 'text-rose-deep font-bold' : 'text-pistachio'}>

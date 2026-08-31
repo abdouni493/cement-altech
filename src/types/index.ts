@@ -87,6 +87,13 @@ export interface Purchase {
   driverPlate?: string;
   /** N° du bon de livraison remis par le fournisseur */
   bonNumber?: string;
+  /**
+   * « Ancien achat » : facture antérieure saisie a posteriori pour reconstituer
+   * l'historique d'un fournisseur. Les quantités NE SONT PAS ajoutées au stock
+   * actuel et aucune écriture de caisse n'est générée — seule l'histoire
+   * commerciale (fournisseur, dettes, rapports) est alimentée.
+   */
+  isHistorical?: boolean;
   products: PurchaseLine[];
   totalAmount: number;
   paidAmount: number;
@@ -155,9 +162,22 @@ export interface Sale {
   date: string;
   /** N° de bon de commande saisi manuellement (repère client, recherche). */
   bonNumber?: string;
+  /**
+   * « Ancienne vente » : vente antérieure saisie a posteriori depuis la caisse
+   * pour reconstituer l'historique d'un client. Rien n'est déduit du stock ni
+   * du comptoir et aucune écriture de caisse n'est générée.
+   */
+  isHistorical?: boolean;
+  /** TVA appliquée à cette vente (option activable à la caisse). */
+  tvaEnabled?: boolean;
+  /** Taux de TVA en pourcentage — 19 % par défaut, modifiable. */
+  tvaRate?: number;
+  /** Montant de TVA = (total − réduction) × taux / 100. */
+  tvaAmount?: number;
   products: SaleLine[];
   totalAmount: number;
   reduction: number;
+  /** Net à payer TTC : (total − réduction) + TVA. */
   finalAmount: number;
   paidAmount: number;
   restAmount: number;
