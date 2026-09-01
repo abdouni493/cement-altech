@@ -281,6 +281,8 @@ const toSale = (r: any): Sale => ({
   products: (r.sale_lines ?? []).map((l: any) => ({
     productId: l.product_id ?? l.comptoir_id ?? '',
     productName: l.product_name,
+    ficheTechnicId: l.fiche_technic_id ?? undefined,
+    productionId: l.production_id ?? undefined,
     quantity: num(l.quantity),
     sellingPrice: num(l.selling_price),
     basePrice: l.base_price === null || l.base_price === undefined ? undefined : num(l.base_price),
@@ -762,6 +764,13 @@ export const rpc = {
   /** POS : lance les productions du panier, les met au comptoir et crée la vente. */
   createSaleWithProductions: (payload: Record<string, any>) =>
     call<any>('create_sale_with_productions', { p_payload: payload }),
+  /**
+   * Filet de sécurité de la caisse : relance les productions d'une vente déjà
+   * enregistrée qui n'en a reçu aucune (base pas à jour, incident réseau).
+   * Idempotent — renvoie le nombre de lots réellement créés.
+   */
+  repairPosSaleProductions: (payload: Record<string, any>) =>
+    call<number>('repair_pos_sale_productions', { p_payload: payload }),
   /** Modifier l'en-tête commercial d'une vente (date, réduction, montant payé). */
   updateSale: (id: string, payload: Record<string, any>) =>
     call<any>('update_sale', { p_id: id, p_payload: payload }),

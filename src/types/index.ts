@@ -142,6 +142,11 @@ export interface ClientDebt {
 export interface SaleLine {
   productId: string;
   productName?: string;
+  /** Fiche technique vendue sur cette ligne (caisse). La production associée
+   *  est celle qui a consommé les matières premières. */
+  ficheTechnicId?: string;
+  /** Lot lancé pour honorer cette ligne — lien vers l'écran Production. */
+  productionId?: string;
   quantity: number;
   sellingPrice: number;
   /** Catalogue price of the comptoir item at the moment of the sale. Lets the

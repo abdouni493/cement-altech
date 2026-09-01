@@ -457,6 +457,9 @@ export default function POS() {
         tvaRate: Number(tvaRate),
         products: cart.map((c) => ({
           lineKey: c.kind === 'fiche' ? c.key : undefined,
+          // une ligne « fiche technique » voyage par son ficheTechnicId : son
+          // identifiant ne doit jamais être pris pour celui d'une matière
+          ficheTechnicId: c.kind === 'fiche' ? c.refId : undefined,
           productId: c.refId,
           productName: c.productName,
           quantity: c.quantity,

@@ -185,6 +185,11 @@ export default function SalesPage() {
                         <td className="px-3 py-2 font-medium">
                           {l.productName}
                           {l.sellByUnit && l.unit ? <span className="text-xs text-gold-dark"> · {l.unit}</span> : null}
+                          {/* ligne issue d'une fiche technique : le lot a été
+                              lancé à la validation et a consommé le stock */}
+                          {l.productionId && (
+                            <Badge variant="success" className="ml-1.5 text-[9px]">production lancée</Badge>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right tabular">
                           {l.quantity}{l.sellByUnit && l.unit ? ` ${l.unit}` : ''}
