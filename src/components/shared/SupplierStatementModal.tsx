@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { FileBarChart, Printer, Receipt, Coins, RotateCcw, Package } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { FileBarChart, Printer, Receipt, Coins, RotateCcw, Package, Boxes } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { PeriodPicker, ReportKpis, ReportSection, firstDayOfMonth, inPeriod } from './PeriodReport';
@@ -7,14 +7,18 @@ import { usePurchaseStore } from '@/store/purchaseStore';
 import { useSupplierStore } from '@/store/supplierStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
-import { formatCurrency, formatDate, formatDateTime, todayISO } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, todayISO, paymentMethodLabel } from '@/lib/utils';
 import { printDetailedReport, type PrintRow, type PrintTableSection } from '@/lib/reportPrint';
 import type { Supplier } from '@/types';
 
+/** Quantité affichée sans décimales inutiles (12 et non 12.0000). */
+const qty = (n: number) => Number(n.toFixed(3)).toLocaleString('fr-FR');
+
 /**
  * Compte rendu d'un fournisseur sur une période : factures d'achat, détail
- * des marchandises reçues et règlements versés — affiché à l'écran puis
- * imprimable sur le modèle professionnel de l'entreprise.
+ * des marchandises reçues, RÉCAPITULATIF DES QUANTITÉS PAR PRODUIT et
+ * versements effectués — affiché à l'écran puis imprimable sur le modèle
+ * professionnel de l'entreprise.
  */
 export function SupplierStatementModal({ supplier, onClose }: { supplier: Supplier | null; onClose: () => void }) {
   const { language } = useLanguage();
@@ -25,6 +29,16 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
   const [from, setFrom] = useState(firstDayOfMonth());
   const [to, setTo] = useState(todayISO());
   const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
+
+  // Un compte rendu appartient à UN fournisseur : à l'ouverture d'une autre
+  // fiche on repart d'une période vierge, sinon l'écran affiche encore le
+  // rapport généré pour le fournisseur précédent.
+  useEffect(() => {
+    if (!supplier) return;
+    setFrom(firstDayOfMonth());
+    setTo(todayISO());
+    setPeriod(null);
+  }, [supplier?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const data = useMemo(() => {
     if (!supplier || !period) return null;
@@ -44,7 +58,39 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
     const settled = paymentsList.reduce((s, x) => s + x.amount, 0);
     const lines = purchasesList.reduce((s, x) => s + x.products.length, 0);
 
-    return { purchasesList, paymentsList, total, paid, rest, settled, lines };
+    // ---- Récapitulatif : quantité reçue de CHAQUE produit sur la période ----
+    const byProduct = new Map<
+      string,
+      { name: string; unit?: string; quantity: number; amount: number; invoices: Set<string> }
+    >();
+    purchasesList.forEach((p) =>
+      p.products.forEach((l) => {
+        const name = (l.productName || '—').trim();
+        const key = `${name.toLowerCase()}|${l.unit ?? ''}`;
+        const cur = byProduct.get(key) ?? {
+          name, unit: l.unit, quantity: 0, amount: 0, invoices: new Set<string>(),
+        };
+        cur.quantity += l.quantity;
+        cur.amount += l.quantity * l.purchasePrice;
+        cur.invoices.add(p.reference);
+        byProduct.set(key, cur);
+      })
+    );
+    const products = [...byProduct.values()]
+      .map((x) => ({
+        ...x,
+        invoiceCount: x.invoices.size,
+        avgPrice: x.quantity > 0 ? x.amount / x.quantity : 0,
+      }))
+      .sort((a, b) => b.amount - a.amount);
+
+    const productsQty = products.reduce((s, x) => s + x.quantity, 0);
+    const productsAmount = products.reduce((s, x) => s + x.amount, 0);
+
+    return {
+      purchasesList, paymentsList, products,
+      total, paid, rest, settled, lines, productsQty, productsAmount,
+    };
   }, [supplier, period, purchases, payments]);
 
   const periodLabel = period
@@ -85,6 +131,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
     const detailSection: PrintTableSection = {
       title: 'Détail des marchandises reçues',
       icon: '📦',
+      headerTotal: formatCurrency(data.total),
       cols: [
         { label: 'Facture / Produit' }, { label: 'Quantité', align: 'right' },
         { label: 'Prix d’achat', align: 'right' }, { label: 'Montant', align: 'right' },
@@ -100,7 +147,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         ...p.products.map<PrintRow>((l) => ({
           cells: [
             l.productName || '—',
-            `${l.quantity}${l.unit ? ` ${l.unit}` : ''}`,
+            `${qty(l.quantity)}${l.unit ? ` ${l.unit}` : ''}`,
             formatCurrency(l.purchasePrice),
             formatCurrency(l.quantity * l.purchasePrice),
           ],
@@ -110,29 +157,66 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
       emptyLabel: 'Aucune marchandise reçue sur la période',
     };
 
+    // Le récapitulatif attendu : COMBIEN de chaque produit sur la période.
+    const quantitiesSection: PrintTableSection = {
+      title: 'Quantités reçues par produit',
+      icon: '🏗️',
+      note: 'Cumul de toutes les factures de la période, produit par produit.',
+      headerTotal: formatCurrency(data.productsAmount),
+      cols: [
+        { label: 'Produit' }, { label: 'Quantité totale', align: 'right' },
+        { label: 'Unité', align: 'center' }, { label: 'Factures', align: 'right' },
+        { label: 'Prix moyen', align: 'right' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: [
+        ...data.products.map<PrintRow>((x) => ({
+          cells: [
+            x.name,
+            qty(x.quantity),
+            x.unit || '—',
+            String(x.invoiceCount),
+            formatCurrency(x.avgPrice),
+            formatCurrency(x.amount),
+          ],
+          tone: 'accent',
+        })),
+        ...(data.products.length
+          ? [{
+              cells: [
+                'TOTAL', qty(data.productsQty), '', String(data.purchasesList.length), '',
+                formatCurrency(data.productsAmount),
+              ],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucun produit reçu sur la période',
+    };
+
     const paymentsSection: PrintTableSection = {
-      title: 'Règlements versés au fournisseur',
+      title: 'Versements effectués au fournisseur',
       icon: '💰',
       headerTotal: formatCurrency(data.settled),
       cols: [
-        { label: 'Date et heure' }, { label: 'Reçu n°' }, { label: 'Note' },
-        { label: 'Montant', align: 'right' },
+        { label: 'Date et heure' }, { label: 'Reçu n°' }, { label: 'Mode de règlement' },
+        { label: 'Note' }, { label: 'Montant', align: 'right' },
       ],
       rows: [
         ...data.paymentsList.map<PrintRow>((p) => ({
           cells: [
             formatDateTime(p.paidAt, language),
             `RGF-${p.id.slice(0, 8).toUpperCase()}`,
+            paymentMethodLabel(p),
             p.notes || '—',
             formatCurrency(p.amount),
           ],
           tone: 'pos',
         })),
         ...(data.paymentsList.length
-          ? [{ cells: ['TOTAL RÈGLEMENTS', '', '', formatCurrency(data.settled)], variant: 'total' as const }]
+          ? [{ cells: ['TOTAL VERSEMENTS', '', '', '', formatCurrency(data.settled)], variant: 'total' as const }]
           : []),
       ],
-      emptyLabel: 'Aucun règlement sur la période',
+      emptyLabel: 'Aucun versement sur la période',
     };
 
     printDetailedReport(
@@ -150,9 +234,9 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
           { label: 'Total acheté', value: formatCurrency(data.total), tone: 'accent' },
           { label: 'Payé sur factures', value: formatCurrency(data.paid), tone: 'pos' },
           { label: 'Reste dû (période)', value: formatCurrency(data.rest), tone: 'neg' },
-          { label: 'Règlements versés', value: formatCurrency(data.settled), tone: 'pos' },
+          { label: 'Versements effectués', value: formatCurrency(data.settled), tone: 'pos' },
         ],
-        sections: [purchasesSection, detailSection, paymentsSection],
+        sections: [purchasesSection, detailSection, quantitiesSection, paymentsSection],
       },
       settings,
       language
@@ -199,9 +283,11 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                   { label: 'Total acheté', value: formatCurrency(data.total), color: 'text-gold-dark' },
                   { label: 'Payé sur factures', value: formatCurrency(data.paid), color: 'text-pistachio' },
                   { label: 'Reste dû', value: formatCurrency(data.rest), color: 'text-rose-deep' },
-                  { label: 'Règlements versés', value: formatCurrency(data.settled), color: 'text-pistachio' },
+                  { label: 'Versements effectués', value: formatCurrency(data.settled), color: 'text-pistachio' },
                   { label: 'Factures', value: String(data.purchasesList.length) },
                   { label: 'Lignes reçues', value: String(data.lines) },
+                  { label: 'Produits distincts', value: String(data.products.length) },
+                  { label: 'Quantité totale reçue', value: qty(data.productsQty), color: 'text-gold-dark' },
                 ]}
               />
 
@@ -229,6 +315,22 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
               />
 
               <ReportSection
+                title="Quantités reçues par produit" icon={<Boxes size={14} />}
+                total={formatCurrency(data.productsAmount)}
+                note="Cumul de toutes les factures de la période, produit par produit."
+                head={['Produit', 'Quantité totale', 'Unité', 'Factures', 'Prix moyen', 'Montant']}
+                empty="Aucun produit reçu sur cette période"
+                rows={data.products.map((x) => [
+                  <span key="n" className="font-semibold">{x.name}</span>,
+                  <span key="q" className="font-bold text-gold-dark">{qty(x.quantity)}</span>,
+                  x.unit || '—',
+                  String(x.invoiceCount),
+                  formatCurrency(x.avgPrice),
+                  formatCurrency(x.amount),
+                ])}
+              />
+
+              <ReportSection
                 title="Marchandises reçues" icon={<Package size={14} />}
                 head={['Facture · Produit', 'Quantité', "Prix d'achat", 'Montant']}
                 empty="Aucune marchandise reçue sur cette période"
@@ -237,7 +339,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                     <span key="n">
                       <span className="text-text-muted">{p.reference}</span> · {l.productName}
                     </span>,
-                    `${l.quantity}${l.unit ? ` ${l.unit}` : ''}`,
+                    `${qty(l.quantity)}${l.unit ? ` ${l.unit}` : ''}`,
                     formatCurrency(l.purchasePrice),
                     formatCurrency(l.quantity * l.purchasePrice),
                   ])
@@ -245,13 +347,14 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
               />
 
               <ReportSection
-                title="Règlements versés" icon={<Coins size={14} />}
+                title="Versements effectués" icon={<Coins size={14} />}
                 total={formatCurrency(data.settled)}
-                head={['Date et heure', 'Reçu n°', 'Note', 'Montant']}
-                empty="Aucun règlement sur cette période"
+                head={['Date et heure', 'Reçu n°', 'Mode de règlement', 'Note', 'Montant']}
+                empty="Aucun versement sur cette période"
                 rows={data.paymentsList.map((p) => [
                   formatDateTime(p.paidAt, language),
                   `RGF-${p.id.slice(0, 8).toUpperCase()}`,
+                  paymentMethodLabel(p),
                   p.notes || '—',
                   <span key="a" className="font-bold text-pistachio">{formatCurrency(p.amount)}</span>,
                 ])}

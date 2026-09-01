@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   FileBarChart, Printer, ShoppingBag, Coins, ClipboardList, Wallet, RotateCcw, Package,
 } from 'lucide-react';
@@ -12,7 +12,7 @@ import { useCommandStore, deliveryStatus } from '@/store/commandStore';
 import { useClientDebtStore } from '@/store/clientDebtStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
-import { formatCurrency, formatDate, formatDateTime, todayISO } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, todayISO, paymentMethodLabel } from '@/lib/utils';
 import { printDetailedReport, type PrintRow, type PrintTableSection } from '@/lib/reportPrint';
 import type { Client } from '@/types';
 
@@ -32,6 +32,16 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
   const [from, setFrom] = useState(firstDayOfMonth());
   const [to, setTo] = useState(todayISO());
   const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
+
+  // Un compte rendu appartient à UN client : à l'ouverture d'une autre fiche on
+  // repart d'une période vierge, sinon l'écran affiche encore le rapport
+  // généré pour le client précédent.
+  useEffect(() => {
+    if (!client) return;
+    setFrom(firstDayOfMonth());
+    setTo(todayISO());
+    setPeriod(null);
+  }, [client?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const data = useMemo(() => {
     if (!client || !period) return null;
@@ -303,21 +313,22 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       icon: '💰',
       headerTotal: formatCurrency(data.settled),
       cols: [
-        { label: 'Date et heure' }, { label: 'Référence' }, { label: 'Note' },
-        { label: 'Montant', align: 'right' },
+        { label: 'Date et heure' }, { label: 'Référence' }, { label: 'Mode de règlement' },
+        { label: 'Note' }, { label: 'Montant', align: 'right' },
       ],
       rows: [
         ...data.paymentsList.map<PrintRow>((p) => ({
           cells: [
             formatDateTime(p.paidAt, language),
             `VER-${p.id.slice(0, 8).toUpperCase()}`,
+            paymentMethodLabel(p),
             p.notes || '—',
             formatCurrency(p.amount),
           ],
           tone: 'pos',
         })),
         ...(data.paymentsList.length
-          ? [{ cells: ['TOTAL RÈGLEMENTS', '', '', formatCurrency(data.settled)], variant: 'total' as const }]
+          ? [{ cells: ['TOTAL VERSEMENTS', '', '', '', formatCurrency(data.settled)], variant: 'total' as const }]
           : []),
       ],
       emptyLabel: 'Aucun règlement sur la période',
@@ -495,11 +506,12 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
               <ReportSection
                 title="Versements du client" icon={<Coins size={14} />}
                 total={formatCurrency(data.settled)}
-                head={['Date et heure', 'Reçu n°', 'Note', 'Montant']}
-                empty="Aucun règlement sur cette période"
+                head={['Date et heure', 'Reçu n°', 'Mode de règlement', 'Note', 'Montant']}
+                empty="Aucun versement sur cette période"
                 rows={data.paymentsList.map((p) => [
                   formatDateTime(p.paidAt, language),
                   `VER-${p.id.slice(0, 8).toUpperCase()}`,
+                  paymentMethodLabel(p),
                   p.notes || '—',
                   <span key="a" className="font-bold text-pistachio">{formatCurrency(p.amount)}</span>,
                 ])}

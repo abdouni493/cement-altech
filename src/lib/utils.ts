@@ -1,6 +1,7 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { v4 as uuidv4 } from 'uuid';
+import type { PaymentMethod } from '@/types';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -148,4 +149,40 @@ export function computeTva(total: number, reduction = 0, enabled = false, rate =
   const appliedRate = enabled ? Math.max(0, Number(rate) || 0) : 0;
   const tvaAmount = enabled ? Math.round(baseHT * appliedRate) / 100 : 0;
   return { baseHT, rate: appliedRate, tvaAmount, totalTTC: Math.round((baseHT + tvaAmount) * 100) / 100 };
+}
+
+// ============================================================================
+//  MODES DE RÈGLEMENT — espèces, chèque bancaire, virement bancaire
+// ----------------------------------------------------------------------------
+//  Utilisés par les versements clients ET les règlements fournisseurs : la
+//  saisie, l'historique, le reçu imprimé et les comptes rendus affichent tous
+//  le même libellé.
+// ============================================================================
+
+export const PAYMENT_METHODS: { value: PaymentMethod; label: string; icon: string }[] = [
+  { value: 'especes', label: 'Espèces', icon: '💵' },
+  { value: 'cheque', label: 'Chèque bancaire', icon: '🧾' },
+  { value: 'virement', label: 'Virement bancaire', icon: '🏦' },
+];
+
+/** Nom court du mode de règlement (« Espèces », « Chèque bancaire »…). */
+export function paymentMethodName(method?: PaymentMethod): string {
+  return PAYMENT_METHODS.find((m) => m.value === method)?.label ?? 'Espèces';
+}
+
+/** Libellé complet : mode + n° de chèque / de virement + banque. */
+export function paymentMethodLabel(p: {
+  method?: PaymentMethod;
+  chequeNumber?: string;
+  virementNumber?: string;
+  bankName?: string;
+}): string {
+  const bank = p.bankName ? ` — ${p.bankName}` : '';
+  if (p.method === 'cheque') {
+    return `Chèque bancaire${p.chequeNumber ? ` n° ${p.chequeNumber}` : ''}${bank}`;
+  }
+  if (p.method === 'virement') {
+    return `Virement bancaire${p.virementNumber ? ` n° ${p.virementNumber}` : ''}${bank}`;
+  }
+  return 'Espèces';
 }

@@ -27,11 +27,11 @@ import { useCommandStore, deliveryStatus } from '@/store/commandStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
-import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from '@/lib/utils';
 import { printPaymentReceipt } from '@/lib/documents';
 import { printSaleInvoice } from '@/lib/invoicePrint';
 import { toast } from '@/components/ui/Toast';
-import type { Client, PartyPayment, Sale } from '@/types';
+import type { Client, PartyPayment, PaymentMethodDetails, Sale } from '@/types';
 
 type ClientFilter = 'all' | 'debt' | 'clear';
 type HistoryTab = 'payments' | 'sales' | 'commands';
@@ -121,8 +121,10 @@ export default function ClientsPage() {
     setEditing(null);
   };
 
-  const handleVersement = async (client: Client, amount: number, notes: string, paidAt: string) => {
-    const payment = await payDebt(client.id, amount, paidAt, notes);
+  const handleVersement = async (
+    client: Client, amount: number, notes: string, paidAt: string, method: PaymentMethodDetails,
+  ) => {
+    const payment = await payDebt(client.id, amount, paidAt, notes, method);
     toast.success('Versement enregistré — la dette du client a été réduite');
     setVersing(null);
     if (payment) setPrintPrompt({ client, payment });
@@ -139,6 +141,10 @@ export default function ClientsPage() {
         amount: payment.amount,
         paidAt: payment.paidAt,
         notes: payment.notes,
+        method: payment.method,
+        chequeNumber: payment.chequeNumber,
+        virementNumber: payment.virementNumber,
+        bankName: payment.bankName,
         totalDebt: st.total,
         totalPaid: st.paid,
         restAmount: st.rest,
@@ -266,7 +272,7 @@ export default function ClientsPage() {
                     </div>
                     <div className="flex justify-between mt-1.5 text-[10px] text-text-muted">
                       <span>{st.salesList.length} vente(s) · {st.commandsList.length} commande(s)</span>
-                      <span>{st.payments.length} règlement(s) · {paidPct.toFixed(0)}%</span>
+                      <span>{st.payments.length} versement(s) · {paidPct.toFixed(0)}%</span>
                     </div>
                   </div>
 
@@ -373,6 +379,7 @@ export default function ClientsPage() {
                         <tr>
                           <th className="text-left px-3 py-2">Date &amp; heure</th>
                           <th className="text-right px-3 py-2">Montant</th>
+                          <th className="text-left px-3 py-2">Mode de règlement</th>
                           <th className="text-left px-3 py-2">Note</th>
                           <th className="text-center px-3 py-2">Actions</th>
                         </tr>
@@ -382,6 +389,11 @@ export default function ClientsPage() {
                           <tr key={p.id} className="border-t border-gold/10">
                             <td className="px-3 py-2 tabular text-xs">{formatDateTime(p.paidAt)}</td>
                             <td className="px-3 py-2 text-right tabular font-bold text-pistachio">{formatCurrency(p.amount)}</td>
+                            <td className="px-3 py-2 text-xs">
+                              <Badge variant={p.method === 'especes' || !p.method ? 'success' : 'info'}>
+                                {paymentMethodLabel(p)}
+                              </Badge>
+                            </td>
                             <td className="px-3 py-2 text-xs text-text-muted">{p.notes || '—'}</td>
                             <td className="px-3 py-2">
                               <div className="flex items-center justify-center gap-1">
@@ -579,7 +591,8 @@ export default function ClientsPage() {
             clientPhone={versing.phone}
             total={st.total}
             paid={st.paid}
-            onSubmit={(amount, notes, paidAt) => handleVersement(versing, amount, notes, paidAt)}
+            onSubmit={(amount, notes, paidAt, method) =>
+              handleVersement(versing, amount, notes, paidAt, method)}
           />
         );
       })()}
@@ -602,10 +615,10 @@ export default function ClientsPage() {
       <EditPaymentModal
         payment={editPayment}
         onClose={() => setEditPayment(null)}
-        onSave={async (amount, paidAt, notes) => {
+        onSave={async (amount, paidAt, notes, method) => {
           if (!editPayment) return;
-          await updatePayment(editPayment.id, amount, paidAt, notes);
-          toast.success('Versement modifié');
+          await updatePayment(editPayment.id, amount, paidAt, notes, method);
+          toast.success('Versement modifié — la dette du client a été recalculée');
           setEditPayment(null);
         }}
       />

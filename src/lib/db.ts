@@ -4,7 +4,7 @@ import type {
   Product, Marque, Category, Unit, Supplier, Client, ClientDebt, Sale, Purchase,
   Production, ComptoirItem, Destruction, Worker, Role, Expense, CaisseTransaction,
   CaisseReport, StoreSettings, PartyPayment, CommandDelivery, WorkerOvertime,
-  PurchaseOrder,
+  PurchaseOrder, PaymentMethodDetails,
 } from '@/types';
 import type { Command } from '@/store/commandStore';
 import type { FicheTechnic } from '@/store/ficheTechnicStore';
@@ -175,6 +175,10 @@ const toPartyPayment = (idKey: string, nameKey: string) => (r: any): PartyPaymen
   date: r.date,
   paidAt: r.paid_at ?? r.created_at,
   notes: r.notes ?? '',
+  method: (r.method ?? 'especes') as PartyPayment['method'],
+  chequeNumber: r.cheque_number ?? undefined,
+  virementNumber: r.virement_number ?? undefined,
+  bankName: r.bank_name ?? undefined,
   createdAt: r.created_at,
   createdBy: r.created_by ?? undefined,
 });
@@ -822,25 +826,53 @@ export const rpc = {
       p_name: name, p_username: username, p_email: email, p_password: password,
     }),
 
-  // /suppliers — payer la dette d'un fournisseur
-  paySupplier: (supplierId: string, amount: number, paidAt: string, notes = '') =>
+  // /suppliers — versement au fournisseur (espèces / chèque / virement)
+  paySupplier: (
+    supplierId: string, amount: number, paidAt: string, notes = '',
+    method: PaymentMethodDetails = { method: 'especes' },
+  ) =>
     call<any>('pay_supplier', {
       p_supplier_id: supplierId, p_amount: amount, p_paid_at: paidAt, p_notes: notes,
+      p_method: method.method ?? 'especes',
+      p_cheque_number: method.chequeNumber || null,
+      p_virement_number: method.virementNumber || null,
+      p_bank_name: method.bankName || null,
     }),
-  updateSupplierPayment: (id: string, amount: number, paidAt?: string, notes?: string) =>
+  updateSupplierPayment: (
+    id: string, amount: number, paidAt?: string, notes?: string,
+    method?: PaymentMethodDetails,
+  ) =>
     call<any>('update_supplier_payment', {
       p_id: id, p_amount: amount, p_paid_at: paidAt ?? null, p_notes: notes ?? null,
+      p_method: method?.method ?? null,
+      p_cheque_number: method ? method.chequeNumber || '' : null,
+      p_virement_number: method ? method.virementNumber || '' : null,
+      p_bank_name: method ? method.bankName || '' : null,
     }),
   deleteSupplierPayment: (id: string) => call<void>('delete_supplier_payment', { p_id: id }),
 
-  // /clients — payer la dette d'un client
-  payClient: (clientId: string, amount: number, paidAt: string, notes = '') =>
+  // /clients — versement du client (espèces / chèque / virement)
+  payClient: (
+    clientId: string, amount: number, paidAt: string, notes = '',
+    method: PaymentMethodDetails = { method: 'especes' },
+  ) =>
     call<any>('pay_client', {
       p_client_id: clientId, p_amount: amount, p_paid_at: paidAt, p_notes: notes,
+      p_method: method.method ?? 'especes',
+      p_cheque_number: method.chequeNumber || null,
+      p_virement_number: method.virementNumber || null,
+      p_bank_name: method.bankName || null,
     }),
-  updateClientPayment: (id: string, amount: number, paidAt?: string, notes?: string) =>
+  updateClientPayment: (
+    id: string, amount: number, paidAt?: string, notes?: string,
+    method?: PaymentMethodDetails,
+  ) =>
     call<any>('update_client_payment', {
       p_id: id, p_amount: amount, p_paid_at: paidAt ?? null, p_notes: notes ?? null,
+      p_method: method?.method ?? null,
+      p_cheque_number: method ? method.chequeNumber || '' : null,
+      p_virement_number: method ? method.virementNumber || '' : null,
+      p_bank_name: method ? method.bankName || '' : null,
     }),
   deleteClientPayment: (id: string) => call<void>('delete_client_payment', { p_id: id }),
 

@@ -1,7 +1,9 @@
 import { create } from 'zustand';
-import type { Supplier, PartyPayment } from '@/types';
+import type { Supplier, PartyPayment, PaymentMethodDetails } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
+import { usePurchaseStore } from './purchaseStore';
+import { useCaisseStore } from './caisseStore';
 
 interface SupplierState {
   suppliers: Supplier[];
@@ -11,10 +13,30 @@ interface SupplierState {
   addSupplier: (data: Omit<Supplier, 'id'>) => Promise<Supplier>;
   updateSupplier: (id: string, data: Partial<Supplier>) => Promise<void>;
   deleteSupplier: (id: string) => Promise<void>;
-  /** "Payer la dette" — books the payment, spreads it over the unpaid invoices. */
-  payDebt: (supplierId: string, amount: number, paidAt: string, notes?: string) => Promise<PartyPayment>;
-  updatePayment: (id: string, amount: number, paidAt: string, notes?: string) => Promise<void>;
+  /** « Versement » — enregistre le règlement et l'impute sur les factures. */
+  payDebt: (
+    supplierId: string, amount: number, paidAt: string, notes?: string,
+    method?: PaymentMethodDetails,
+  ) => Promise<PartyPayment>;
+  updatePayment: (
+    id: string, amount: number, paidAt: string, notes?: string,
+    method?: PaymentMethodDetails,
+  ) => Promise<void>;
   deletePayment: (id: string) => Promise<void>;
+}
+
+/**
+ * Recharge les factures d'achat et la caisse après un versement fournisseur.
+ *
+ * `pay_supplier()` impute le montant sur les factures non soldées : sans ce
+ * rechargement la carte du fournisseur continuerait d'afficher l'ancienne
+ * dette jusqu'au prochain rafraîchissement de la page.
+ */
+async function refreshSupplierDebt(): Promise<void> {
+  await Promise.all([
+    usePurchaseStore.getState().load(),
+    useCaisseStore.getState().load(),
+  ]).catch(() => undefined);
 }
 
 export const useSupplierStore = create<SupplierState>()((set, get) => ({
@@ -45,23 +67,30 @@ export const useSupplierStore = create<SupplierState>()((set, get) => ({
       suppliers: get().suppliers.filter((s) => s.id !== id),
       payments: get().payments.filter((p) => p.partyId !== id),
     });
+    await refreshSupplierDebt();
   },
 
-  payDebt: async (supplierId, amount, paidAt, notes = '') => {
-    const row = await save<{ id: string }>('suppliers.pay', () => rpc.paySupplier(supplierId, amount, paidAt, notes));
+  payDebt: async (supplierId, amount, paidAt, notes = '', method) => {
+    const row = await save<{ id: string }>('suppliers.pay', () =>
+      rpc.paySupplier(supplierId, amount, paidAt, notes, method ?? { method: 'especes' })
+    );
     const payments = await db.supplierPayments.list();
     set({ payments });
+    // les factures d'achat viennent d'être soldées côté base : on les relit
+    await refreshSupplierDebt();
     // the row the database actually created (never the newest by date)
     return payments.find((p) => p.id === row?.id) as PartyPayment ?? payments.find((p) => p.partyId === supplierId) as PartyPayment;
   },
 
-  updatePayment: async (id, amount, paidAt, notes) => {
-    await save('suppliers.payment.update', () => rpc.updateSupplierPayment(id, amount, paidAt, notes));
+  updatePayment: async (id, amount, paidAt, notes, method) => {
+    await save('suppliers.payment.update', () => rpc.updateSupplierPayment(id, amount, paidAt, notes, method));
     set({ payments: await db.supplierPayments.list() });
+    await refreshSupplierDebt();
   },
 
   deletePayment: async (id) => {
     await save('suppliers.payment.delete', () => rpc.deleteSupplierPayment(id));
     set({ payments: get().payments.filter((p) => p.id !== id) });
+    await refreshSupplierDebt();
   },
 }));

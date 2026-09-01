@@ -352,9 +352,14 @@ export default function CommandsPage() {
             ordered: it.quantity,
             deliveredNow: line?.quantity ?? 0,
             deliveredTotal: it.deliveredQuantity ?? 0,
-            unit: it.sellUnit,
+            unit: it.sellByUnit ? it.sellUnit : undefined,
+            // le bon de livraison valorise la quantité remise au prix de la commande
+            unitPrice: it.unitPrice,
           };
         }),
+        totalAmount: cmd.totalAmount,
+        paidAmount: cmd.paidAmount,
+        restAmount: cmd.restAmount,
       },
       settings
     );

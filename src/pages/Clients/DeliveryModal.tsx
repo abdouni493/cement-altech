@@ -114,6 +114,9 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
 
   const totalRemaining = rows.reduce((s, r) => s + r.remaining, 0);
   const totalNow = rows.reduce((s, r) => s + r.now, 0);
+  /** Valeur marchande de la livraison en cours — reprise sur le bon imprimé. */
+  const amountNow = rows.reduce((s, r) => s + r.now * (r.item.unitPrice || 0), 0);
+  const amountRemaining = rows.reduce((s, r) => s + r.remaining * (r.item.unitPrice || 0), 0);
 
   const handleSave = async () => {
     if (!command) return;
@@ -234,6 +237,8 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
                   <th className="text-center px-3 py-2">Déjà livré</th>
                   <th className="text-center px-3 py-2">À livrer maintenant</th>
                   <th className="text-center px-3 py-2">Reste après</th>
+                  <th className="text-right px-3 py-2">P.U.</th>
+                  <th className="text-right px-3 py-2">Montant livré</th>
                 </tr>
               </thead>
               <tbody>
@@ -271,11 +276,37 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
                           <Badge variant="success">Complet</Badge>
                         )}
                       </td>
+                      <td className="px-3 py-2 text-right tabular text-text-muted">
+                        {formatCurrency(r.item.unitPrice || 0)}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular font-bold text-gold-dark">
+                        {formatCurrency(r.now * (r.item.unitPrice || 0))}
+                      </td>
                     </tr>
                   );
                 })}
               </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gold/25 bg-vanilla/60">
+                  <td className="px-3 py-2 text-xs font-bold uppercase tracking-wide text-text-secondary" colSpan={3}>
+                    Totaux de cette livraison
+                  </td>
+                  <td className="px-3 py-2 text-center tabular font-bold text-text-primary">{totalNow}</td>
+                  <td className="px-3 py-2 text-center tabular text-text-muted">{totalRemaining}</td>
+                  <td className="px-3 py-2" />
+                  <td className="px-3 py-2 text-right tabular font-bold text-gold-dark">
+                    {formatCurrency(amountNow)}
+                  </td>
+                </tr>
+              </tfoot>
             </table>
+          </div>
+
+          {/* Valeur de la livraison — reprise telle quelle sur le bon imprimé */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Money label="Valeur livrée maintenant" value={formatCurrency(amountNow)} accent="text-gold-dark" />
+            <Money label="Valeur restant à livrer" value={formatCurrency(amountRemaining)} accent="text-rose-deep" />
+            <Money label="Reste à payer sur la commande" value={formatCurrency(command.restAmount)} accent="text-rose-deep" />
           </div>
 
           <Textarea
@@ -310,5 +341,14 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
         </div>
       )}
     </Modal>
+  );
+}
+
+function Money({ label, value, accent = 'text-text-primary' }: { label: string; value: string; accent?: string }) {
+  return (
+    <div className="rounded-xl border border-gold/15 bg-vanilla/40 px-3 py-2.5 text-center">
+      <p className="text-[10px] uppercase tracking-wide text-text-muted leading-tight">{label}</p>
+      <p className={`text-sm font-bold tabular mt-0.5 ${accent}`}>{value}</p>
+    </div>
   );
 }

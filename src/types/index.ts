@@ -435,6 +435,14 @@ export type PermissionModule = (typeof PERMISSION_MODULES)[number];
 // ============================================================
 
 // ---------- Règlement direct d'une dette fournisseur / client ----------
+/**
+ * Mode de règlement d'un versement (client) ou d'un règlement (fournisseur).
+ *  · `especes`  — de la main à la main, aucun justificatif bancaire ;
+ *  · `cheque`   — chèque bancaire, n° de chèque et banque facultatifs ;
+ *  · `virement` — virement bancaire, n° d'opération et banque facultatifs.
+ */
+export type PaymentMethod = 'especes' | 'cheque' | 'virement';
+
 export interface PartyPayment {
   id: string;
   partyId: string;          // supplierId or clientId
@@ -443,9 +451,26 @@ export interface PartyPayment {
   date: string;             // YYYY-MM-DD
   paidAt: string;           // ISO datetime — date AND hour of the payment
   notes?: string;
+  /** Espèces par défaut — chèque bancaire ou virement sinon. */
+  method?: PaymentMethod;
+  /** N° du chèque bancaire (facultatif, mode « cheque »). */
+  chequeNumber?: string;
+  /** N° du virement bancaire (facultatif, mode « virement »). */
+  virementNumber?: string;
+  /** Banque émettrice / réceptrice (facultative, chèque et virement). */
+  bankName?: string;
   createdAt?: string;
   createdBy?: string;
 }
+
+/** Détail du mode de règlement transmis aux RPC `pay_client` / `pay_supplier`. */
+export interface PaymentMethodDetails {
+  method: PaymentMethod;
+  chequeNumber?: string;
+  virementNumber?: string;
+  bankName?: string;
+}
+
 
 // ---------- Livraison partielle d'une commande ----------
 export interface CommandDeliveryItem {

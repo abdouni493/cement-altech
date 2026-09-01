@@ -1,5 +1,5 @@
-import type { StoreSettings } from '@/types';
-import { formatCurrency, formatDate, formatDateTime } from './utils';
+import type { StoreSettings, PaymentMethod } from '@/types';
+import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from './utils';
 import { printDocument } from './print';
 
 /* ============================================================================
@@ -111,6 +111,11 @@ export interface PaymentReceiptData {
   amount: number;
   paidAt: string;          // ISO datetime
   notes?: string;
+  /** Mode de règlement — espèces, chèque bancaire ou virement bancaire. */
+  method?: PaymentMethod;
+  chequeNumber?: string;
+  virementNumber?: string;
+  bankName?: string;
   totalDebt: number;
   totalPaid: number;
   restAmount: number;
@@ -123,6 +128,7 @@ export function printPaymentReceipt(data: PaymentReceiptData, store: StoreSettin
   const wording = isClient
     ? 'Reçu de la part de'
     : 'Versé à';
+  const methodLabel = paymentMethodLabel(data);
 
   const html = wrap(`
     ${header(store, title, [
@@ -139,8 +145,20 @@ export function printPaymentReceipt(data: PaymentReceiptData, store: StoreSettin
       <p style="font-size:15px;font-weight:700;margin-bottom:16px;">
         ${wording} <strong>${esc(data.partyName)}</strong> la somme de
         <strong style="font-size:19px;">${formatCurrency(data.amount)}</strong>
-        le ${esc(formatDateTime(data.paidAt))}.
+        le ${esc(formatDateTime(data.paidAt))},
+        par <strong>${esc(methodLabel)}</strong>.
       </p>
+
+      <div class="party" style="background:#fff;">
+        <div class="lbl">Mode de règlement</div>
+        <strong style="font-size:16px;">${esc(methodLabel)}</strong>
+        ${data.method === 'cheque' && data.chequeNumber
+          ? `<br/><span class="lbl">N° de chèque :</span> <strong>${esc(data.chequeNumber)}</strong>` : ''}
+        ${data.method === 'virement' && data.virementNumber
+          ? `<br/><span class="lbl">N° de virement :</span> <strong>${esc(data.virementNumber)}</strong>` : ''}
+        ${data.method !== 'especes' && data.bankName
+          ? `<br/><span class="lbl">Banque :</span> <strong>${esc(data.bankName)}</strong>` : ''}
+      </div>
 
       ${data.notes ? `<div class="note"><strong>Note :</strong> ${esc(data.notes)}</div>` : ''}
 
@@ -171,6 +189,19 @@ export function printPaymentReceipt(data: PaymentReceiptData, store: StoreSettin
 
 /* ---------------------------------------------------------- bon de livraison */
 
+export interface DeliveryNoteLine {
+  productName: string;
+  /** Quantité commandée par le client. */
+  ordered: number;
+  /** Quantité remise lors de CETTE livraison. */
+  deliveredNow: number;
+  /** Quantité remise depuis le début, toutes livraisons confondues. */
+  deliveredTotal: number;
+  unit?: string;
+  /** Prix unitaire de la ligne de commande. */
+  unitPrice: number;
+}
+
 export interface DeliveryNoteData {
   reference: string;
   commandReference: string;
@@ -185,16 +216,33 @@ export interface DeliveryNoteData {
   /** Chauffeur qui effectue la livraison + immatriculation (facultative). */
   driverName?: string;
   driverPlate?: string;
-  lines: {
-    productName: string;
-    ordered: number;
-    deliveredNow: number;
-    deliveredTotal: number;
-    unit?: string;
-  }[];
+  lines: DeliveryNoteLine[];
+  /** Situation financière de la commande d'origine. */
+  totalAmount: number;
+  paidAmount: number;
+  restAmount: number;
 }
 
+/**
+ * Bon de livraison — même mise en page que le BON DE COMMANDE (mêmes colonnes,
+ * même bloc de totaux, même cartouche de signatures), seuls le titre et la
+ * colonne des quantités livrées changent. Le prix unitaire ET le montant de la
+ * quantité réellement livrée figurent sur chaque ligne, avec la valeur totale
+ * de la livraison en pied de tableau.
+ */
 export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) {
+  const totalOrdered = data.lines.reduce((s, l) => s + l.ordered, 0);
+  const totalNow = data.lines.reduce((s, l) => s + l.deliveredNow, 0);
+  const totalAll = data.lines.reduce((s, l) => s + l.deliveredTotal, 0);
+  const totalRemaining = data.lines.reduce((s, l) => s + Math.max(0, l.ordered - l.deliveredTotal), 0);
+  /** Valeur marchande de ce qui est remis aujourd'hui. */
+  const amountNow = data.lines.reduce((s, l) => s + l.deliveredNow * l.unitPrice, 0);
+  /** Valeur marchande de tout ce qui a été remis depuis le début. */
+  const amountAll = data.lines.reduce((s, l) => s + l.deliveredTotal * l.unitPrice, 0);
+  const percent = totalOrdered > 0 ? Math.min(100, (totalAll / totalOrdered) * 100) : 0;
+  const isFull = totalOrdered > 0 && totalRemaining <= 0.0001;
+  const isPartial = totalAll > 0 && !isFull;
+
   const rows = data.lines
     .map((l, idx) => {
       const u = l.unit ? ` ${esc(l.unit)}` : '';
@@ -205,31 +253,28 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
         <td class="center">${l.ordered}${u}</td>
         <td class="center" style="font-size:16px;font-weight:900;">${l.deliveredNow}${u}</td>
         <td class="center">${l.deliveredTotal}${u}</td>
-        <td class="center" style="color:${remaining > 0 ? '#8f0f22' : '#0a7d43'};font-weight:900;">
+        <td class="center" style="color:${remaining > 0 ? '#8f0f22' : '#0a5a38'};font-weight:900;">
           ${remaining > 0 ? `${remaining}${u}` : 'Complet'}
         </td>
+        <td class="right">${formatCurrency(l.unitPrice)}</td>
+        <td class="right"><strong>${formatCurrency(l.deliveredNow * l.unitPrice)}</strong></td>
       </tr>`;
     })
     .join('');
-
-  const totalRemaining = data.lines.reduce((s, l) => s + Math.max(0, l.ordered - l.deliveredTotal), 0);
-  const totalOrdered = data.lines.reduce((s, l) => s + l.ordered, 0);
-  const totalNow = data.lines.reduce((s, l) => s + l.deliveredNow, 0);
-  const totalAll = data.lines.reduce((s, l) => s + l.deliveredTotal, 0);
 
   const html = wrap(`
     ${header(store, 'BON DE LIVRAISON', [
       `<strong>N° ${esc(data.reference)}</strong>`,
       `Commande : ${esc(data.commandReference)}`,
-      data.bonNumber ? `Bon de commande : ${esc(data.bonNumber)}` : '',
+      data.bonNumber ? `<strong>N° Bon : ${esc(data.bonNumber)}</strong>` : '',
       `Livré le : ${esc(formatDateTime(data.deliveredAt))}`,
     ].filter(Boolean))}
     <div class="content">
       <div class="party">
-        <div class="lbl">Destinataire</div>
+        <div class="lbl">Client</div>
         <strong style="font-size:18px;">${esc(data.clientName)}</strong>
         ${data.clientPhone ? `<br/><span class="lbl">Téléphone :</span> ${esc(data.clientPhone)}` : ''}
-        ${data.clientAddress ? `<br/><span class="lbl">Adresse de livraison :</span> <strong>${esc(data.clientAddress)}</strong>` : ''}
+        <br/><span class="lbl">Adresse de livraison :</span> <strong>${esc(data.clientAddress || '—')}</strong>
       </div>
 
       ${data.driverName || data.driverPlate
@@ -249,6 +294,8 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
             <th class="center">Qté livrée ce jour</th>
             <th class="center">Qté livrée au total</th>
             <th class="center">Reste à livrer</th>
+            <th class="right">P.U.</th>
+            <th class="right">Montant livré</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -259,16 +306,29 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
             <th class="center">${totalNow}</th>
             <th class="center">${totalAll}</th>
             <th class="center">${totalRemaining}</th>
+            <th></th>
+            <th class="right">${formatCurrency(amountNow)}</th>
           </tr>
         </tfoot>
       </table>
 
       ${data.notes ? `<div class="note"><strong>Observations :</strong> ${esc(data.notes)}</div>` : ''}
 
-      <div style="margin-bottom:14px;">
-        <span class="stamp ${totalRemaining > 0 ? 'warn' : ''}">
-          ${totalRemaining > 0 ? 'LIVRAISON PARTIELLE' : 'COMMANDE ENTIÈREMENT LIVRÉE'}
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:20px;">
+        <span class="stamp ${isFull ? '' : 'warn'}">
+          ${isFull ? 'COMMANDE ENTIÈREMENT LIVRÉE'
+            : isPartial ? `LIVRAISON PARTIELLE — ${percent.toFixed(0)}%`
+            : 'NON LIVRÉE'}
         </span>
+        <div class="totals" style="margin:0;">
+          <div class="grand"><span>Valeur livrée ce jour</span><strong>${formatCurrency(amountNow)}</strong></div>
+          <div><span>Valeur livrée au total</span><strong>${formatCurrency(amountAll)}</strong></div>
+          <div><span>Total Commande</span><strong>${formatCurrency(data.totalAmount)}</strong></div>
+          <div class="ok"><span>Acompte Versé</span><strong>${formatCurrency(data.paidAmount)}</strong></div>
+          <div class="${data.restAmount > 0 ? 'due' : 'grand'}">
+            <span>Reste à Payer</span><strong>${formatCurrency(data.restAmount)}</strong>
+          </div>
+        </div>
       </div>
 
       <div class="note">
@@ -278,11 +338,12 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
 
       <div class="signs">
         <div class="sign">Signature &amp; bon pour réception (Client)</div>
-        <div class="sign">Cachet &amp; Signature Expéditeur</div>
+        <div class="sign">Cachet &amp; Signature Entreprise</div>
       </div>
+      <div class="foot">${esc(store.socialMedia || '')} — Merci de votre confiance.</div>
     </div>`);
 
-  printDocument(html, `Bon_Livraison_${data.reference}`);
+  printDocument(html, `Bon_de_Livraison_${data.reference}`);
 }
 
 /* --------------------------------------------- bon de commande CLIENT */

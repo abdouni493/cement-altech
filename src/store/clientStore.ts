@@ -1,7 +1,10 @@
 import { create } from 'zustand';
-import type { Client, PartyPayment } from '@/types';
+import type { Client, PartyPayment, PaymentMethodDetails } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
+import { useSalesStore } from './salesStore';
+import { useCommandStore } from './commandStore';
+import { useCaisseStore } from './caisseStore';
 
 interface ClientState {
   clients: Client[];
@@ -13,9 +16,31 @@ interface ClientState {
   deleteClient: (id: string) => Promise<void>;
   /** Returns the single shared walk-in client, creating it in the database once. */
   getOrCreatePassager: (name?: string) => Promise<Client>;
-  payDebt: (clientId: string, amount: number, paidAt: string, notes?: string) => Promise<PartyPayment>;
-  updatePayment: (id: string, amount: number, paidAt: string, notes?: string) => Promise<void>;
+  payDebt: (
+    clientId: string, amount: number, paidAt: string, notes?: string,
+    method?: PaymentMethodDetails,
+  ) => Promise<PartyPayment>;
+  updatePayment: (
+    id: string, amount: number, paidAt: string, notes?: string,
+    method?: PaymentMethodDetails,
+  ) => Promise<void>;
   deletePayment: (id: string) => Promise<void>;
+}
+
+/**
+ * Recharge tout ce qu'un versement client vient de modifier côté base.
+ *
+ * `pay_client()` impute le montant sur les ventes puis les commandes non
+ * soldées et enregistre l'entrée de caisse : sans ce rechargement l'écran
+ * continuerait d'afficher l'ANCIENNE dette (c'est le bug « le versement est
+ * enregistré mais la dette ne baisse pas »).
+ */
+async function refreshClientDebt(): Promise<void> {
+  await Promise.all([
+    useSalesStore.getState().load(),
+    useCommandStore.getState().load(),
+    useCaisseStore.getState().load(),
+  ]).catch(() => undefined);
 }
 
 export const useClientStore = create<ClientState>()((set, get) => ({
@@ -44,6 +69,7 @@ export const useClientStore = create<ClientState>()((set, get) => ({
       clients: get().clients.filter((c) => c.id !== id),
       payments: get().payments.filter((p) => p.partyId !== id),
     });
+    await refreshClientDebt();
   },
 
   getOrCreatePassager: async () => {
@@ -54,21 +80,27 @@ export const useClientStore = create<ClientState>()((set, get) => ({
     return row;
   },
 
-  payDebt: async (clientId, amount, paidAt, notes = '') => {
-    const row = await save<{ id: string }>('clients.pay', () => rpc.payClient(clientId, amount, paidAt, notes));
+  payDebt: async (clientId, amount, paidAt, notes = '', method) => {
+    const row = await save<{ id: string }>('clients.pay', () =>
+      rpc.payClient(clientId, amount, paidAt, notes, method ?? { method: 'especes' })
+    );
     const payments = await db.clientPayments.list();
     set({ payments });
+    // les ventes / commandes viennent d'être soldées côté base : on les relit
+    await refreshClientDebt();
     // the row the database actually created (never the newest by date)
     return payments.find((p) => p.id === row?.id) as PartyPayment ?? payments.find((p) => p.partyId === clientId) as PartyPayment;
   },
 
-  updatePayment: async (id, amount, paidAt, notes) => {
-    await save('clients.payment.update', () => rpc.updateClientPayment(id, amount, paidAt, notes));
+  updatePayment: async (id, amount, paidAt, notes, method) => {
+    await save('clients.payment.update', () => rpc.updateClientPayment(id, amount, paidAt, notes, method));
     set({ payments: await db.clientPayments.list() });
+    await refreshClientDebt();
   },
 
   deletePayment: async (id) => {
     await save('clients.payment.delete', () => rpc.deleteClientPayment(id));
     set({ payments: get().payments.filter((p) => p.id !== id) });
+    await refreshClientDebt();
   },
 }));

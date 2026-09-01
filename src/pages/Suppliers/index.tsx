@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
-  Truck, Plus, Pencil, Trash2, Phone, MapPin, Wallet, History, Printer,
+  Truck, Plus, Pencil, Trash2, Phone, MapPin, Wallet, Printer,
   CheckCircle2, AlertTriangle, Receipt, TrendingDown, Coins, FileBarChart, Eye,
+  HandCoins,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -15,7 +16,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StatCard } from '@/components/shared/StatCard';
 import { SupplierForm } from '@/components/shared/SupplierForm';
-import { PayDebtModal } from '@/components/shared/PayDebtModal';
+import { VersementModal } from '@/components/shared/VersementModal';
 import { EditPaymentModal } from '@/components/shared/EditPaymentModal';
 import { EditPurchaseModal } from '@/components/shared/EditPurchaseModal';
 import { SupplierStatementModal } from '@/components/shared/SupplierStatementModal';
@@ -23,11 +24,11 @@ import { useSupplierStore } from '@/store/supplierStore';
 import { usePurchaseStore } from '@/store/purchaseStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { usePermissions } from '@/hooks/usePermissions';
-import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from '@/lib/utils';
 import { printPaymentReceipt } from '@/lib/documents';
 import { printInvoice } from '@/lib/print';
 import { toast } from '@/components/ui/Toast';
-import type { Supplier, PartyPayment, Purchase } from '@/types';
+import type { Supplier, PartyPayment, PaymentMethodDetails, Purchase } from '@/types';
 
 type SupplierFilter = 'all' | 'debt' | 'clear';
 
@@ -44,7 +45,7 @@ export default function SuppliersPage() {
   const [editing, setEditing] = useState<Supplier | null>(null);
   const [history, setHistory] = useState<Supplier | null>(null);
   const [historyTab, setHistoryTab] = useState<'purchases' | 'payments'>('payments');
-  const [paying, setPaying] = useState<Supplier | null>(null);
+  const [versing, setVersing] = useState<Supplier | null>(null);
   const [editPayment, setEditPayment] = useState<PartyPayment | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deletePaymentId, setDeletePaymentId] = useState<string | null>(null);
@@ -105,10 +106,12 @@ export default function SuppliersPage() {
     setEditing(null);
   };
 
-  const handlePay = async (supplier: Supplier, amount: number, notes: string, paidAt: string) => {
-    const payment = await payDebt(supplier.id, amount, paidAt, notes);
-    toast.success('Règlement enregistré');
-    setPaying(null);
+  const handleVersement = async (
+    supplier: Supplier, amount: number, notes: string, paidAt: string, method: PaymentMethodDetails,
+  ) => {
+    const payment = await payDebt(supplier.id, amount, paidAt, notes, method);
+    toast.success('Versement enregistré — la dette du fournisseur a été réduite');
+    setVersing(null);
     if (payment) setPrintPrompt({ supplier, payment });
   };
 
@@ -123,6 +126,10 @@ export default function SuppliersPage() {
         amount: payment.amount,
         paidAt: payment.paidAt,
         notes: payment.notes,
+        method: payment.method,
+        chequeNumber: payment.chequeNumber,
+        virementNumber: payment.virementNumber,
+        bankName: payment.bankName,
         totalDebt: st.total,
         totalPaid: st.paid,
         restAmount: st.rest,
@@ -248,7 +255,7 @@ export default function SuppliersPage() {
                     </div>
                     <div className="flex justify-between mt-1.5 text-[10px] text-text-muted">
                       <span>{st.count} facture(s)</span>
-                      <span>{st.payments.length} règlement(s) · {paidPct.toFixed(0)}% payé</span>
+                      <span>{st.payments.length} versement(s) · {paidPct.toFixed(0)}% payé</span>
                     </div>
                   </div>
 
@@ -256,20 +263,22 @@ export default function SuppliersPage() {
                   <div className="mt-auto space-y-2">
                     {can('suppliers', 'pay') && (
                       <Button
-                        variant={hasDebt ? 'gold' : 'secondary'}
-                        className="w-full"
-                        disabled={!hasDebt}
-                        onClick={() => setPaying(s)}
+                        variant="gold"
+                        className="w-full font-bold"
+                        onClick={() => setVersing(s)}
+                        title="Enregistrer un versement au fournisseur"
                       >
-                        <Wallet size={16} /> {hasDebt ? `Payer la dette (${formatCurrency(st.rest)})` : 'Aucune dette'}
+                        <HandCoins size={16} />
+                        {hasDebt ? `Versement (reste ${formatCurrency(st.rest)})` : 'Versement'}
                       </Button>
                     )}
                     <div className="grid grid-cols-2 gap-1.5">
                       <Button
                         size="sm" variant="secondary" className="text-xs"
                         onClick={() => { setHistory(s); setHistoryTab('payments'); }}
+                        title="Versements et factures du fournisseur"
                       >
-                        <History size={14} /> Historique
+                        <Wallet size={14} /> Versements ({st.payments.length})
                       </Button>
                       <Button
                         size="sm" variant="secondary" className="text-xs"
@@ -314,11 +323,20 @@ export default function SuppliersPage() {
                 <Tile label="Dette totale" value={formatCurrency(st.total)} />
                 <Tile label="Total payé" value={formatCurrency(st.paid)} color="text-pistachio" />
                 <Tile label="Reste à payer" value={formatCurrency(st.rest)} color="text-rose-deep" />
-                <Tile label="Règlements" value={String(st.payments.length)} color="text-gold-dark" />
+                <Tile label="Versements" value={String(st.payments.length)} color="text-gold-dark" />
               </div>
 
+              {can('suppliers', 'pay') && (
+                <Button
+                  variant="gold" className="w-full"
+                  onClick={() => { setVersing(history); setHistory(null); }}
+                >
+                  <HandCoins size={16} /> Nouveau versement
+                </Button>
+              )}
+
               <div className="flex gap-2 border-b border-gold/15">
-                {([['payments', `Règlements (${st.payments.length})`], ['purchases', `Factures (${st.list.length})`]] as const).map(
+                {([['payments', `Versements (${st.payments.length})`], ['purchases', `Factures (${st.list.length})`]] as const).map(
                   ([key, label]) => (
                     <button
                       key={key}
@@ -335,7 +353,7 @@ export default function SuppliersPage() {
 
               {historyTab === 'payments' ? (
                 st.payments.length === 0 ? (
-                  <EmptyState message="Aucun règlement enregistré" icon={<Coins size={30} />} />
+                  <EmptyState message="Aucun versement enregistré" icon={<Coins size={30} />} />
                 ) : (
                   <div className="overflow-x-auto rounded-xl border border-gold/15">
                     <table className="w-full text-sm">
@@ -343,6 +361,7 @@ export default function SuppliersPage() {
                         <tr>
                           <th className="text-left px-3 py-2">Date &amp; heure</th>
                           <th className="text-right px-3 py-2">Montant</th>
+                          <th className="text-left px-3 py-2">Mode de règlement</th>
                           <th className="text-left px-3 py-2">Note</th>
                           <th className="text-center px-3 py-2">Actions</th>
                         </tr>
@@ -353,6 +372,11 @@ export default function SuppliersPage() {
                             <td className="px-3 py-2 tabular text-xs">{formatDateTime(p.paidAt)}</td>
                             <td className="px-3 py-2 text-right tabular font-bold text-pistachio">
                               {formatCurrency(p.amount)}
+                            </td>
+                            <td className="px-3 py-2 text-xs">
+                              <Badge variant={p.method === 'especes' || !p.method ? 'success' : 'info'}>
+                                {paymentMethodLabel(p)}
+                              </Badge>
                             </td>
                             <td className="px-3 py-2 text-xs text-text-muted">{p.notes || '—'}</td>
                             <td className="px-3 py-2">
@@ -438,19 +462,20 @@ export default function SuppliersPage() {
         })()}
       </Modal>
 
-      {/* ---- Pay debt ---- */}
-      {paying && (() => {
-        const st = statsOf(paying.id);
+      {/* ---- Versement au fournisseur ---- */}
+      {versing && (() => {
+        const st = statsOf(versing.id);
         return (
-          <PayDebtModal
-            open={!!paying}
-            onClose={() => setPaying(null)}
-            reference=""
-            partyName={paying.name}
+          <VersementModal
+            open={!!versing}
+            onClose={() => setVersing(null)}
+            kind="supplier"
+            clientName={versing.name}
+            clientPhone={versing.phone}
             total={st.total}
             paid={st.paid}
-            title={`Payer la dette — ${paying.name}`}
-            onPay={(amount, notes, paidAt) => handlePay(paying, amount, notes, paidAt)}
+            onSubmit={(amount, notes, paidAt, method) =>
+              handleVersement(versing, amount, notes, paidAt, method)}
           />
         );
       })()}
@@ -525,10 +550,10 @@ export default function SuppliersPage() {
       <EditPaymentModal
         payment={editPayment}
         onClose={() => setEditPayment(null)}
-        onSave={async (amount, paidAt, notes) => {
+        onSave={async (amount, paidAt, notes, method) => {
           if (!editPayment) return;
-          await updatePayment(editPayment.id, amount, paidAt, notes);
-          toast.success('Règlement modifié');
+          await updatePayment(editPayment.id, amount, paidAt, notes, method);
+          toast.success('Versement modifié — la dette du fournisseur a été recalculée');
           setEditPayment(null);
         }}
       />
@@ -539,11 +564,11 @@ export default function SuppliersPage() {
           <div className="h-14 w-14 rounded-full bg-pistachio/15 flex items-center justify-center mb-4">
             <CheckCircle2 size={30} className="text-pistachio" />
           </div>
-          <h3 className="font-display text-lg font-semibold text-text-primary mb-1">Règlement enregistré</h3>
+          <h3 className="font-display text-lg font-semibold text-text-primary mb-1">Versement enregistré</h3>
           <p className="text-sm text-text-secondary mb-1">
             {printPrompt && formatCurrency(printPrompt.payment.amount)} — {printPrompt?.supplier.name}
           </p>
-          <p className="text-sm text-text-muted mb-6">Voulez-vous imprimer le reçu de règlement ?</p>
+          <p className="text-sm text-text-muted mb-6">Voulez-vous imprimer le reçu de versement ?</p>
           <div className="flex gap-3 w-full">
             <Button variant="secondary" className="flex-1" onClick={() => setPrintPrompt(null)}>Non, merci</Button>
             <Button
@@ -577,8 +602,8 @@ export default function SuppliersPage() {
       <ConfirmDialog
         open={!!deletePaymentId}
         onClose={() => setDeletePaymentId(null)}
-        onConfirm={() => { if (deletePaymentId) void deletePayment(deletePaymentId).then(() => toast.success('Règlement supprimé')); }}
-        title="Supprimer le règlement"
+        onConfirm={() => { if (deletePaymentId) void deletePayment(deletePaymentId).then(() => toast.success('Versement supprimé')); }}
+        title="Supprimer le versement"
         message="Le montant sera de nouveau dû et la sortie de caisse annulée."
       />
     </div>
