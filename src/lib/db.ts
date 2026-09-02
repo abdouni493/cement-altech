@@ -4,7 +4,7 @@ import type {
   Product, Marque, Category, Unit, Supplier, Client, ClientDebt, Sale, Purchase,
   Production, ComptoirItem, Destruction, Worker, Role, Expense, CaisseTransaction,
   CaisseReport, StoreSettings, PartyPayment, CommandDelivery, WorkerOvertime,
-  PurchaseOrder, PaymentMethodDetails,
+  PurchaseOrder, PaymentMethodDetails, PartyOldDebt, PartyCreditRefund, PartyType,
 } from '@/types';
 import type { Command } from '@/store/commandStore';
 import type { FicheTechnic } from '@/store/ficheTechnicStore';
@@ -43,6 +43,29 @@ async function selectOptional<T>(table: string, columns = '*', order?: string): 
     const msg = (e as Error).message;
     if (isMissingSchema(msg)) {
       console.warn(`[db] ${table} absente — exécutez altech_production_update_2026.sql`);
+      return [];
+    }
+    throw e;
+  }
+}
+
+/**
+ * `selectOptional()` restreint à une colonne — sert à lire le grand livre
+ * partagé des tiers (`party_type = 'client' | 'supplier'`).
+ */
+async function selectOptionalWhere<T>(
+  table: string, column: string, value: string, order?: string
+): Promise<T[]> {
+  try {
+    let q = supabase.from(table).select('*').eq(column, value);
+    if (order) q = q.order(order, { ascending: false });
+    const { data, error } = await q;
+    if (error) throw new Error(`[${table}] ${error.message}`);
+    return (data ?? []) as T[];
+  } catch (e) {
+    const msg = (e as Error).message;
+    if (isMissingSchema(msg)) {
+      console.warn(`[db] ${table} absente — exécutez altech_production_update_anciennes_dettes_avances.sql`);
       return [];
     }
     throw e;
@@ -115,10 +138,45 @@ const fromProduct = (p: Partial<Product>) => {
 
 const toSupplier = (r: any): Supplier => ({
   id: r.id, name: r.name, phone: r.phone ?? '', address: r.address ?? '',
+  creditAmount: num(r.credit_amount),
 });
 
 const toClient = (r: any): Client => ({
   id: r.id, name: r.name, phone: r.phone ?? '', address: r.address ?? '', note: r.note ?? '',
+  creditAmount: num(r.credit_amount),
+});
+
+/** Ancienne dette (ardoise d'avant le logiciel) d'un client ou d'un fournisseur. */
+const toPartyOldDebt = (r: any): PartyOldDebt => ({
+  id: r.id,
+  partyType: (r.party_type === 'supplier' ? 'supplier' : 'client') as PartyType,
+  partyId: r.party_id ?? '',
+  partyName: r.party_name ?? undefined,
+  amount: num(r.amount),
+  paidAmount: num(r.paid_amount),
+  restAmount: num(r.rest_amount),
+  date: r.date,
+  description: r.description ?? '',
+  createdAt: r.created_at,
+  createdBy: r.created_by ?? undefined,
+});
+
+/** Excédent rendu à un client / récupéré auprès d'un fournisseur. */
+const toPartyRefund = (r: any): PartyCreditRefund => ({
+  id: r.id,
+  partyType: (r.party_type === 'supplier' ? 'supplier' : 'client') as PartyType,
+  partyId: r.party_id ?? '',
+  partyName: r.party_name ?? undefined,
+  amount: num(r.amount),
+  date: r.date,
+  refundedAt: r.refunded_at ?? r.created_at,
+  notes: r.notes ?? '',
+  method: (r.method ?? 'especes') as PartyCreditRefund['method'],
+  chequeNumber: r.cheque_number ?? undefined,
+  virementNumber: r.virement_number ?? undefined,
+  bankName: r.bank_name ?? undefined,
+  createdAt: r.created_at,
+  createdBy: r.created_by ?? undefined,
 });
 
 const toWorker = (r: any): Worker => ({
@@ -626,6 +684,19 @@ export const db = {
       (await selectOptional<any>('client_payments', '*', 'paid_at')).map(toPartyPayment('client_id', 'client_name')),
   },
 
+  // /clients & /suppliers — anciennes dettes (ardoise d'avant le logiciel)
+  partyOldDebts: {
+    list: async (partyType: PartyType): Promise<PartyOldDebt[]> =>
+      (await selectOptionalWhere<any>('party_old_debts', 'party_type', partyType, 'date')).map(toPartyOldDebt),
+  },
+
+  // /clients & /suppliers — excédents rendus
+  partyRefunds: {
+    list: async (partyType: PartyType): Promise<PartyCreditRefund[]> =>
+      (await selectOptionalWhere<any>('party_credit_refunds', 'party_type', partyType, 'refunded_at'))
+        .map(toPartyRefund),
+  },
+
   // /commands — livraisons
   commandDeliveries: {
     list: async (): Promise<CommandDelivery[]> => {
@@ -909,6 +980,35 @@ export const rpc = {
       p_bank_name: method ? method.bankName || '' : null,
     }),
   deleteClientPayment: (id: string) => call<void>('delete_client_payment', { p_id: id }),
+
+  // /clients & /suppliers — anciennes dettes
+  addPartyOldDebt: (
+    partyType: PartyType, partyId: string, amount: number, date: string, description: string,
+  ) =>
+    call<any>('add_party_old_debt', {
+      p_party_type: partyType, p_party_id: partyId, p_amount: amount,
+      p_date: date, p_description: description,
+    }),
+  updatePartyOldDebt: (id: string, amount: number, date: string, description: string) =>
+    call<any>('update_party_old_debt', {
+      p_id: id, p_amount: amount, p_date: date, p_description: description,
+    }),
+  deletePartyOldDebt: (id: string) => call<void>('delete_party_old_debt', { p_id: id }),
+
+  // /clients & /suppliers — rendre l'excédent versé en trop
+  refundPartyCredit: (
+    partyType: PartyType, partyId: string, amount: number, refundedAt: string, notes = '',
+    method: PaymentMethodDetails = { method: 'especes' },
+  ) =>
+    call<any>('refund_party_credit', {
+      p_party_type: partyType, p_party_id: partyId, p_amount: amount,
+      p_refunded_at: refundedAt, p_notes: notes,
+      p_method: method.method ?? 'especes',
+      p_cheque_number: method.chequeNumber || null,
+      p_virement_number: method.virementNumber || null,
+      p_bank_name: method.bankName || null,
+    }),
+  deletePartyRefund: (id: string) => call<void>('delete_party_refund', { p_id: id }),
 
   // /commands — livraisons partielles
   createCommandDelivery: (payload: Record<string, any>) =>

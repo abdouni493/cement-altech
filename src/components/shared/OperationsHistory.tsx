@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Receipt, ShoppingCart, ClipboardList, Truck, ChevronDown, ChevronUp, Search,
-  History, Package, Percent, Calendar, Hash, Coins,
+  History, Package, Percent, Calendar, Hash, Coins, Undo2, Users,
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -13,7 +13,7 @@ import { useCommandStore, deliveryStatus } from '@/store/commandStore';
 import { useClientStore } from '@/store/clientStore';
 import { useSupplierStore } from '@/store/supplierStore';
 import { useLanguage } from '@/hooks/useLanguage';
-import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from '@/lib/utils';
 
 /* ============================================================================
  *  HISTORIQUE DÉTAILLÉ DES OPÉRATIONS
@@ -25,10 +25,16 @@ import { formatCurrency, formatDate, formatDateTime } from '@/lib/utils';
  *      · COMMANDES     — client, produits commandés, avancement des livraisons
  *      · LIVRAISONS    — bon de livraison, quantités remises ET matières
  *                        premières réellement retirées du stock
+ *      · ANCIENNES DETTES — ardoises d'avant le logiciel (clients ET
+ *                        fournisseurs). Elles n'écrivent RIEN en caisse : aucun
+ *                        argent n'a bougé le jour de leur saisie, c'est leur
+ *                        règlement qui alimente le tiroir.
+ *      · EXCÉDENTS     — argent rendu à un client (sortie de caisse) ou
+ *                        récupéré auprès d'un fournisseur (entrée de caisse).
  *  Chaque ligne se déplie sur son détail complet.
  * ========================================================================== */
 
-type TabKey = 'sales' | 'purchases' | 'commands' | 'deliveries';
+type TabKey = 'sales' | 'purchases' | 'commands' | 'deliveries' | 'oldDebts' | 'refunds';
 
 interface Props {
   /** Vrai quand la date (ISO ou YYYY-MM-DD) appartient à la période affichée. */
@@ -48,6 +54,10 @@ export function OperationsHistory({ inPeriod, periodLabel, defaultTab = 'sales',
   const deliveries = useCommandStore((s) => s.deliveries);
   const clients = useClientStore((s) => s.clients);
   const suppliers = useSupplierStore((s) => s.suppliers);
+  const clientOldDebts = useClientStore((s) => s.oldDebts);
+  const supplierOldDebts = useSupplierStore((s) => s.oldDebts);
+  const clientRefunds = useClientStore((s) => s.refunds);
+  const supplierRefunds = useSupplierStore((s) => s.refunds);
 
   const [tab, setTab] = useState<TabKey>(defaultTab);
   const [search, setSearch] = useState('');
@@ -109,18 +119,42 @@ export function OperationsHistory({ inPeriod, periodLabel, defaultTab = 'sales',
     [deliveries, commands, q, inPeriod] // eslint-disable-line react-hooks/exhaustive-deps
   );
 
+  /* -------------------------------------------------- anciennes dettes -- */
+  const oldDebtRows = useMemo(
+    () =>
+      [...clientOldDebts, ...supplierOldDebts]
+        .filter((d) => inPeriod(d.date))
+        .filter((d) => hit(d.partyName, d.description))
+        .sort((a, b) => b.date.localeCompare(a.date)),
+    [clientOldDebts, supplierOldDebts, q, inPeriod] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
+  /* ------------------------------------------------ excedents rendus --- */
+  const refundRows = useMemo(
+    () =>
+      [...clientRefunds, ...supplierRefunds]
+        .filter((r) => inPeriod(r.refundedAt))
+        .filter((r) => hit(r.partyName, r.notes))
+        .sort((a, b) => b.refundedAt.localeCompare(a.refundedAt)),
+    [clientRefunds, supplierRefunds, q, inPeriod] // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   const salesTotal = salesRows.reduce((s, x) => s + x.finalAmount, 0);
   const purchasesTotal = purchaseRows.reduce((s, x) => s + x.totalAmount, 0);
   const commandsTotal = commandRows.reduce((s, x) => s + x.totalAmount, 0);
   const deliveriesQty = deliveryRows.reduce(
     (s, d) => s + d.items.reduce((a, i) => a + i.quantity, 0), 0
   );
+  const oldDebtsTotal = oldDebtRows.reduce((s, x) => s + x.amount, 0);
+  const refundsTotal = refundRows.reduce((s, x) => s + x.amount, 0);
 
   const tabs: { key: TabKey; label: string; icon: ReactNode; count: number; total: string }[] = [
     { key: 'sales', label: 'Ventes', icon: <Receipt size={15} />, count: salesRows.length, total: formatCurrency(salesTotal) },
     { key: 'purchases', label: 'Achats', icon: <ShoppingCart size={15} />, count: purchaseRows.length, total: formatCurrency(purchasesTotal) },
     { key: 'commands', label: 'Commandes', icon: <ClipboardList size={15} />, count: commandRows.length, total: formatCurrency(commandsTotal) },
     { key: 'deliveries', label: 'Livraisons', icon: <Truck size={15} />, count: deliveryRows.length, total: `${Math.round(deliveriesQty * 1000) / 1000} livrés` },
+    { key: 'oldDebts', label: 'Anciennes dettes', icon: <History size={15} />, count: oldDebtRows.length, total: formatCurrency(oldDebtsTotal) },
+    { key: 'refunds', label: 'Excédents rendus', icon: <Undo2 size={15} />, count: refundRows.length, total: formatCurrency(refundsTotal) },
   ];
 
   const toggle = (id: string) => setOpenId((cur) => (cur === id ? null : id));
@@ -366,6 +400,90 @@ export function OperationsHistory({ inPeriod, periodLabel, defaultTab = 'sales',
           );
         }))}
 
+        {/* ====================== ANCIENNES DETTES ======================= */}
+        {tab === 'oldDebts' && (oldDebtRows.length === 0 ? (
+          <EmptyState message="Aucune ancienne dette sur cette période" icon={<History size={28} />} />
+        ) : oldDebtRows.map((d) => {
+          const open = openId === d.id;
+          const isClient = d.partyType === 'client';
+          return (
+            <Row
+              key={d.id}
+              open={open}
+              onToggle={() => toggle(d.id)}
+              title={d.partyName || '—'}
+              subtitle={`${isClient ? 'Client' : 'Fournisseur'} · ${formatDate(d.date, language)} · ${d.description || 'sans description'}`}
+              amount={d.amount}
+              amountClass={isClient ? 'text-rose-deep' : 'text-caramel'}
+              badges={
+                <>
+                  <Badge variant={isClient ? 'info' : 'warning'}>
+                    <Users size={9} /> {isClient ? 'dette client' : 'dette fournisseur'}
+                  </Badge>
+                  <Badge variant={d.restAmount > 0 ? 'danger' : 'success'}>
+                    {d.restAmount > 0 ? `reste ${formatCurrency(d.restAmount)}` : 'soldée'}
+                  </Badge>
+                  <Badge variant="neutral">hors caisse</Badge>
+                </>
+              }
+            >
+              <Facts
+                items={[
+                  { label: 'Montant de l’ardoise', value: formatCurrency(d.amount) },
+                  { label: 'Déjà réglé', value: formatCurrency(d.paidAmount) },
+                  { label: 'Reste dû', value: formatCurrency(d.restAmount) },
+                  { label: 'Date de la dette', value: formatDate(d.date, language) },
+                  ...(d.createdBy ? [{ label: 'Enregistrée par', value: d.createdBy }] : []),
+                ]}
+              />
+              <p className="mt-3 rounded-xl border border-caramel/30 bg-caramel/10 px-3 py-2 text-[11px] font-medium text-caramel">
+                Ardoise antérieure au logiciel : aucun argent n’a bougé le jour de sa saisie, elle
+                n’écrit donc rien en caisse. C’est son règlement (bouton « Versement » de la fiche)
+                qui alimente le tiroir.
+              </p>
+              {d.description && <p className="text-[11px] italic text-text-muted mt-2">« {d.description} »</p>}
+            </Row>
+          );
+        }))}
+
+        {/* ======================= EXCÉDENTS RENDUS ====================== */}
+        {tab === 'refunds' && (refundRows.length === 0 ? (
+          <EmptyState message="Aucun excédent rendu sur cette période" icon={<Undo2 size={28} />} />
+        ) : refundRows.map((r) => {
+          const open = openId === r.id;
+          const isClient = r.partyType === 'client';
+          return (
+            <Row
+              key={r.id}
+              open={open}
+              onToggle={() => toggle(r.id)}
+              title={r.partyName || '—'}
+              subtitle={`${isClient ? 'Excédent rendu au client' : 'Excédent récupéré du fournisseur'} · ${formatDateTime(r.refundedAt, language)}`}
+              amount={r.amount}
+              amountClass={isClient ? 'text-caramel' : 'text-pistachio'}
+              badges={
+                <>
+                  <Badge variant={isClient ? 'warning' : 'success'}>
+                    {isClient ? 'sortie de caisse' : 'entrée de caisse'}
+                  </Badge>
+                  <Badge variant="info">{paymentMethodLabel(r)}</Badge>
+                </>
+              }
+            >
+              <Facts
+                items={[
+                  { label: 'Montant', value: formatCurrency(r.amount) },
+                  { label: 'Sens', value: isClient ? 'Sortie de caisse' : 'Entrée de caisse' },
+                  { label: 'Mode de règlement', value: paymentMethodLabel(r) },
+                  { label: 'Reçu n°', value: `EXC-${r.id.slice(0, 8).toUpperCase()}` },
+                  ...(r.createdBy ? [{ label: 'Enregistré par', value: r.createdBy }] : []),
+                ]}
+              />
+              {r.notes && <p className="text-[11px] italic text-text-muted mt-2">« {r.notes} »</p>}
+            </Row>
+          );
+        }))}
+
         {/* ========================= LIVRAISONS ========================== */}
         {tab === 'deliveries' && (deliveryRows.length === 0 ? (
           <EmptyState message="Aucune livraison sur cette période" icon={<Truck size={28} />} />
@@ -558,12 +676,18 @@ export function OperationsTotals({ inPeriod }: { inPeriod: (date: string) => boo
   const purchases = usePurchaseStore((s) => s.purchases);
   const commands = useCommandStore((s) => s.commands);
   const deliveries = useCommandStore((s) => s.deliveries);
+  const clientOldDebts = useClientStore((s) => s.oldDebts);
+  const supplierOldDebts = useSupplierStore((s) => s.oldDebts);
+  const clientRefunds = useClientStore((s) => s.refunds);
+  const supplierRefunds = useSupplierStore((s) => s.refunds);
 
   const stats = useMemo(() => {
     const pSales = sales.filter((s) => inPeriod(s.date));
     const pPurch = purchases.filter((p) => inPeriod(p.date));
     const pCmd = commands.filter((c) => inPeriod(c.createdAt) || inPeriod(c.receiveDate));
     const pDel = deliveries.filter((d) => inPeriod(d.deliveredAt));
+    const pOld = [...clientOldDebts, ...supplierOldDebts].filter((d) => inPeriod(d.date));
+    const pRef = [...clientRefunds, ...supplierRefunds].filter((r) => inPeriod(r.refundedAt));
     return {
       salesCount: pSales.length,
       salesTotal: pSales.reduce((s, x) => s + x.finalAmount, 0),
@@ -577,18 +701,28 @@ export function OperationsTotals({ inPeriod }: { inPeriod: (date: string) => boo
       materialsCost: pDel.reduce(
         (s, d) => s + (d.consumptions ?? []).reduce((a, x) => a + x.lineCost, 0), 0
       ),
+      oldDebtsCount: pOld.length,
+      oldDebtsTotal: pOld.reduce((s, x) => s + x.amount, 0),
+      oldDebtsRest: pOld.reduce((s, x) => s + x.restAmount, 0),
+      refundsCount: pRef.length,
+      refundsTotal: pRef.reduce((s, x) => s + x.amount, 0),
     };
-  }, [sales, purchases, commands, deliveries, inPeriod]);
+  }, [
+    sales, purchases, commands, deliveries,
+    clientOldDebts, supplierOldDebts, clientRefunds, supplierRefunds, inPeriod,
+  ]);
 
   const tiles = [
     { icon: <Receipt size={17} />, label: 'Ventes', value: formatCurrency(stats.salesTotal), sub: `${stats.salesCount} facture(s)`, grad: 'from-[#A6E9CE] to-[#3FB591]' },
     { icon: <ShoppingCart size={17} />, label: 'Achats', value: formatCurrency(stats.purchasesTotal), sub: `${stats.purchasesCount} facture(s)`, grad: 'from-[#FFD08A] to-[#F2944A]' },
     { icon: <ClipboardList size={17} />, label: 'Commandes', value: formatCurrency(stats.commandsTotal), sub: `${stats.commandsCount} · reste ${formatCurrency(stats.commandsRest)}`, grad: 'from-[#FF9CC0] to-[#F0568A]' },
     { icon: <Truck size={17} />, label: 'Livraisons', value: `${Math.round(stats.deliveriesQty * 1000) / 1000} livrés`, sub: `${stats.deliveriesCount} bon(s) · matière ${formatCurrency(stats.materialsCost)}`, grad: 'from-[#CDB0F5] to-[#9B7ED8]' },
+    { icon: <History size={17} />, label: 'Anciennes dettes', value: formatCurrency(stats.oldDebtsTotal), sub: `${stats.oldDebtsCount} ardoise(s) · reste ${formatCurrency(stats.oldDebtsRest)}`, grad: 'from-[#F5C6A5] to-[#D98E4F]' },
+    { icon: <Undo2 size={17} />, label: 'Excédents rendus', value: formatCurrency(stats.refundsTotal), sub: `${stats.refundsCount} opération(s)`, grad: 'from-[#A5D8F5] to-[#4F9ED9]' },
   ];
 
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
       {tiles.map((tile, i) => (
         <motion.div
           key={tile.label}

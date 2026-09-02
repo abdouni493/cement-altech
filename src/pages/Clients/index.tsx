@@ -4,7 +4,7 @@ import { motion } from 'framer-motion';
 import {
   Users, Plus, Pencil, Trash2, Phone, Wallet, Printer, CheckCircle2,
   AlertTriangle, Receipt, TrendingDown, Coins, ClipboardList, ShoppingBag, Eye,
-  FileBarChart, HandCoins,
+  FileBarChart, HandCoins, History, PiggyBank, Undo2,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -21,6 +21,8 @@ import { VersementModal } from '@/components/shared/VersementModal';
 import { EditPaymentModal } from '@/components/shared/EditPaymentModal';
 import { EditSaleModal } from '@/components/shared/EditSaleModal';
 import { ClientStatementModal } from '@/components/shared/ClientStatementModal';
+import { OldDebtModal } from '@/components/shared/OldDebtModal';
+import { RefundCreditModal } from '@/components/shared/RefundCreditModal';
 import { useClientStore } from '@/store/clientStore';
 import { useSalesStore } from '@/store/salesStore';
 import { useCommandStore, deliveryStatus } from '@/store/commandStore';
@@ -30,19 +32,23 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from '@/lib/utils';
 import { printPaymentReceipt } from '@/lib/documents';
 import { printSaleInvoice } from '@/lib/invoicePrint';
+import { computePartyBalance } from '@/lib/partyBalance';
 import { toast } from '@/components/ui/Toast';
-import type { Client, PartyPayment, PaymentMethodDetails, Sale } from '@/types';
+import type {
+  Client, PartyPayment, PaymentMethodDetails, Sale, PartyOldDebt,
+} from '@/types';
 
-type ClientFilter = 'all' | 'debt' | 'clear';
-type HistoryTab = 'payments' | 'sales' | 'commands';
+type ClientFilter = 'all' | 'debt' | 'clear' | 'credit';
+type HistoryTab = 'payments' | 'sales' | 'commands' | 'oldDebts' | 'refunds';
 
 export default function ClientsPage() {
   const { language } = useLanguage();
   const { can } = usePermissions();
   const navigate = useNavigate();
   const {
-    clients, payments, addClient, updateClient, deleteClient,
+    clients, payments, oldDebts, refunds, addClient, updateClient, deleteClient,
     payDebt, updatePayment, deletePayment,
+    addOldDebt, updateOldDebt, deleteOldDebt, refundCredit, deleteRefund,
   } = useClientStore();
   const { sales, updateSale, deleteSale } = useSalesStore();
   const commands = useCommandStore((s) => s.commands);
@@ -63,22 +69,46 @@ export default function ClientsPage() {
   const [deleteSaleId, setDeleteSaleId] = useState<string | null>(null);
   const [statement, setStatement] = useState<Client | null>(null);
   const [printPrompt, setPrintPrompt] = useState<{ client: Client; payment: PartyPayment } | null>(null);
+  const [oldDebtFor, setOldDebtFor] = useState<Client | null>(null);
+  const [editOldDebt, setEditOldDebt] = useState<PartyOldDebt | null>(null);
+  const [deleteOldDebtId, setDeleteOldDebtId] = useState<string | null>(null);
+  const [refunding, setRefunding] = useState<Client | null>(null);
+  const [deleteRefundId, setDeleteRefundId] = useState<string | null>(null);
 
-  /** Full debt situation of a client — sales + commands. */
+  /**
+   * Situation complete d'un client : ventes + commandes + ANCIENNES DETTES,
+   * moins l'AVANCE qu'il a deja versee en trop.
+   *
+   * `balance.net` est negatif quand le client a un credit sur l'entreprise :
+   * c'est ce cas qui declenche le « + » et le bouton « Rendre l'excedent ».
+   */
   const statsOf = (clientId: string) => {
     const cs = sales.filter((s) => s.clientId === clientId);
     const cc = commands.filter((c) => c.clientId === clientId);
     const pays = payments.filter((p) => p.partyId === clientId);
-    const total = cs.reduce((s, x) => s + x.finalAmount, 0) + cc.reduce((s, x) => s + x.totalAmount, 0);
-    const paid = cs.reduce((s, x) => s + x.paidAmount, 0) + cc.reduce((s, x) => s + x.paidAmount, 0);
-    const rest = cs.reduce((s, x) => s + x.restAmount, 0) + cc.reduce((s, x) => s + x.restAmount, 0);
+    const olds = oldDebts.filter((d) => d.partyId === clientId);
+    const refs = refunds.filter((r) => r.partyId === clientId);
+    const documentsBilled = cs.reduce((s, x) => s + x.finalAmount, 0) + cc.reduce((s, x) => s + x.totalAmount, 0);
+    const documentsPaid = cs.reduce((s, x) => s + x.paidAmount, 0) + cc.reduce((s, x) => s + x.paidAmount, 0);
+    const documentsRest = cs.reduce((s, x) => s + x.restAmount, 0) + cc.reduce((s, x) => s + x.restAmount, 0);
+    const balance = computePartyBalance({
+      documentsBilled, documentsPaid, documentsRest,
+      oldDebts: olds,
+      credit: clients.find((c) => c.id === clientId)?.creditAmount ?? 0,
+    });
     return {
-      total, paid, rest,
+      balance,
+      total: balance.billed, paid: balance.paid, rest: balance.rest, credit: balance.credit,
       salesList: [...cs].sort((a, b) => b.date.localeCompare(a.date)),
       commandsList: [...cc].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
       payments: [...pays].sort((a, b) => b.paidAt.localeCompare(a.paidAt)),
+      oldDebtsList: [...olds].sort((a, b) => b.date.localeCompare(a.date)),
+      refundsList: [...refs].sort((a, b) => b.refundedAt.localeCompare(a.refundedAt)),
       salesTotal: cs.reduce((s, x) => s + x.finalAmount, 0),
       commandsTotal: cc.reduce((s, x) => s + x.totalAmount, 0),
+      oldDebtsTotal: olds.reduce((s, x) => s + x.amount, 0),
+      oldDebtsRest: olds.reduce((s, x) => s + x.restAmount, 0),
+      refundsTotal: refs.reduce((s, x) => s + x.amount, 0),
     };
   };
 
@@ -88,26 +118,33 @@ export default function ClientsPage() {
         const q = search.toLowerCase();
         const match = c.name.toLowerCase().includes(q) || (c.phone || '').includes(search);
         if (!match) return false;
-        const rest = statsOf(c.id).rest;
-        if (filter === 'debt') return rest > 0;
-        if (filter === 'clear') return rest <= 0;
+        const bal = statsOf(c.id).balance;
+        if (filter === 'debt') return bal.hasDebt;
+        if (filter === 'credit') return bal.credit > 0;
+        if (filter === 'clear') return !bal.hasDebt && bal.credit <= 0;
         return true;
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [clients, search, filter, sales, commands, payments]
+    [clients, search, filter, sales, commands, payments, oldDebts, refunds]
   );
 
   const globals = useMemo(() => {
     const total =
-      sales.reduce((s, x) => s + x.finalAmount, 0) + commands.reduce((s, x) => s + x.totalAmount, 0);
+      sales.reduce((s, x) => s + x.finalAmount, 0) + commands.reduce((s, x) => s + x.totalAmount, 0)
+      + oldDebts.reduce((s, x) => s + x.amount, 0);
     const paid =
-      sales.reduce((s, x) => s + x.paidAmount, 0) + commands.reduce((s, x) => s + x.paidAmount, 0);
+      sales.reduce((s, x) => s + x.paidAmount, 0) + commands.reduce((s, x) => s + x.paidAmount, 0)
+      + oldDebts.reduce((s, x) => s + x.paidAmount, 0);
     const rest =
-      sales.reduce((s, x) => s + x.restAmount, 0) + commands.reduce((s, x) => s + x.restAmount, 0);
-    const withDebt = clients.filter((c) => statsOf(c.id).rest > 0).length;
-    return { total, paid, rest, withDebt };
+      sales.reduce((s, x) => s + x.restAmount, 0) + commands.reduce((s, x) => s + x.restAmount, 0)
+      + oldDebts.reduce((s, x) => s + x.restAmount, 0);
+    // Avances : ce que l'entreprise doit aux clients qui ont trop verse
+    const credit = clients.reduce((s, c) => s + Math.max(0, c.creditAmount ?? 0), 0);
+    const withDebt = clients.filter((c) => statsOf(c.id).balance.hasDebt).length;
+    const withCredit = clients.filter((c) => (c.creditAmount ?? 0) > 0).length;
+    return { total, paid, rest, credit, withDebt, withCredit };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sales, commands, clients, payments]);
+  }, [sales, commands, clients, payments, oldDebts, refunds]);
 
   const handleSubmit = async (data: Omit<Client, 'id'>) => {
     if (editing) {
@@ -128,6 +165,31 @@ export default function ClientsPage() {
     toast.success('Versement enregistré — la dette du client a été réduite');
     setVersing(null);
     if (payment) setPrintPrompt({ client, payment });
+  };
+
+  /** Ancienne dette : creation OU modification depuis la meme fenetre. */
+  const handleOldDebt = async (
+    client: Client, amount: number, date: string, description: string,
+  ) => {
+    if (editOldDebt) {
+      await updateOldDebt(editOldDebt.id, amount, date, description);
+      toast.success('Ancienne dette modifiee — la dette du client a ete recalculee');
+    } else {
+      await addOldDebt(client.id, amount, date, description);
+      toast.success('Ancienne dette enregistree — elle s\u2019ajoute a la dette du client');
+    }
+    setEditOldDebt(null);
+    setOldDebtFor(null);
+  };
+
+  /** Restitution de l'excedent verse par le client (sortie de caisse). */
+  const handleRefund = async (
+    client: Client, amount: number, notes: string, refundedAt: string,
+    method: PaymentMethodDetails,
+  ) => {
+    await refundCredit(client.id, amount, refundedAt, notes, method);
+    toast.success('Excedent rendu au client — la sortie de caisse a ete enregistree');
+    setRefunding(null);
   };
 
   const doPrintReceipt = (client: Client, payment: PartyPayment) => {
@@ -194,11 +256,12 @@ export default function ClientsPage() {
         }
       />
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard label="Chiffre d'affaires clients" value={globals.total} format="currency" icon={<Receipt size={22} />} index={0} accent="gold" />
         <StatCard label="Total encaissé" value={globals.paid} format="currency" icon={<CheckCircle2 size={22} />} index={1} accent="pistachio" />
         <StatCard label="Dettes clients" value={globals.rest} format="currency" icon={<TrendingDown size={22} />} index={2} accent="rose" />
-        <StatCard label="Clients endettés" value={globals.withDebt} icon={<AlertTriangle size={22} />} index={3} accent="caramel" />
+        <StatCard label="Avances à rendre" value={globals.credit} format="currency" icon={<PiggyBank size={22} />} index={3} accent="pistachio" />
+        <StatCard label="Clients endettés" value={globals.withDebt} icon={<AlertTriangle size={22} />} index={4} accent="caramel" />
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -211,6 +274,7 @@ export default function ClientsPage() {
           options={[
             { value: 'all', label: 'Tous les clients' },
             { value: 'debt', label: 'Avec dette' },
+            { value: 'credit', label: 'Avec excédent' },
             { value: 'clear', label: 'Sans dette' },
           ]}
           className="max-w-[200px]"
@@ -223,8 +287,10 @@ export default function ClientsPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {filtered.map((c, i) => {
             const st = statsOf(c.id);
-            const hasDebt = st.rest > 0;
-            const paidPct = st.total > 0 ? Math.min(100, (st.paid / st.total) * 100) : 100;
+            const bal = st.balance;
+            const hasDebt = bal.hasDebt;
+            const hasCredit = bal.hasCredit;
+            const paidPct = bal.paidPercent;
             return (
               <Card
                 key={c.id}
@@ -250,6 +316,12 @@ export default function ClientsPage() {
                     <motion.div animate={{ scale: [1, 1.06, 1] }} transition={{ duration: 2, repeat: Infinity }}>
                       <Badge variant="danger" className="gap-1"><AlertTriangle size={10} /> Dette</Badge>
                     </motion.div>
+                  ) : hasCredit ? (
+                    <motion.div animate={{ scale: [1, 1.06, 1] }} transition={{ duration: 2, repeat: Infinity }}>
+                      <Badge variant="success" className="gap-1">
+                        <PiggyBank size={10} /> + {formatCurrency(bal.creditToReturn)}
+                      </Badge>
+                    </motion.div>
                   ) : (
                     <Badge variant="success" className="gap-1"><CheckCircle2 size={10} /> À jour</Badge>
                   )}
@@ -260,7 +332,11 @@ export default function ClientsPage() {
                     <div className="grid grid-cols-3 gap-2 mb-2.5">
                       <Fig label="Dette totale" value={formatCurrency(st.total)} />
                       <Fig label="Total payé" value={formatCurrency(st.paid)} accent="text-pistachio" />
-                      <Fig label="Reste" value={formatCurrency(st.rest)} accent={hasDebt ? 'text-rose-deep' : 'text-pistachio'} />
+                      <Fig
+                        label={hasCredit ? 'Solde en sa faveur' : 'Reste'}
+                        value={hasCredit ? `+ ${formatCurrency(bal.creditToReturn)}` : formatCurrency(Math.max(0, bal.net))}
+                        accent={hasDebt ? 'text-rose-deep' : 'text-pistachio'}
+                      />
                     </div>
                     <div className="h-2 rounded-full bg-vanilla overflow-hidden border border-gold/10">
                       <motion.div
@@ -271,9 +347,24 @@ export default function ClientsPage() {
                       />
                     </div>
                     <div className="flex justify-between mt-1.5 text-[10px] text-text-muted">
-                      <span>{st.salesList.length} vente(s) · {st.commandsList.length} commande(s)</span>
+                      <span>
+                        {st.salesList.length} vente(s) · {st.commandsList.length} commande(s)
+                        {st.oldDebtsList.length > 0 && ` · ${st.oldDebtsList.length} ancienne(s) dette(s)`}
+                      </span>
                       <span>{st.payments.length} versement(s) · {paidPct.toFixed(0)}%</span>
                     </div>
+
+                    {/* Le client a verse PLUS que sa dette : l'entreprise lui doit la difference */}
+                    {bal.credit > 0 && (
+                      <div className="mt-2 flex items-center justify-between rounded-lg border border-pistachio/35 bg-pistachio/10 px-2.5 py-1.5">
+                        <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-pistachio">
+                          <PiggyBank size={11} /> Avance du client
+                        </span>
+                        <span className="text-xs font-bold tabular text-pistachio">
+                          + {formatCurrency(bal.credit)}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="mt-auto space-y-2">
@@ -285,9 +376,22 @@ export default function ClientsPage() {
                         title="Enregistrer un versement du client"
                       >
                         <HandCoins size={16} />
-                        {hasDebt ? `Versement (reste ${formatCurrency(st.rest)})` : 'Versement'}
+                        {hasDebt ? `Versement (reste ${formatCurrency(bal.net)})` : 'Versement'}
                       </Button>
                     )}
+
+                    {/* Visible UNIQUEMENT quand le client a un excedent a recuperer */}
+                    {bal.credit > 0 && can('clients', 'pay') && (
+                      <Button
+                        variant="mint"
+                        className="w-full font-bold"
+                        onClick={() => setRefunding(c)}
+                        title="Rendre au client l'argent qu'il a versé en trop"
+                      >
+                        <Undo2 size={16} /> Rendre l&rsquo;excédent ({formatCurrency(bal.credit)})
+                      </Button>
+                    )}
+
                     <div className="grid grid-cols-2 gap-1.5">
                       <Button
                         size="sm" variant="secondary" className="text-xs"
@@ -304,6 +408,16 @@ export default function ClientsPage() {
                         <FileBarChart size={14} /> Compte rendu
                       </Button>
                     </div>
+                    {can('clients', 'create') && (
+                      <Button
+                        size="sm" variant="secondary" className="w-full text-xs"
+                        onClick={() => { setEditOldDebt(null); setOldDebtFor(c); }}
+                        title="Saisir une ardoise que le client devait déjà avant le logiciel"
+                      >
+                        <History size={14} /> Ancienne dette
+                        {st.oldDebtsList.length > 0 && ` (${st.oldDebtsList.length})`}
+                      </Button>
+                    )}
                     <div className="flex gap-1.5">
                       {can('clients', 'edit') && (
                         <Button size="sm" variant="ghost" className="flex-1 text-xs" onClick={() => { setEditing(c); setFormOpen(true); }}>
@@ -335,27 +449,58 @@ export default function ClientsPage() {
           const st = statsOf(history.id);
           return (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <Tile label="Dette totale" value={formatCurrency(st.total)} />
                 <Tile label="Total payé" value={formatCurrency(st.paid)} color="text-pistachio" />
                 <Tile label="Reste à payer" value={formatCurrency(st.rest)} color="text-rose-deep" />
-                <Tile label="Versements" value={String(st.payments.length)} color="text-gold-dark" />
+                <Tile
+                  label="Avance du client"
+                  value={st.credit > 0 ? `+ ${formatCurrency(st.credit)}` : formatCurrency(0)}
+                  color="text-pistachio"
+                />
+                <Tile
+                  label="Solde net"
+                  value={st.balance.hasCredit
+                    ? `+ ${formatCurrency(st.balance.creditToReturn)}`
+                    : formatCurrency(Math.max(0, st.balance.net))}
+                  color={st.balance.hasDebt ? 'text-rose-deep' : 'text-pistachio'}
+                />
               </div>
 
-              {can('clients', 'pay') && (
-                <Button
-                  variant="gold" className="w-full"
-                  onClick={() => { setVersing(history); setHistory(null); }}
-                >
-                  <HandCoins size={16} /> Nouveau versement
-                </Button>
-              )}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {can('clients', 'pay') && (
+                  <Button
+                    variant="gold" className="w-full"
+                    onClick={() => { setVersing(history); setHistory(null); }}
+                  >
+                    <HandCoins size={16} /> Nouveau versement
+                  </Button>
+                )}
+                {can('clients', 'create') && (
+                  <Button
+                    variant="secondary" className="w-full"
+                    onClick={() => { setEditOldDebt(null); setOldDebtFor(history); setHistory(null); }}
+                  >
+                    <History size={16} /> Ancienne dette
+                  </Button>
+                )}
+                {st.credit > 0 && can('clients', 'pay') && (
+                  <Button
+                    variant="mint" className="w-full"
+                    onClick={() => { setRefunding(history); setHistory(null); }}
+                  >
+                    <Undo2 size={16} /> Rendre {formatCurrency(st.credit)}
+                  </Button>
+                )}
+              </div>
 
               <div className="flex gap-2 border-b border-gold/15 overflow-x-auto">
                 {([
                   ['payments', `Versements (${st.payments.length})`],
                   ['sales', `Ventes (${st.salesList.length})`],
                   ['commands', `Commandes (${st.commandsList.length})`],
+                  ['oldDebts', `Anciennes dettes (${st.oldDebtsList.length})`],
+                  ['refunds', `Excédents rendus (${st.refundsList.length})`],
                 ] as const).map(([key, label]) => (
                   <button
                     key={key}
@@ -468,6 +613,120 @@ export default function ClientsPage() {
                             </td>
                           </tr>
                         ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              )}
+
+              {historyTab === 'oldDebts' && (
+                st.oldDebtsList.length === 0 ? (
+                  <EmptyState message="Aucune ancienne dette enregistrée" icon={<History size={30} />} />
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-gold/15">
+                    <table className="w-full text-sm">
+                      <thead className="bg-vanilla/60 text-text-secondary">
+                        <tr>
+                          <th className="text-left px-3 py-2">Date</th>
+                          <th className="text-left px-3 py-2">Description</th>
+                          <th className="text-right px-3 py-2">Montant</th>
+                          <th className="text-right px-3 py-2">Réglé</th>
+                          <th className="text-right px-3 py-2">Reste</th>
+                          <th className="text-center px-3 py-2">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {st.oldDebtsList.map((d) => (
+                          <tr key={d.id} className="border-t border-gold/10">
+                            <td className="px-3 py-2 text-xs">{formatDate(d.date, language)}</td>
+                            <td className="px-3 py-2 text-xs text-text-secondary">{d.description || '—'}</td>
+                            <td className="px-3 py-2 text-right tabular font-bold">{formatCurrency(d.amount)}</td>
+                            <td className="px-3 py-2 text-right tabular text-pistachio">{formatCurrency(d.paidAmount)}</td>
+                            <td className={`px-3 py-2 text-right tabular ${d.restAmount > 0 ? 'text-rose-deep font-bold' : 'text-pistachio'}`}>
+                              {formatCurrency(d.restAmount)}
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center justify-center gap-1">
+                                {can('clients', 'edit') && (
+                                  <Button
+                                    size="icon" variant="ghost" title="Modifier l'ancienne dette"
+                                    onClick={() => { setEditOldDebt(d); setOldDebtFor(history); setHistory(null); }}
+                                  >
+                                    <Pencil size={15} />
+                                  </Button>
+                                )}
+                                {can('clients', 'delete') && (
+                                  <Button size="icon" variant="ghost" title="Supprimer" onClick={() => setDeleteOldDebtId(d.id)}>
+                                    <Trash2 size={15} className="text-rose-deep" />
+                                  </Button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 border-gold/25 bg-vanilla/40">
+                          <td className="px-3 py-2 text-xs font-bold uppercase" colSpan={2}>Total</td>
+                          <td className="px-3 py-2 text-right tabular font-bold">{formatCurrency(st.oldDebtsTotal)}</td>
+                          <td className="px-3 py-2 text-right tabular font-bold text-pistachio">
+                            {formatCurrency(st.oldDebtsTotal - st.oldDebtsRest)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular font-bold text-rose-deep">
+                            {formatCurrency(st.oldDebtsRest)}
+                          </td>
+                          <td />
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              )}
+
+              {historyTab === 'refunds' && (
+                st.refundsList.length === 0 ? (
+                  <EmptyState message="Aucun excédent rendu à ce client" icon={<Undo2 size={30} />} />
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-gold/15">
+                    <table className="w-full text-sm">
+                      <thead className="bg-vanilla/60 text-text-secondary">
+                        <tr>
+                          <th className="text-left px-3 py-2">Date &amp; heure</th>
+                          <th className="text-right px-3 py-2">Montant rendu</th>
+                          <th className="text-left px-3 py-2">Mode de règlement</th>
+                          <th className="text-left px-3 py-2">Note</th>
+                          <th className="text-center px-3 py-2">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {st.refundsList.map((r) => (
+                          <tr key={r.id} className="border-t border-gold/10">
+                            <td className="px-3 py-2 tabular text-xs">{formatDateTime(r.refundedAt, language)}</td>
+                            <td className="px-3 py-2 text-right tabular font-bold text-caramel">
+                              − {formatCurrency(r.amount)}
+                            </td>
+                            <td className="px-3 py-2 text-xs">
+                              <Badge variant={r.method === 'especes' || !r.method ? 'success' : 'info'}>
+                                {paymentMethodLabel(r)}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2 text-xs text-text-muted">{r.notes || '—'}</td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center justify-center gap-1">
+                                {can('clients', 'delete') && (
+                                  <Button size="icon" variant="ghost" title="Annuler ce remboursement" onClick={() => setDeleteRefundId(r.id)}>
+                                    <Trash2 size={15} className="text-rose-deep" />
+                                  </Button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 border-gold/25 bg-vanilla/40">
+                          <td className="px-3 py-2 text-xs font-bold uppercase">Total rendu</td>
+                          <td className="px-3 py-2 text-right tabular font-bold text-caramel">
+                            − {formatCurrency(st.refundsTotal)}
+                          </td>
+                          <td colSpan={3} />
+                        </tr>
                       </tbody>
                     </table>
                   </div>
@@ -590,7 +849,7 @@ export default function ClientsPage() {
             clientName={versing.name}
             clientPhone={versing.phone}
             total={st.total}
-            paid={st.paid}
+            paid={st.paid + st.credit}
             onSubmit={(amount, notes, paidAt, method) =>
               handleVersement(versing, amount, notes, paidAt, method)}
           />
@@ -608,6 +867,36 @@ export default function ClientsPage() {
           setEditSale(null);
         }}
       />
+
+      {/* ---- Ancienne dette (ardoise d'avant le logiciel) ---- */}
+      {oldDebtFor && (
+        <OldDebtModal
+          open={!!oldDebtFor}
+          onClose={() => { setOldDebtFor(null); setEditOldDebt(null); }}
+          kind="client"
+          partyName={oldDebtFor.name}
+          initial={editOldDebt}
+          onSubmit={(amount, date, description) =>
+            handleOldDebt(oldDebtFor, amount, date, description)}
+        />
+      )}
+
+      {/* ---- Rendre au client l'excédent qu'il a versé ---- */}
+      {refunding && (() => {
+        const st = statsOf(refunding.id);
+        return (
+          <RefundCreditModal
+            open={!!refunding}
+            onClose={() => setRefunding(null)}
+            kind="client"
+            partyName={refunding.name}
+            partyPhone={refunding.phone}
+            credit={st.credit}
+            onSubmit={(amount, notes, refundedAt, method) =>
+              handleRefund(refunding, amount, notes, refundedAt, method)}
+          />
+        );
+      })()}
 
       {/* ---- Période : compte rendu détaillé ---- */}
       <ClientStatementModal client={statement} onClose={() => setStatement(null)} />
@@ -670,6 +959,24 @@ export default function ClientsPage() {
         onConfirm={() => { if (deletePaymentId) void deletePayment(deletePaymentId).then(() => toast.success('Versement supprimé')); }}
         title="Supprimer le versement"
         message="Le montant redeviendra dû et l'entrée de caisse sera annulée."
+      />
+      <ConfirmDialog
+        open={!!deleteOldDebtId}
+        onClose={() => setDeleteOldDebtId(null)}
+        onConfirm={() => {
+          if (deleteOldDebtId) void deleteOldDebt(deleteOldDebtId).then(() => toast.success('Ancienne dette supprimée'));
+        }}
+        title="Supprimer l'ancienne dette"
+        message="La dette disparaîtra du compte du client ; ce qui avait déjà été réglé sera reporté sur ses autres dettes."
+      />
+      <ConfirmDialog
+        open={!!deleteRefundId}
+        onClose={() => setDeleteRefundId(null)}
+        onConfirm={() => {
+          if (deleteRefundId) void deleteRefund(deleteRefundId).then(() => toast.success('Remboursement annulé'));
+        }}
+        title="Annuler le remboursement"
+        message="L'excédent revient au compte du client et la sortie de caisse est supprimée."
       />
     </div>
   );

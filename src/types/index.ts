@@ -55,6 +55,12 @@ export interface Supplier {
   name: string;
   phone: string;
   address: string;
+  /**
+   * Trop-versé au fournisseur : montant payé EN PLUS de ses factures. Il reste
+   * acquis au compte du fournisseur jusqu'à ce qu'il soit imputé sur une
+   * prochaine facture ou récupéré depuis sa carte.
+   */
+  creditAmount?: number;
 }
 
 // ---------- Purchases ----------
@@ -109,6 +115,12 @@ export interface Client {
   phone: string;
   address?: string;
   note?: string;
+  /**
+   * Avance du client : ce qu'il a versé EN PLUS de sa dette. Tant qu'elle n'est
+   * pas imputée sur une nouvelle vente ni rendue, sa carte affiche un solde
+   * POSITIF en sa faveur (« il a un crédit sur l'entreprise »).
+   */
+  creditAmount?: number;
 }
 
 export interface ClientDebtVersement {
@@ -474,6 +486,53 @@ export interface PaymentMethodDetails {
   chequeNumber?: string;
   virementNumber?: string;
   bankName?: string;
+}
+
+/** Client ou fournisseur — les deux partagent le grand livre « anciennes dettes ». */
+export type PartyType = 'client' | 'supplier';
+
+/**
+ * ANCIENNE DETTE — l'ardoise d'avant le logiciel.
+ *
+ * Saisie depuis la carte du client (ce qu'il nous devait) ou du fournisseur
+ * (ce que nous lui devions) : montant, description et date. Elle se comporte
+ * comme une facture non soldée — elle entre dans la dette du tiers et se
+ * règle par le bouton « Versement » — mais ne génère AUCUNE écriture de
+ * caisse à sa création puisque aucun argent n'a bougé.
+ */
+export interface PartyOldDebt {
+  id: string;
+  partyType: PartyType;
+  partyId: string;
+  partyName?: string;
+  amount: number;
+  paidAmount: number;
+  restAmount: number;
+  date: string;          // YYYY-MM-DD
+  description: string;
+  createdAt?: string;
+  createdBy?: string;
+}
+
+/**
+ * REMBOURSEMENT D'UN EXCÉDENT — l'argent rendu au client (sortie de caisse)
+ * ou récupéré auprès du fournisseur (entrée de caisse).
+ */
+export interface PartyCreditRefund {
+  id: string;
+  partyType: PartyType;
+  partyId: string;
+  partyName?: string;
+  amount: number;
+  date: string;          // YYYY-MM-DD
+  refundedAt: string;    // ISO datetime
+  notes?: string;
+  method?: PaymentMethod;
+  chequeNumber?: string;
+  virementNumber?: string;
+  bankName?: string;
+  createdAt?: string;
+  createdBy?: string;
 }
 
 

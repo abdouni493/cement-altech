@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import {
   Truck, Plus, Pencil, Trash2, Phone, MapPin, Wallet, Printer,
   CheckCircle2, AlertTriangle, Receipt, TrendingDown, Coins, FileBarChart, Eye,
-  HandCoins,
+  HandCoins, History, PiggyBank, Undo2,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -20,6 +20,8 @@ import { VersementModal } from '@/components/shared/VersementModal';
 import { EditPaymentModal } from '@/components/shared/EditPaymentModal';
 import { EditPurchaseModal } from '@/components/shared/EditPurchaseModal';
 import { SupplierStatementModal } from '@/components/shared/SupplierStatementModal';
+import { OldDebtModal } from '@/components/shared/OldDebtModal';
+import { RefundCreditModal } from '@/components/shared/RefundCreditModal';
 import { useSupplierStore } from '@/store/supplierStore';
 import { usePurchaseStore } from '@/store/purchaseStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -27,15 +29,22 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from '@/lib/utils';
 import { printPaymentReceipt } from '@/lib/documents';
 import { printInvoice } from '@/lib/print';
+import { computePartyBalance } from '@/lib/partyBalance';
 import { toast } from '@/components/ui/Toast';
-import type { Supplier, PartyPayment, PaymentMethodDetails, Purchase } from '@/types';
+import type {
+  Supplier, PartyPayment, PaymentMethodDetails, Purchase, PartyOldDebt,
+} from '@/types';
 
-type SupplierFilter = 'all' | 'debt' | 'clear';
+type SupplierFilter = 'all' | 'debt' | 'clear' | 'credit';
+type SupplierHistoryTab = 'payments' | 'purchases' | 'oldDebts' | 'refunds';
 
 export default function SuppliersPage() {
   const { can } = usePermissions();
-  const { suppliers, payments, addSupplier, updateSupplier, deleteSupplier, payDebt, updatePayment, deletePayment } =
-    useSupplierStore();
+  const {
+    suppliers, payments, oldDebts, refunds,
+    addSupplier, updateSupplier, deleteSupplier, payDebt, updatePayment, deletePayment,
+    addOldDebt, updateOldDebt, deleteOldDebt, refundCredit, deleteRefund,
+  } = useSupplierStore();
   const { purchases, updatePurchase, deletePurchase } = usePurchaseStore();
   const settings = useSettingsStore((s) => s.settings);
 
@@ -44,7 +53,7 @@ export default function SuppliersPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Supplier | null>(null);
   const [history, setHistory] = useState<Supplier | null>(null);
-  const [historyTab, setHistoryTab] = useState<'purchases' | 'payments'>('payments');
+  const [historyTab, setHistoryTab] = useState<SupplierHistoryTab>('payments');
   const [versing, setVersing] = useState<Supplier | null>(null);
   const [editPayment, setEditPayment] = useState<PartyPayment | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -54,19 +63,46 @@ export default function SuppliersPage() {
   const [deletePurchaseId, setDeletePurchaseId] = useState<string | null>(null);
   const [statement, setStatement] = useState<Supplier | null>(null);
   const [printPrompt, setPrintPrompt] = useState<{ supplier: Supplier; payment: PartyPayment } | null>(null);
+  const [oldDebtFor, setOldDebtFor] = useState<Supplier | null>(null);
+  const [editOldDebt, setEditOldDebt] = useState<PartyOldDebt | null>(null);
+  const [deleteOldDebtId, setDeleteOldDebtId] = useState<string | null>(null);
+  const [refunding, setRefunding] = useState<Supplier | null>(null);
+  const [deleteRefundId, setDeleteRefundId] = useState<string | null>(null);
 
-  /** Debt situation of a supplier, computed from its invoices. */
+  /**
+   * Situation complete d'un fournisseur : factures d'achat + ANCIENNES DETTES,
+   * moins le TROP-VERSE qu'il nous doit encore.
+   *
+   * `balance.net` est negatif quand on lui a paye plus que du : sa carte
+   * affiche alors un « + » et le bouton « Recuperer l'excedent ».
+   */
   const statsOf = (id: string) => {
     const ps = purchases.filter((p) => p.supplierId === id);
     const pays = payments.filter((p) => p.partyId === id);
+    const olds = oldDebts.filter((d) => d.partyId === id);
+    const refs = refunds.filter((r) => r.partyId === id);
+    const balance = computePartyBalance({
+      documentsBilled: ps.reduce((s, x) => s + x.totalAmount, 0),
+      documentsPaid: ps.reduce((s, x) => s + x.paidAmount, 0),
+      documentsRest: ps.reduce((s, x) => s + x.restAmount, 0),
+      oldDebts: olds,
+      credit: suppliers.find((x) => x.id === id)?.creditAmount ?? 0,
+    });
     return {
       count: ps.length,
-      total: ps.reduce((s, x) => s + x.totalAmount, 0),
-      paid: ps.reduce((s, x) => s + x.paidAmount, 0),
-      rest: ps.reduce((s, x) => s + x.restAmount, 0),
+      balance,
+      total: balance.billed,
+      paid: balance.paid,
+      rest: balance.rest,
+      credit: balance.credit,
       list: ps,
       payments: [...pays].sort((a, b) => b.paidAt.localeCompare(a.paidAt)),
       settled: pays.reduce((s, x) => s + x.amount, 0),
+      oldDebtsList: [...olds].sort((a, b) => b.date.localeCompare(a.date)),
+      refundsList: [...refs].sort((a, b) => b.refundedAt.localeCompare(a.refundedAt)),
+      oldDebtsTotal: olds.reduce((s, x) => s + x.amount, 0),
+      oldDebtsRest: olds.reduce((s, x) => s + x.restAmount, 0),
+      refundsTotal: refs.reduce((s, x) => s + x.amount, 0),
     };
   };
 
@@ -76,23 +112,29 @@ export default function SuppliersPage() {
         const q = search.toLowerCase();
         const match = s.name.toLowerCase().includes(q) || (s.phone || '').includes(search);
         if (!match) return false;
-        const rest = statsOf(s.id).rest;
-        if (filter === 'debt') return rest > 0;
-        if (filter === 'clear') return rest <= 0;
+        const bal = statsOf(s.id).balance;
+        if (filter === 'debt') return bal.hasDebt;
+        if (filter === 'credit') return bal.credit > 0;
+        if (filter === 'clear') return !bal.hasDebt && bal.credit <= 0;
         return true;
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [suppliers, search, filter, purchases, payments]
+    [suppliers, search, filter, purchases, payments, oldDebts, refunds]
   );
 
   const globals = useMemo(() => {
-    const total = purchases.reduce((s, p) => s + p.totalAmount, 0);
-    const paid = purchases.reduce((s, p) => s + p.paidAmount, 0);
-    const rest = purchases.reduce((s, p) => s + p.restAmount, 0);
-    const withDebt = suppliers.filter((s) => statsOf(s.id).rest > 0).length;
-    return { total, paid, rest, withDebt };
+    const total = purchases.reduce((s, p) => s + p.totalAmount, 0)
+      + oldDebts.reduce((s, d) => s + d.amount, 0);
+    const paid = purchases.reduce((s, p) => s + p.paidAmount, 0)
+      + oldDebts.reduce((s, d) => s + d.paidAmount, 0);
+    const rest = purchases.reduce((s, p) => s + p.restAmount, 0)
+      + oldDebts.reduce((s, d) => s + d.restAmount, 0);
+    // Trop-verses : ce que les fournisseurs doivent encore rendre a l'entreprise
+    const credit = suppliers.reduce((s, x) => s + Math.max(0, x.creditAmount ?? 0), 0);
+    const withDebt = suppliers.filter((s) => statsOf(s.id).balance.hasDebt).length;
+    return { total, paid, rest, credit, withDebt };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [purchases, suppliers, payments]);
+  }, [purchases, suppliers, payments, oldDebts, refunds]);
 
   const handleSubmit = async (data: Omit<Supplier, 'id'>) => {
     if (editing) {
@@ -113,6 +155,31 @@ export default function SuppliersPage() {
     toast.success('Versement enregistré — la dette du fournisseur a été réduite');
     setVersing(null);
     if (payment) setPrintPrompt({ supplier, payment });
+  };
+
+  /** Ancienne dette fournisseur : creation OU modification. */
+  const handleOldDebt = async (
+    supplier: Supplier, amount: number, date: string, description: string,
+  ) => {
+    if (editOldDebt) {
+      await updateOldDebt(editOldDebt.id, amount, date, description);
+      toast.success('Ancienne dette modifiee — la dette du fournisseur a ete recalculee');
+    } else {
+      await addOldDebt(supplier.id, amount, date, description);
+      toast.success('Ancienne dette enregistree — elle s\u2019ajoute a la dette du fournisseur');
+    }
+    setEditOldDebt(null);
+    setOldDebtFor(null);
+  };
+
+  /** Recuperation du trop-verse (entree de caisse). */
+  const handleRefund = async (
+    supplier: Supplier, amount: number, notes: string, refundedAt: string,
+    method: PaymentMethodDetails,
+  ) => {
+    await refundCredit(supplier.id, amount, refundedAt, notes, method);
+    toast.success('Excedent recupere — l\u2019entree de caisse a ete enregistree');
+    setRefunding(null);
   };
 
   const doPrintReceipt = (supplier: Supplier, payment: PartyPayment) => {
@@ -169,11 +236,12 @@ export default function SuppliersPage() {
         }
       />
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard label="Total des achats" value={globals.total} format="currency" icon={<Receipt size={22} />} index={0} accent="gold" />
         <StatCard label="Total payé" value={globals.paid} format="currency" icon={<CheckCircle2 size={22} />} index={1} accent="pistachio" />
         <StatCard label="Dettes restantes" value={globals.rest} format="currency" icon={<TrendingDown size={22} />} index={2} accent="rose" />
-        <StatCard label="Fournisseurs à régler" value={globals.withDebt} icon={<AlertTriangle size={22} />} index={3} accent="caramel" />
+        <StatCard label="Trop-versé à récupérer" value={globals.credit} format="currency" icon={<PiggyBank size={22} />} index={3} accent="pistachio" />
+        <StatCard label="Fournisseurs à régler" value={globals.withDebt} icon={<AlertTriangle size={22} />} index={4} accent="caramel" />
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -186,6 +254,7 @@ export default function SuppliersPage() {
           options={[
             { value: 'all', label: 'Tous les fournisseurs' },
             { value: 'debt', label: 'Avec dette' },
+            { value: 'credit', label: 'Avec trop-versé' },
             { value: 'clear', label: 'Soldés' },
           ]}
           className="max-w-[200px]"
@@ -198,8 +267,10 @@ export default function SuppliersPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {filtered.map((s, i) => {
             const st = statsOf(s.id);
-            const hasDebt = st.rest > 0;
-            const paidPct = st.total > 0 ? Math.min(100, (st.paid / st.total) * 100) : 100;
+            const bal = st.balance;
+            const hasDebt = bal.hasDebt;
+            const hasCredit = bal.hasCredit;
+            const paidPct = bal.paidPercent;
             return (
               <Card
                 key={s.id}
@@ -226,6 +297,12 @@ export default function SuppliersPage() {
                     <motion.div animate={{ scale: [1, 1.06, 1] }} transition={{ duration: 2, repeat: Infinity }}>
                       <Badge variant="danger" className="gap-1"><AlertTriangle size={10} /> Dette</Badge>
                     </motion.div>
+                  ) : hasCredit ? (
+                    <motion.div animate={{ scale: [1, 1.06, 1] }} transition={{ duration: 2, repeat: Infinity }}>
+                      <Badge variant="success" className="gap-1">
+                        <PiggyBank size={10} /> + {formatCurrency(bal.creditToReturn)}
+                      </Badge>
+                    </motion.div>
                   ) : (
                     <Badge variant="success" className="gap-1"><CheckCircle2 size={10} /> Soldé</Badge>
                   )}
@@ -243,7 +320,11 @@ export default function SuppliersPage() {
                     <div className="grid grid-cols-3 gap-2 mb-2.5">
                       <Fig label="Dette totale" value={formatCurrency(st.total)} />
                       <Fig label="Total payé" value={formatCurrency(st.paid)} accent="text-pistachio" />
-                      <Fig label="Reste" value={formatCurrency(st.rest)} accent={hasDebt ? 'text-rose-deep' : 'text-pistachio'} />
+                      <Fig
+                        label={hasCredit ? 'Solde en notre faveur' : 'Reste'}
+                        value={hasCredit ? `+ ${formatCurrency(bal.creditToReturn)}` : formatCurrency(Math.max(0, bal.net))}
+                        accent={hasDebt ? 'text-rose-deep' : 'text-pistachio'}
+                      />
                     </div>
                     <div className="h-2 rounded-full bg-vanilla overflow-hidden border border-gold/10">
                       <motion.div
@@ -254,9 +335,24 @@ export default function SuppliersPage() {
                       />
                     </div>
                     <div className="flex justify-between mt-1.5 text-[10px] text-text-muted">
-                      <span>{st.count} facture(s)</span>
+                      <span>
+                        {st.count} facture(s)
+                        {st.oldDebtsList.length > 0 && ` · ${st.oldDebtsList.length} ancienne(s) dette(s)`}
+                      </span>
                       <span>{st.payments.length} versement(s) · {paidPct.toFixed(0)}% payé</span>
                     </div>
+
+                    {/* On lui a paye PLUS que du : il doit rendre la difference */}
+                    {bal.credit > 0 && (
+                      <div className="mt-2 flex items-center justify-between rounded-lg border border-pistachio/35 bg-pistachio/10 px-2.5 py-1.5">
+                        <span className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-pistachio">
+                          <PiggyBank size={11} /> Trop-versé au fournisseur
+                        </span>
+                        <span className="text-xs font-bold tabular text-pistachio">
+                          + {formatCurrency(bal.credit)}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Actions */}
@@ -269,9 +365,22 @@ export default function SuppliersPage() {
                         title="Enregistrer un versement au fournisseur"
                       >
                         <HandCoins size={16} />
-                        {hasDebt ? `Versement (reste ${formatCurrency(st.rest)})` : 'Versement'}
+                        {hasDebt ? `Versement (reste ${formatCurrency(bal.net)})` : 'Versement'}
                       </Button>
                     )}
+
+                    {/* Visible UNIQUEMENT quand on lui a verse trop d'argent */}
+                    {bal.credit > 0 && can('suppliers', 'pay') && (
+                      <Button
+                        variant="mint"
+                        className="w-full font-bold"
+                        onClick={() => setRefunding(s)}
+                        title="Enregistrer la restitution du trop-versé par le fournisseur"
+                      >
+                        <Undo2 size={16} /> Récupérer l&rsquo;excédent ({formatCurrency(bal.credit)})
+                      </Button>
+                    )}
+
                     <div className="grid grid-cols-2 gap-1.5">
                       <Button
                         size="sm" variant="secondary" className="text-xs"
@@ -288,6 +397,16 @@ export default function SuppliersPage() {
                         <FileBarChart size={14} /> Compte rendu
                       </Button>
                     </div>
+                    {can('suppliers', 'create') && (
+                      <Button
+                        size="sm" variant="secondary" className="w-full text-xs"
+                        onClick={() => { setEditOldDebt(null); setOldDebtFor(s); }}
+                        title="Saisir une somme déjà due au fournisseur avant le logiciel"
+                      >
+                        <History size={14} /> Ancienne dette
+                        {st.oldDebtsList.length > 0 && ` (${st.oldDebtsList.length})`}
+                      </Button>
+                    )}
                     <div className="flex gap-1.5">
                       {can('suppliers', 'edit') && (
                         <Button size="sm" variant="ghost" className="flex-1 text-xs" onClick={() => { setEditing(s); setFormOpen(true); }}>
@@ -319,29 +438,63 @@ export default function SuppliersPage() {
           const st = statsOf(history.id);
           return (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <Tile label="Dette totale" value={formatCurrency(st.total)} />
                 <Tile label="Total payé" value={formatCurrency(st.paid)} color="text-pistachio" />
                 <Tile label="Reste à payer" value={formatCurrency(st.rest)} color="text-rose-deep" />
-                <Tile label="Versements" value={String(st.payments.length)} color="text-gold-dark" />
+                <Tile
+                  label="Trop-versé"
+                  value={st.credit > 0 ? `+ ${formatCurrency(st.credit)}` : formatCurrency(0)}
+                  color="text-pistachio"
+                />
+                <Tile
+                  label="Solde net"
+                  value={st.balance.hasCredit
+                    ? `+ ${formatCurrency(st.balance.creditToReturn)}`
+                    : formatCurrency(Math.max(0, st.balance.net))}
+                  color={st.balance.hasDebt ? 'text-rose-deep' : 'text-pistachio'}
+                />
               </div>
 
-              {can('suppliers', 'pay') && (
-                <Button
-                  variant="gold" className="w-full"
-                  onClick={() => { setVersing(history); setHistory(null); }}
-                >
-                  <HandCoins size={16} /> Nouveau versement
-                </Button>
-              )}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {can('suppliers', 'pay') && (
+                  <Button
+                    variant="gold" className="w-full"
+                    onClick={() => { setVersing(history); setHistory(null); }}
+                  >
+                    <HandCoins size={16} /> Nouveau versement
+                  </Button>
+                )}
+                {can('suppliers', 'create') && (
+                  <Button
+                    variant="secondary" className="w-full"
+                    onClick={() => { setEditOldDebt(null); setOldDebtFor(history); setHistory(null); }}
+                  >
+                    <History size={16} /> Ancienne dette
+                  </Button>
+                )}
+                {st.credit > 0 && can('suppliers', 'pay') && (
+                  <Button
+                    variant="mint" className="w-full"
+                    onClick={() => { setRefunding(history); setHistory(null); }}
+                  >
+                    <Undo2 size={16} /> Récupérer {formatCurrency(st.credit)}
+                  </Button>
+                )}
+              </div>
 
-              <div className="flex gap-2 border-b border-gold/15">
-                {([['payments', `Versements (${st.payments.length})`], ['purchases', `Factures (${st.list.length})`]] as const).map(
+              <div className="flex gap-2 border-b border-gold/15 overflow-x-auto">
+                {([
+                  ['payments', `Versements (${st.payments.length})`],
+                  ['purchases', `Factures (${st.list.length})`],
+                  ['oldDebts', `Anciennes dettes (${st.oldDebtsList.length})`],
+                  ['refunds', `Excédents récupérés (${st.refundsList.length})`],
+                ] as const).map(
                   ([key, label]) => (
                     <button
                       key={key}
                       onClick={() => setHistoryTab(key)}
-                      className={`pb-2 px-3 text-sm font-semibold border-b-2 transition-all ${
+                      className={`pb-2 px-3 text-sm font-semibold border-b-2 transition-all whitespace-nowrap ${
                         historyTab === key ? 'border-gold text-gold-dark' : 'border-transparent text-text-muted'
                       }`}
                     >
@@ -351,7 +504,117 @@ export default function SuppliersPage() {
                 )}
               </div>
 
-              {historyTab === 'payments' ? (
+              {historyTab === 'oldDebts' ? (
+                st.oldDebtsList.length === 0 ? (
+                  <EmptyState message="Aucune ancienne dette enregistrée" icon={<History size={30} />} />
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-gold/15">
+                    <table className="w-full text-sm">
+                      <thead className="bg-vanilla/60 text-text-secondary">
+                        <tr>
+                          <th className="text-left px-3 py-2">Date</th>
+                          <th className="text-left px-3 py-2">Description</th>
+                          <th className="text-right px-3 py-2">Montant</th>
+                          <th className="text-right px-3 py-2">Réglé</th>
+                          <th className="text-right px-3 py-2">Reste</th>
+                          <th className="text-center px-3 py-2">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {st.oldDebtsList.map((d) => (
+                          <tr key={d.id} className="border-t border-gold/10">
+                            <td className="px-3 py-2 text-xs">{formatDate(d.date)}</td>
+                            <td className="px-3 py-2 text-xs text-text-secondary">{d.description || '—'}</td>
+                            <td className="px-3 py-2 text-right tabular font-bold">{formatCurrency(d.amount)}</td>
+                            <td className="px-3 py-2 text-right tabular text-pistachio">{formatCurrency(d.paidAmount)}</td>
+                            <td className={`px-3 py-2 text-right tabular ${d.restAmount > 0 ? 'text-rose-deep font-bold' : 'text-pistachio'}`}>
+                              {formatCurrency(d.restAmount)}
+                            </td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center justify-center gap-1">
+                                {can('suppliers', 'edit') && (
+                                  <Button
+                                    size="icon" variant="ghost" title="Modifier l'ancienne dette"
+                                    onClick={() => { setEditOldDebt(d); setOldDebtFor(history); setHistory(null); }}
+                                  >
+                                    <Pencil size={15} />
+                                  </Button>
+                                )}
+                                {can('suppliers', 'delete') && (
+                                  <Button size="icon" variant="ghost" title="Supprimer" onClick={() => setDeleteOldDebtId(d.id)}>
+                                    <Trash2 size={15} className="text-rose-deep" />
+                                  </Button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 border-gold/25 bg-vanilla/40">
+                          <td className="px-3 py-2 text-xs font-bold uppercase" colSpan={2}>Total</td>
+                          <td className="px-3 py-2 text-right tabular font-bold">{formatCurrency(st.oldDebtsTotal)}</td>
+                          <td className="px-3 py-2 text-right tabular font-bold text-pistachio">
+                            {formatCurrency(st.oldDebtsTotal - st.oldDebtsRest)}
+                          </td>
+                          <td className="px-3 py-2 text-right tabular font-bold text-rose-deep">
+                            {formatCurrency(st.oldDebtsRest)}
+                          </td>
+                          <td />
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              ) : historyTab === 'refunds' ? (
+                st.refundsList.length === 0 ? (
+                  <EmptyState message="Aucun excédent récupéré" icon={<Undo2 size={30} />} />
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-gold/15">
+                    <table className="w-full text-sm">
+                      <thead className="bg-vanilla/60 text-text-secondary">
+                        <tr>
+                          <th className="text-left px-3 py-2">Date &amp; heure</th>
+                          <th className="text-right px-3 py-2">Montant récupéré</th>
+                          <th className="text-left px-3 py-2">Mode de règlement</th>
+                          <th className="text-left px-3 py-2">Note</th>
+                          <th className="text-center px-3 py-2">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {st.refundsList.map((r) => (
+                          <tr key={r.id} className="border-t border-gold/10">
+                            <td className="px-3 py-2 tabular text-xs">{formatDateTime(r.refundedAt)}</td>
+                            <td className="px-3 py-2 text-right tabular font-bold text-pistachio">
+                              + {formatCurrency(r.amount)}
+                            </td>
+                            <td className="px-3 py-2 text-xs">
+                              <Badge variant={r.method === 'especes' || !r.method ? 'success' : 'info'}>
+                                {paymentMethodLabel(r)}
+                              </Badge>
+                            </td>
+                            <td className="px-3 py-2 text-xs text-text-muted">{r.notes || '—'}</td>
+                            <td className="px-3 py-2">
+                              <div className="flex items-center justify-center gap-1">
+                                {can('suppliers', 'delete') && (
+                                  <Button size="icon" variant="ghost" title="Annuler cette récupération" onClick={() => setDeleteRefundId(r.id)}>
+                                    <Trash2 size={15} className="text-rose-deep" />
+                                  </Button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        <tr className="border-t-2 border-gold/25 bg-vanilla/40">
+                          <td className="px-3 py-2 text-xs font-bold uppercase">Total récupéré</td>
+                          <td className="px-3 py-2 text-right tabular font-bold text-pistachio">
+                            + {formatCurrency(st.refundsTotal)}
+                          </td>
+                          <td colSpan={3} />
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              ) : historyTab === 'payments' ? (
                 st.payments.length === 0 ? (
                   <EmptyState message="Aucun versement enregistré" icon={<Coins size={30} />} />
                 ) : (
@@ -473,7 +736,7 @@ export default function SuppliersPage() {
             clientName={versing.name}
             clientPhone={versing.phone}
             total={st.total}
-            paid={st.paid}
+            paid={st.paid + st.credit}
             onSubmit={(amount, notes, paidAt, method) =>
               handleVersement(versing, amount, notes, paidAt, method)}
           />
@@ -543,6 +806,36 @@ export default function SuppliersPage() {
         }}
       />
 
+      {/* ---- Ancienne dette (somme deja due avant le logiciel) ---- */}
+      {oldDebtFor && (
+        <OldDebtModal
+          open={!!oldDebtFor}
+          onClose={() => { setOldDebtFor(null); setEditOldDebt(null); }}
+          kind="supplier"
+          partyName={oldDebtFor.name}
+          initial={editOldDebt}
+          onSubmit={(amount, date, description) =>
+            handleOldDebt(oldDebtFor, amount, date, description)}
+        />
+      )}
+
+      {/* ---- Recuperer le trop-verse ---- */}
+      {refunding && (() => {
+        const st = statsOf(refunding.id);
+        return (
+          <RefundCreditModal
+            open={!!refunding}
+            onClose={() => setRefunding(null)}
+            kind="supplier"
+            partyName={refunding.name}
+            partyPhone={refunding.phone}
+            credit={st.credit}
+            onSubmit={(amount, notes, refundedAt, method) =>
+              handleRefund(refunding, amount, notes, refundedAt, method)}
+          />
+        );
+      })()}
+
       {/* ---- Période : compte rendu détaillé ---- */}
       <SupplierStatementModal supplier={statement} onClose={() => setStatement(null)} />
 
@@ -605,6 +898,24 @@ export default function SuppliersPage() {
         onConfirm={() => { if (deletePaymentId) void deletePayment(deletePaymentId).then(() => toast.success('Versement supprimé')); }}
         title="Supprimer le versement"
         message="Le montant sera de nouveau dû et la sortie de caisse annulée."
+      />
+      <ConfirmDialog
+        open={!!deleteOldDebtId}
+        onClose={() => setDeleteOldDebtId(null)}
+        onConfirm={() => {
+          if (deleteOldDebtId) void deleteOldDebt(deleteOldDebtId).then(() => toast.success('Ancienne dette supprimée'));
+        }}
+        title="Supprimer l'ancienne dette"
+        message="La dette disparaîtra du compte du fournisseur ; ce qui avait déjà été réglé sera reporté sur ses autres factures."
+      />
+      <ConfirmDialog
+        open={!!deleteRefundId}
+        onClose={() => setDeleteRefundId(null)}
+        onConfirm={() => {
+          if (deleteRefundId) void deleteRefund(deleteRefundId).then(() => toast.success('Récupération annulée'));
+        }}
+        title="Annuler la récupération"
+        message="Le trop-versé revient au compte du fournisseur et l'entrée de caisse est supprimée."
       />
     </div>
   );

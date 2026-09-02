@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   FileBarChart, Printer, ShoppingBag, Coins, ClipboardList, Wallet, RotateCcw, Package, Percent,
+  History, Undo2, PiggyBank,
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -13,6 +14,7 @@ import { useClientDebtStore } from '@/store/clientDebtStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { formatCurrency, formatDate, formatDateTime, todayISO, paymentMethodLabel } from '@/lib/utils';
+import { computePartyBalance } from '@/lib/partyBalance';
 import { printDetailedReport, type PrintRow, type PrintTableSection } from '@/lib/reportPrint';
 import type { Client } from '@/types';
 
@@ -25,6 +27,9 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
   const { language } = useLanguage();
   const sales = useSalesStore((s) => s.sales);
   const payments = useClientStore((s) => s.payments);
+  const clientRows = useClientStore((s) => s.clients);
+  const oldDebts = useClientStore((s) => s.oldDebts);
+  const refunds = useClientStore((s) => s.refunds);
   const commands = useCommandStore((s) => s.commands);
   const debts = useClientDebtStore((s) => s.debts);
   const settings = useSettingsStore((s) => s.settings);
@@ -68,6 +73,16 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       .filter((p) => p.partyId === client.id && inPeriod(p.paidAt, f, t))
       .sort((a, b) => a.paidAt.localeCompare(b.paidAt));
 
+    // ANCIENNES DETTES (ardoises d'avant le logiciel) tombant dans la periode
+    const oldDebtsList = oldDebts
+      .filter((d) => d.partyId === client.id && inPeriod(d.date, f, t))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    // EXCEDENTS RENDUS au client sur la periode (sortie de caisse)
+    const refundsList = refunds
+      .filter((r) => r.partyId === client.id && inPeriod(r.refundedAt, f, t))
+      .sort((a, b) => a.refundedAt.localeCompare(b.refundedAt));
+
     const versements = debts
       .filter((d) => d.clientId === client.id)
       .flatMap((d) =>
@@ -96,6 +111,29 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     const settled = paymentsList.reduce((s, x) => s + x.amount, 0);
     const versed = versements.reduce((s, x) => s + x.amount, 0);
     const articles = salesList.reduce((s, x) => s + x.products.length, 0);
+
+    const oldDebtsTotal = oldDebtsList.reduce((s, x) => s + x.amount, 0);
+    const oldDebtsPaid = oldDebtsList.reduce((s, x) => s + x.paidAmount, 0);
+    const oldDebtsRest = oldDebtsList.reduce((s, x) => s + x.restAmount, 0);
+    const refunded = refundsList.reduce((s, x) => s + x.amount, 0);
+
+    // ---- SITUATION ACTUELLE DU COMPTE (toutes periodes confondues) --------
+    // C'est elle qui dit si le client DOIT encore de l'argent ou si, au
+    // contraire, il a verse PLUS que sa dette : dans ce cas l'entreprise lui
+    // doit la difference et le compte rendu doit l'afficher en POSITIF.
+    const allSales = sales.filter((x) => x.clientId === client.id);
+    const allCommands = commands.filter((x) => x.clientId === client.id);
+    const allOldDebts = oldDebts.filter((d) => d.partyId === client.id);
+    const account = computePartyBalance({
+      documentsBilled: allSales.reduce((s, x) => s + x.finalAmount, 0)
+        + allCommands.reduce((s, x) => s + x.totalAmount, 0),
+      documentsPaid: allSales.reduce((s, x) => s + x.paidAmount, 0)
+        + allCommands.reduce((s, x) => s + x.paidAmount, 0),
+      documentsRest: allSales.reduce((s, x) => s + x.restAmount, 0)
+        + allCommands.reduce((s, x) => s + x.restAmount, 0),
+      oldDebts: allOldDebts,
+      credit: clientRows.find((c) => c.id === client.id)?.creditAmount ?? 0,
+    });
 
     // Quantités achetées par production, ventes ET commandes confondues — c'est
     // le récapitulatif que le client attend en bas du compte rendu.
@@ -130,15 +168,20 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
 
     return {
       salesList, commandsList, paymentsList, versements, purchased,
+      oldDebtsList, refundsList,
       salesTotal, salesPaid, salesRest,
       tvaSales, salesHT, salesReduction, tvaCollected, tvaRates,
       commandsTotal, commandsPaid, commandsRest,
       settled, versed, articles,
-      billed: salesTotal + commandsTotal,
+      oldDebtsTotal, oldDebtsPaid, oldDebtsRest, refunded,
+      account,
+      billed: salesTotal + commandsTotal + oldDebtsTotal,
       collected: salesPaid + commandsPaid + settled + versed,
-      outstanding: salesRest + commandsRest,
+      // ce qui est reellement reste dans la caisse une fois l'excedent rendu
+      netCollected: salesPaid + commandsPaid + settled + versed - refunded,
+      outstanding: salesRest + commandsRest + oldDebtsRest,
     };
-  }, [client, period, sales, commands, payments, debts]);
+  }, [client, period, sales, commands, payments, debts, oldDebts, refunds, clientRows]);
 
   const periodLabel = period
     ? `Du ${formatDate(period.from, language)} au ${formatDate(period.to, language)}`
@@ -380,6 +423,95 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       emptyLabel: 'Aucune production achetée sur la période',
     };
 
+    // ---- Anciennes dettes reprises du passe -------------------------------
+    const oldDebtsSection: PrintTableSection = {
+      title: 'Anciennes dettes de la période',
+      icon: '🗂️',
+      note:
+        'Ardoises antérieures à l\u2019utilisation du logiciel. Elles n\u2019ont généré aucune '
+        + 'écriture de caisse à leur saisie : seul leur règlement en génère une.',
+      headerTotal: formatCurrency(data.oldDebtsTotal),
+      cols: [
+        { label: 'Date' }, { label: 'Description' },
+        { label: 'Montant', align: 'right' }, { label: 'Réglé', align: 'right' },
+        { label: 'Reste', align: 'right' },
+      ],
+      rows: [
+        ...data.oldDebtsList.map<PrintRow>((d) => ({
+          cells: [
+            formatDate(d.date, language),
+            d.description || '—',
+            formatCurrency(d.amount), formatCurrency(d.paidAmount), formatCurrency(d.restAmount),
+          ],
+          tone: d.restAmount > 0 ? 'neg' : 'pos',
+        })),
+        ...(data.oldDebtsList.length
+          ? [{
+              cells: ['TOTAL ANCIENNES DETTES', '', formatCurrency(data.oldDebtsTotal),
+                formatCurrency(data.oldDebtsPaid), formatCurrency(data.oldDebtsRest)],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucune ancienne dette sur la période',
+    };
+
+    // ---- Excedents rendus au client (sortie de caisse) --------------------
+    const refundsSection: PrintTableSection = {
+      title: 'Excédents rendus au client',
+      icon: '↩️',
+      note:
+        'Argent RESTITUÉ au client parce qu\u2019il avait versé plus que sa dette. '
+        + 'Chaque ligne est une sortie de caisse.',
+      headerTotal: formatCurrency(data.refunded),
+      cols: [
+        { label: 'Date et heure' }, { label: 'Reçu n°' }, { label: 'Mode de règlement' },
+        { label: 'Note' }, { label: 'Montant rendu', align: 'right' },
+      ],
+      rows: [
+        ...data.refundsList.map<PrintRow>((r) => ({
+          cells: [
+            formatDateTime(r.refundedAt, language),
+            `EXC-${r.id.slice(0, 8).toUpperCase()}`,
+            paymentMethodLabel(r),
+            r.notes || '—',
+            formatCurrency(r.amount),
+          ],
+          tone: 'neg',
+        })),
+        ...(data.refundsList.length
+          ? [{ cells: ['TOTAL RENDU', '', '', '', formatCurrency(data.refunded)], variant: 'total' as const }]
+          : []),
+      ],
+      emptyLabel: 'Aucun excédent rendu sur la période',
+    };
+
+    // ---- Situation du compte : dette OU avance en faveur du client --------
+    const accountSection: PrintTableSection = {
+      title: 'Situation du compte client',
+      icon: '⚖️',
+      note: data.account.hasCredit
+        ? 'Le client a versé PLUS que sa dette : le solde est en SA FAVEUR, l\u2019entreprise lui doit cet excédent.'
+        : 'Solde arrêté à ce jour, anciennes dettes et avances comprises.',
+      cols: [{ label: 'Libellé' }, { label: 'Montant', align: 'right' }],
+      rows: [
+        { cells: ['Total facturé (ventes, commandes, anciennes dettes)', formatCurrency(data.account.billed)], tone: 'accent' },
+        { cells: ['Total réglé', formatCurrency(data.account.paid)], tone: 'pos' },
+        { cells: ['Reste dû', formatCurrency(data.account.rest)], tone: data.account.rest > 0 ? 'neg' : 'pos' },
+        { cells: ['Avance versée par le client (excédent)', formatCurrency(data.account.credit)], tone: 'pos' },
+        {
+          cells: [
+            data.account.hasCredit ? 'SOLDE EN FAVEUR DU CLIENT (à lui rendre)' : 'SOLDE DÛ PAR LE CLIENT',
+            data.account.hasCredit
+              ? `+ ${formatCurrency(data.account.creditToReturn)}`
+              : formatCurrency(Math.max(0, data.account.net)),
+          ],
+          variant: 'total',
+          tone: data.account.hasCredit ? 'pos' : 'neg',
+        },
+      ],
+    };
+
     const paymentsSection: PrintTableSection = {
       title: 'Versements encaissés du client',
       icon: '💰',
@@ -444,18 +576,29 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         kpis: [
           { label: 'Total facturé', value: formatCurrency(data.billed), tone: 'accent' },
           { label: 'Total encaissé', value: formatCurrency(data.collected), tone: 'pos' },
+          { label: 'Excédent rendu', value: formatCurrency(data.refunded), tone: 'neg' },
           { label: 'Reste dû (période)', value: formatCurrency(data.outstanding), tone: 'neg' },
+          { label: 'Anciennes dettes', value: formatCurrency(data.oldDebtsTotal), tone: 'muted' },
           { label: 'Ventes HT (base imposable)', value: formatCurrency(data.salesHT), tone: 'muted' },
           { label: 'TVA collectée', value: formatCurrency(data.tvaCollected), tone: 'accent' },
           { label: 'Ventes TTC', value: formatCurrency(data.salesTotal), tone: 'pos' },
+          {
+            label: data.account.hasCredit ? 'SOLDE EN FAVEUR DU CLIENT' : 'Solde dû par le client',
+            value: data.account.hasCredit
+              ? `+ ${formatCurrency(data.account.creditToReturn)}`
+              : formatCurrency(Math.max(0, data.account.net)),
+            tone: data.account.hasCredit ? 'pos' : 'neg',
+          },
           { label: 'Opérations', value: String(
-              data.salesList.length + data.commandsList.length + data.paymentsList.length + data.versements.length
+              data.salesList.length + data.commandsList.length + data.paymentsList.length
+              + data.versements.length + data.oldDebtsList.length + data.refundsList.length
             ) },
         ],
         sections: [
+          accountSection,
           salesSection, tvaSection, tvaSummarySection, detailSection,
           commandsSection, commandDetailSection,
-          purchasedSection, paymentsSection, versementsSection,
+          purchasedSection, oldDebtsSection, paymentsSection, versementsSection, refundsSection,
         ],
       },
       settings,
@@ -503,11 +646,36 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                 </div>
               </div>
 
+              {/* Le client a verse PLUS que sa dette : l'entreprise lui doit la difference */}
+              {data.account.hasCredit && (
+                <div className="flex items-start gap-3 rounded-2xl border border-pistachio/40 bg-pistachio/10 px-4 py-3">
+                  <PiggyBank size={20} className="shrink-0 mt-0.5 text-pistachio" />
+                  <div>
+                    <p className="text-sm font-bold text-pistachio">
+                      Solde en faveur du client : + {formatCurrency(data.account.creditToReturn)}
+                    </p>
+                    <p className="text-xs text-text-secondary mt-0.5">
+                      {client.name} a versé plus que sa dette. L&rsquo;entreprise lui doit cet excédent :
+                      utilisez « Rendre l&rsquo;excédent » sur sa carte pour le lui restituer.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <ReportKpis
                 items={[
                   { label: 'Total facturé', value: formatCurrency(data.billed), color: 'text-gold-dark' },
                   { label: 'Total encaissé', value: formatCurrency(data.collected), color: 'text-pistachio' },
-                  { label: 'Reste dû', value: formatCurrency(data.outstanding), color: 'text-rose-deep' },
+                  { label: 'Excédent rendu', value: formatCurrency(data.refunded), color: 'text-caramel' },
+                  { label: 'Reste dû (période)', value: formatCurrency(data.outstanding), color: 'text-rose-deep' },
+                  {
+                    label: data.account.hasCredit ? 'Solde en sa faveur' : 'Solde dû (compte)',
+                    value: data.account.hasCredit
+                      ? `+ ${formatCurrency(data.account.creditToReturn)}`
+                      : formatCurrency(Math.max(0, data.account.net)),
+                    color: data.account.hasCredit ? 'text-pistachio' : 'text-rose-deep',
+                  },
+                  { label: 'Anciennes dettes', value: formatCurrency(data.oldDebtsTotal), color: 'text-gold-dark' },
                   { label: 'Ventes HT', value: formatCurrency(data.salesHT) },
                   { label: 'TVA collectée', value: formatCurrency(data.tvaCollected), color: 'text-gold-dark' },
                   { label: 'Ventes TTC', value: formatCurrency(data.salesTotal), color: 'text-pistachio' },
@@ -610,6 +778,38 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                     formatCurrency(x.amount),
                   ];
                 })}
+              />
+
+              <ReportSection
+                title="Anciennes dettes" icon={<History size={14} />}
+                total={formatCurrency(data.oldDebtsTotal)}
+                note="Ardoises antérieures au logiciel — aucune écriture de caisse à leur saisie."
+                head={['Date', 'Description', 'Montant', 'Réglé', 'Reste']}
+                empty="Aucune ancienne dette sur cette période"
+                rows={data.oldDebtsList.map((d) => [
+                  formatDate(d.date, language),
+                  <span key="d" className="font-semibold">{d.description || '—'}</span>,
+                  formatCurrency(d.amount),
+                  <span key="p" className="text-pistachio">{formatCurrency(d.paidAmount)}</span>,
+                  <span key="r" className={d.restAmount > 0 ? 'text-rose-deep font-bold' : 'text-pistachio'}>
+                    {formatCurrency(d.restAmount)}
+                  </span>,
+                ])}
+              />
+
+              <ReportSection
+                title="Excédents rendus au client" icon={<Undo2 size={14} />}
+                total={formatCurrency(data.refunded)}
+                note="Argent restitué au client parce qu'il avait versé plus que sa dette — sortie de caisse."
+                head={['Date et heure', 'Reçu n°', 'Mode de règlement', 'Note', 'Montant rendu']}
+                empty="Aucun excédent rendu sur cette période"
+                rows={data.refundsList.map((r) => [
+                  formatDateTime(r.refundedAt, language),
+                  `EXC-${r.id.slice(0, 8).toUpperCase()}`,
+                  paymentMethodLabel(r),
+                  r.notes || '—',
+                  <span key="a" className="font-bold text-caramel">− {formatCurrency(r.amount)}</span>,
+                ])}
               />
 
               <ReportSection

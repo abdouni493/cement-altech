@@ -26,7 +26,7 @@ import { useCaisseStore } from '@/store/caisseStore';
 import { useCommandStore, deliveryStatus } from '@/store/commandStore';
 import { useCaisseReportStore } from '@/store/caisseReportStore';
 import { useSettingsStore } from '@/store/settingsStore';
-import { formatCurrency, formatDate, formatDateTime, isWithinRange } from '@/lib/utils';
+import { formatCurrency, formatDate, formatDateTime, isWithinRange, paymentMethodLabel } from '@/lib/utils';
 import { printDetailedReport, type ReportDoc, type PrintTableSection, type PrintRow } from '@/lib/reportPrint';
 import { computeReportCalc } from '@/pages/Caisse/CaisseReports';
 import { OperationsHistory, OperationsTotals } from '@/components/shared/OperationsHistory';
@@ -57,6 +57,10 @@ export default function ReportsPage() {
   const units = useStockStore((s) => s.units);
   const clients = useClientStore((s) => s.clients);
   const suppliers = useSupplierStore((s) => s.suppliers);
+  const clientOldDebts = useClientStore((s) => s.oldDebts);
+  const supplierOldDebts = useSupplierStore((s) => s.oldDebts);
+  const clientRefunds = useClientStore((s) => s.refunds);
+  const supplierRefunds = useSupplierStore((s) => s.refunds);
   const workers = useWorkerStore((s) => s.workers);
   const transactions = useCaisseStore((s) => s.transactions);
   const commands = useCommandStore((s) => s.commands);
@@ -266,6 +270,30 @@ export default function ReportsPage() {
     const depositsByCategory = groupTxByCat(deposits);
     const withdrawalsByCategory = groupTxByCat(withdrawals);
 
+    // ---- Anciennes dettes & excedents rendus -------------------------------
+    // Les ANCIENNES DETTES sont des ardoises reprises du passe : elles pesent
+    // sur la dette des tiers mais n'ont JAMAIS touche la caisse. Les EXCEDENTS
+    // rendus, eux, sont de vrais mouvements d'argent (sortie pour un client,
+    // entree pour un fournisseur) et figurent donc dans les transactions.
+    const rOldDebts = [...clientOldDebts, ...supplierOldDebts]
+      .filter((d) => inRange(d.date))
+      .sort((a, b) => b.date.localeCompare(a.date));
+    const rRefunds = [...clientRefunds, ...supplierRefunds]
+      .filter((r) => inRange(r.refundedAt))
+      .sort((a, b) => b.refundedAt.localeCompare(a.refundedAt));
+
+    const oldDebtsTotal = rOldDebts.reduce((s, x) => s + x.amount, 0);
+    const oldDebtsRest = rOldDebts.reduce((s, x) => s + x.restAmount, 0);
+    const clientRefundsTotal = rRefunds
+      .filter((r) => r.partyType === 'client').reduce((s, x) => s + x.amount, 0);
+    const supplierRefundsTotal = rRefunds
+      .filter((r) => r.partyType === 'supplier').reduce((s, x) => s + x.amount, 0);
+
+    // Avances en cours, toutes periodes confondues : ce que l'entreprise doit
+    // encore rendre aux clients / recuperer aupres des fournisseurs.
+    const clientsCredit = clients.reduce((s, c) => s + Math.max(0, c.creditAmount ?? 0), 0);
+    const suppliersCredit = suppliers.reduce((s, x) => s + Math.max(0, x.creditAmount ?? 0), 0);
+
     return {
       rSales, rPurchases, rExpenses, rProductions, rDestructions, rTx,
       totalSales, totalPurchases, totalExpenses, workerPayments, workerAcomptes,
@@ -279,11 +307,13 @@ export default function ReportsPage() {
       tvaSales, tvaCollected, salesHT,
       lossProductions, totalLossQty, totalLossValue,
       expensesByCategory, depositsByCategory, withdrawalsByCategory,
+      rOldDebts, rRefunds, oldDebtsTotal, oldDebtsRest,
+      clientRefundsTotal, supplierRefundsTotal, clientsCredit, suppliersCredit,
       rCommands, rDeliveries, commandsTotal, commandsPaid, commandsRest,
       commandsOrderedQty, commandsDeliveredQty, commandsPendingQty, undeliveredCommands,
       deliveredQty, deliveredValue, deliveryMaterialsList, deliveryMaterialsCost,
     };
-  }, [generated, from, to, sales, purchases, expenses, productions, destructions, comptoirItems, products, units, clients, suppliers, workers, transactions, commands, deliveries, caisseReports, t]);
+  }, [generated, from, to, sales, purchases, expenses, productions, destructions, comptoirItems, products, units, clients, suppliers, workers, transactions, commands, deliveries, caisseReports, clientOldDebts, supplierOldDebts, clientRefunds, supplierRefunds, t]);
 
   /** Période du rapport, sous la forme attendue par l'historique partagé. */
   const inPeriodPredicate = useCallback(
@@ -728,6 +758,103 @@ export default function ReportsPage() {
       emptyLabel: t('noData'),
     });
 
+    // ---- 10 bis. Anciennes dettes (clients ET fournisseurs) ----
+    //  Ardoises reprises du passé : elles alimentent la dette des tiers et les
+    //  rapports mais n'ont généré AUCUNE écriture de caisse à leur saisie.
+    sections.push({
+      title: 'Anciennes dettes (reprises du passé)', icon: '🗂️',
+      headerTotal: money(report.oldDebtsTotal),
+      note: 'Ardoises antérieures au logiciel. Aucune écriture de caisse à leur saisie : '
+        + 'seul leur règlement alimente le tiroir.',
+      cols: [
+        { label: t('date') }, { label: 'Tiers' }, { label: 'Type' }, { label: t('description') },
+        { label: t('total'), align: 'right' }, { label: t('paid'), align: 'right' },
+        { label: t('rest'), align: 'right' },
+      ],
+      rows: [
+        ...report.rOldDebts.map((d): PrintRow => ({
+          cells: [
+            formatDate(d.date, language), d.partyName || '—',
+            d.partyType === 'client' ? 'Client' : 'Fournisseur',
+            d.description || '—',
+            money(d.amount), money(d.paidAmount), money(d.restAmount),
+          ],
+          tone: d.restAmount > 0 ? 'neg' : 'pos',
+        })),
+        ...(report.rOldDebts.length
+          ? [{
+              cells: ['TOTAL', '', '', '', money(report.oldDebtsTotal), '', money(report.oldDebtsRest)],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: t('noData'),
+    });
+
+    // ---- 10 ter. Excédents rendus / récupérés ----
+    //  Vrais mouvements d'argent : sortie de caisse quand on rend son excédent
+    //  à un client, entrée quand un fournisseur nous rembourse un trop-versé.
+    sections.push({
+      title: 'Excédents rendus et récupérés', icon: '↩️',
+      headerTotal: money(report.clientRefundsTotal + report.supplierRefundsTotal),
+      note: 'Client = SORTIE de caisse (on lui rend son trop-perçu). '
+        + 'Fournisseur = ENTRÉE de caisse (il nous rend le trop-versé).',
+      cols: [
+        { label: t('date') }, { label: 'Tiers' }, { label: 'Sens' },
+        { label: 'Mode de règlement' }, { label: t('amount'), align: 'right' },
+      ],
+      rows: [
+        ...report.rRefunds.map((r): PrintRow => ({
+          cells: [
+            formatDate(r.date, language), r.partyName || '—',
+            r.partyType === 'client' ? 'Sortie de caisse' : 'Entrée de caisse',
+            paymentMethodLabel(r),
+            money(r.amount),
+          ],
+          tone: r.partyType === 'client' ? 'neg' : 'pos',
+        })),
+        ...(report.rRefunds.length
+          ? [{
+              cells: [
+                'TOTAL', '',
+                `Sortie ${money(report.clientRefundsTotal)} · Entrée ${money(report.supplierRefundsTotal)}`,
+                '', money(report.clientRefundsTotal + report.supplierRefundsTotal),
+              ],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: t('noData'),
+    });
+
+    // ---- 10 quater. Avances en cours (soldes en faveur des tiers) ----
+    const creditRows: PrintRow[] = [
+      ...clients
+        .filter((c) => (c.creditAmount ?? 0) > 0)
+        .map((c): PrintRow => ({
+          cells: [c.name, 'Client', 'À rendre au client', money(c.creditAmount ?? 0)],
+          tone: 'neg',
+        })),
+      ...suppliers
+        .filter((x) => (x.creditAmount ?? 0) > 0)
+        .map((x): PrintRow => ({
+          cells: [x.name, 'Fournisseur', 'À récupérer', money(x.creditAmount ?? 0)],
+          tone: 'pos',
+        })),
+    ];
+    if (creditRows.length) {
+      creditRows.push(totalRow(t('total'), money(report.clientsCredit + report.suppliersCredit), 'accent'));
+    }
+    sections.push({
+      title: 'Avances en cours (soldes en faveur des tiers)', icon: '🐖',
+      headerTotal: money(report.clientsCredit + report.suppliersCredit),
+      note: 'Montants versés EN PLUS de la dette et pas encore restitués. '
+        + 'Situation actuelle, indépendante de la période.',
+      cols: [{ label: 'Tiers' }, { label: 'Type' }, { label: 'Sens' }, { label: t('amount'), align: 'right' }],
+      rows: creditRows,
+      emptyLabel: t('noData'),
+    });
+
     // ---- 11. Paiements employés (salaires + acomptes) ----
     const workerRows: PrintRow[] = [];
     workers.forEach((w) => {
@@ -916,6 +1043,83 @@ export default function ReportsPage() {
             <DrillCard icon={<Truck size={20} />} accent="lavender" label={t('suppliers')} value={suppliers.length} count={suppliers.length} isCount
               onClick={() => setDrill({ title: t('suppliers'), rows: suppliers.map((s) => ({ title: s.name, sub: s.phone, value: report.rPurchases.filter((p) => p.supplierId === s.id).reduce((a, p) => a + p.totalAmount, 0) })) })} />
           </div>
+
+          {/* ===== Anciennes dettes, excédents rendus et avances en cours ===== */}
+          <SectionTitle icon={<History size={18} />} title="Anciennes dettes & avances des tiers" />
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <DrillCard
+              icon={<History size={20} />} accent="caramel"
+              label="Anciennes dettes saisies" value={report.oldDebtsTotal} count={report.rOldDebts.length}
+              onClick={() => setDrill({
+                title: 'Anciennes dettes de la période',
+                rows: report.rOldDebts.map((d) => ({
+                  title: `${d.partyName ?? '—'} (${d.partyType === 'client' ? 'client' : 'fournisseur'})`,
+                  sub: `${formatDate(d.date, language)} · ${d.description || 'sans description'} · reste ${formatCurrency(d.restAmount)}`,
+                  value: d.amount,
+                })),
+              })}
+            />
+            <DrillCard
+              icon={<AlertTriangle size={20} />} accent="rose"
+              label="Anciennes dettes non soldées" value={report.oldDebtsRest}
+              count={report.rOldDebts.filter((d) => d.restAmount > 0).length}
+              onClick={() => setDrill({
+                title: 'Anciennes dettes non soldées',
+                rows: report.rOldDebts.filter((d) => d.restAmount > 0).map((d) => ({
+                  title: `${d.partyName ?? '—'} (${d.partyType === 'client' ? 'client' : 'fournisseur'})`,
+                  sub: `${formatDate(d.date, language)} · réglé ${formatCurrency(d.paidAmount)}`,
+                  value: d.restAmount,
+                  danger: true,
+                })),
+              })}
+            />
+            <DrillCard
+              icon={<Coins size={20} />} accent="lavender"
+              label="Excédents rendus / récupérés"
+              value={report.clientRefundsTotal + report.supplierRefundsTotal}
+              count={report.rRefunds.length}
+              onClick={() => setDrill({
+                title: 'Excédents rendus et récupérés',
+                rows: report.rRefunds.map((r) => ({
+                  title: `${r.partyName ?? '—'} — ${r.partyType === 'client' ? 'sortie de caisse' : 'entrée de caisse'}`,
+                  sub: `${formatDateTime(r.refundedAt, language)} · ${paymentMethodLabel(r)}`,
+                  value: r.amount,
+                  danger: r.partyType === 'client',
+                })),
+              })}
+            />
+            <DrillCard
+              icon={<Wallet size={20} />} accent="pistachio"
+              label="Avances en cours (à rendre)"
+              value={report.clientsCredit + report.suppliersCredit}
+              count={
+                clients.filter((c) => (c.creditAmount ?? 0) > 0).length
+                + suppliers.filter((x) => (x.creditAmount ?? 0) > 0).length
+              }
+              onClick={() => setDrill({
+                title: 'Avances en cours (soldes en faveur des tiers)',
+                rows: [
+                  ...clients.filter((c) => (c.creditAmount ?? 0) > 0).map((c) => ({
+                    title: c.name,
+                    sub: 'Client — excédent à lui rendre',
+                    value: c.creditAmount ?? 0,
+                    danger: true,
+                  })),
+                  ...suppliers.filter((x) => (x.creditAmount ?? 0) > 0).map((x) => ({
+                    title: x.name,
+                    sub: 'Fournisseur — trop-versé à récupérer',
+                    value: x.creditAmount ?? 0,
+                  })),
+                ],
+              })}
+            />
+          </div>
+          <p className="-mt-2 rounded-xl border border-caramel/30 bg-caramel/10 px-3.5 py-2 text-xs font-medium text-caramel">
+            <History size={12} className="inline mr-1" />
+            Une ancienne dette est une ardoise reprise du passé : elle pèse sur la dette du tiers
+            mais n&rsquo;écrit RIEN en caisse le jour de sa saisie. Seuls son règlement et la
+            restitution d&rsquo;un excédent sont de vrais mouvements de caisse.
+          </p>
 
           {/* ===== Commandes & livraisons ===== */}
           <SectionTitle icon={<ClipboardList size={18} />} title="Commandes & livraisons" />
