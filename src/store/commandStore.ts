@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { CommandDelivery, CommandDeliveryItem } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
+import { useStockStore } from './stockStore';
 
 export interface CommandItem {
   /** database id of the line — needed to attribute a delivery to it */
@@ -126,6 +127,10 @@ const deliveryItemPayload = (i: CommandDeliveryItem) => ({
   sell_unit: i.sellUnit ?? null,
 });
 
+/** Recharge « Gestion de stock » après un mouvement déclenché par une livraison. */
+const reloadStock = () =>
+  useStockStore.getState().load().catch(() => undefined);
+
 export const useCommandStore = create<CommandState>()((set, get) => ({
   commands: [],
   deliveries: [],
@@ -210,11 +215,14 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
   },
 
   deleteCommand: async (id) => {
+    const hadDeliveries = get().deliveries.some((d) => d.commandId === id);
     await save('commands.delete', () => db.commands.remove(id));
     set({
       commands: get().commands.filter((c) => c.id !== id),
       deliveries: get().deliveries.filter((d) => d.commandId !== id),
     });
+    // ses livraisons partent en cascade : leurs matières reviennent au stock
+    if (hadDeliveries) await reloadStock();
   },
 
   addDelivery: async (commandId, items, deliveredAt, notes = '', driver) => {
@@ -228,8 +236,10 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         items: items.map(deliveryItemPayload),
       })
     );
+    // La livraison a retiré les matières premières du stock : « Gestion de
+    // stock » doit repartir des quantités réelles de la base.
     const [commands, deliveries] = await Promise.all([
-      db.commands.list(), db.commandDeliveries.list(),
+      db.commands.list(), db.commandDeliveries.list(), reloadStock(),
     ]);
     set({ commands, deliveries });
     return deliveries.find((d) => d.id === row.id) as CommandDelivery;
@@ -245,16 +255,18 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         items: items.map(deliveryItemPayload),
       })
     );
+    // les quantités déduites ont été recalculées côté serveur
     const [commands, deliveries] = await Promise.all([
-      db.commands.list(), db.commandDeliveries.list(),
+      db.commands.list(), db.commandDeliveries.list(), reloadStock(),
     ]);
     set({ commands, deliveries });
   },
 
   deleteDelivery: async (id) => {
     await save('commands.delivery.delete', () => rpc.deleteCommandDelivery(id));
+    // supprimer une livraison remet les matières en stock
     const [commands, deliveries] = await Promise.all([
-      db.commands.list(), db.commandDeliveries.list(),
+      db.commands.list(), db.commandDeliveries.list(), reloadStock(),
     ]);
     set({ commands, deliveries });
   },

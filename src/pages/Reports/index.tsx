@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   TrendingUp, FileText, Printer, Wallet, ShoppingCart, Banknote, Package,
   Receipt, AlertTriangle, Flame, HardHat, Truck, Users, FlaskConical, Beaker,
   ArrowDownLeft, ArrowUpRight, Scale, ChevronRight, Coins, Trophy, TrendingDown,
-  ChevronDown, ChevronUp, Tag, Clock, History, Percent
+  ChevronDown, ChevronUp, Tag, Clock, History, Percent, ClipboardList
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -23,11 +23,13 @@ import { useClientStore } from '@/store/clientStore';
 import { useSupplierStore } from '@/store/supplierStore';
 import { useWorkerStore } from '@/store/workerStore';
 import { useCaisseStore } from '@/store/caisseStore';
+import { useCommandStore, deliveryStatus } from '@/store/commandStore';
 import { useCaisseReportStore } from '@/store/caisseReportStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { formatCurrency, formatDate, formatDateTime, isWithinRange } from '@/lib/utils';
 import { printDetailedReport, type ReportDoc, type PrintTableSection, type PrintRow } from '@/lib/reportPrint';
 import { computeReportCalc } from '@/pages/Caisse/CaisseReports';
+import { OperationsHistory, OperationsTotals } from '@/components/shared/OperationsHistory';
 import type { Expense, CaisseTransaction } from '@/types';
 
 type Row = { title: string; sub?: string; value: number; danger?: boolean };
@@ -57,6 +59,8 @@ export default function ReportsPage() {
   const suppliers = useSupplierStore((s) => s.suppliers);
   const workers = useWorkerStore((s) => s.workers);
   const transactions = useCaisseStore((s) => s.transactions);
+  const commands = useCommandStore((s) => s.commands);
+  const deliveries = useCommandStore((s) => s.deliveries);
   const caisseReports = useCaisseReportStore((s) => s.reports);
   const settings = useSettingsStore((s) => s.settings);
 
@@ -79,6 +83,49 @@ export default function ReportsPage() {
     const rDestructions = destructions.filter((d) => inRange(d.date));
     const rTx = transactions.filter((x) => inRange(x.date));
     const rReports = caisseReports.filter((r) => inRange(r.date));
+
+    // ---- Commandes & livraisons -------------------------------------------
+    // Une commande entre dans le rapport si elle a été créée OU si sa livraison
+    // est prévue dans la période ; une livraison compte à sa date de remise.
+    const rCommands = commands.filter((c) => inRange(c.createdAt) || inRange(c.receiveDate));
+    const rDeliveries = deliveries.filter((d) => inRange(d.deliveredAt));
+    const commandsTotal = rCommands.reduce((s, c) => s + c.totalAmount, 0);
+    const commandsPaid = rCommands.reduce((s, c) => s + c.paidAmount, 0);
+    const commandsRest = rCommands.reduce((s, c) => s + c.restAmount, 0);
+    const commandsOrderedQty = rCommands.reduce(
+      (s, c) => s + c.items.reduce((a, i) => a + i.quantity, 0), 0
+    );
+    const commandsDeliveredQty = rCommands.reduce(
+      (s, c) => s + c.items.reduce((a, i) => a + (i.deliveredQuantity ?? 0), 0), 0
+    );
+    const commandsPendingQty = Math.max(0, commandsOrderedQty - commandsDeliveredQty);
+    const undeliveredCommands = rCommands.filter((c) => !deliveryStatus(c).isFull);
+    const deliveredQty = rDeliveries.reduce(
+      (s, d) => s + d.items.reduce((a, i) => a + i.quantity, 0), 0
+    );
+    // Matières premières retirées du stock par les livraisons de la période
+    const deliveryMaterials = new Map<string, { name: string; unit?: string; quantity: number; cost: number }>();
+    rDeliveries.forEach((d) =>
+      (d.consumptions ?? []).forEach((m) => {
+        const key = `${m.productName.trim().toLowerCase()}|${m.unit ?? ''}`;
+        const cur = deliveryMaterials.get(key) ?? { name: m.productName, unit: m.unit, quantity: 0, cost: 0 };
+        cur.quantity += m.quantity;
+        cur.cost += m.lineCost;
+        deliveryMaterials.set(key, cur);
+      })
+    );
+    const deliveryMaterialsList = [...deliveryMaterials.values()].sort((a, b) => b.cost - a.cost);
+    const deliveryMaterialsCost = deliveryMaterialsList.reduce((s, x) => s + x.cost, 0);
+    /** Valeur marchande livrée : quantité remise × prix unitaire de la commande. */
+    const deliveredValue = rDeliveries.reduce((s, d) => {
+      const cmd = commands.find((c) => c.id === d.commandId);
+      return s + d.items.reduce((a, i) => {
+        const line = cmd?.items.find(
+          (it) => (i.commandItemId && i.commandItemId === it.id) || it.productName === i.productName
+        );
+        return a + i.quantity * (line?.unitPrice ?? 0);
+      }, 0);
+    }, 0);
 
     const totalSales = rSales.reduce((s, x) => s + x.finalAmount, 0);
     const totalPurchases = rPurchases.reduce((s, x) => s + x.totalAmount, 0);
@@ -232,8 +279,17 @@ export default function ReportsPage() {
       tvaSales, tvaCollected, salesHT,
       lossProductions, totalLossQty, totalLossValue,
       expensesByCategory, depositsByCategory, withdrawalsByCategory,
+      rCommands, rDeliveries, commandsTotal, commandsPaid, commandsRest,
+      commandsOrderedQty, commandsDeliveredQty, commandsPendingQty, undeliveredCommands,
+      deliveredQty, deliveredValue, deliveryMaterialsList, deliveryMaterialsCost,
     };
-  }, [generated, from, to, sales, purchases, expenses, productions, destructions, comptoirItems, products, units, clients, suppliers, workers, transactions, caisseReports, t]);
+  }, [generated, from, to, sales, purchases, expenses, productions, destructions, comptoirItems, products, units, clients, suppliers, workers, transactions, commands, deliveries, caisseReports, t]);
+
+  /** Période du rapport, sous la forme attendue par l'historique partagé. */
+  const inPeriodPredicate = useCallback(
+    (date: string) => !!date && isWithinRange(date, from, to),
+    [from, to]
+  );
 
   const clientName = (id: string | null) => (id ? clients.find((c) => c.id === id)?.name || '—' : t('walkIn'));
   const supplierName = (id: string) => suppliers.find((s) => s.id === id)?.name || '—';
@@ -384,6 +440,156 @@ export default function ReportsPage() {
           : []),
       ],
       emptyLabel: 'Aucune vente soumise à la TVA sur la période',
+    });
+
+    // ---- 5 quater. Commandes clients de la période ----
+    sections.push({
+      title: 'Commandes clients', icon: '📋', headerTotal: money(report.commandsTotal),
+      note: "Une commande n'entame pas le stock : les matières ne partent qu'à la livraison.",
+      cols: [
+        { label: 'N° commande' }, { label: t('client') }, { label: 'Créée le' },
+        { label: 'Livraison prévue' }, { label: 'Avancement', align: 'right' },
+        { label: t('total'), align: 'right' }, { label: t('paid'), align: 'right' },
+        { label: t('rest'), align: 'right' },
+      ],
+      rows: [
+        ...report.rCommands
+          .slice()
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .map((c): PrintRow => {
+            const d = deliveryStatus(c);
+            return {
+              cells: [
+                `${c.reference}${c.bonNumber ? ` (bon ${c.bonNumber})` : ''}`,
+                c.clientName,
+                formatDate(c.createdAt, language),
+                c.receiveDate ? formatDate(c.receiveDate, language) : '—',
+                d.isFull ? 'Livrée' : d.isPartial ? `${d.percent.toFixed(0)} %` : 'Non livrée',
+                money(c.totalAmount), money(c.paidAmount), money(c.restAmount),
+              ],
+              tone: c.restAmount > 0 ? 'neg' : 'pos',
+            };
+          }),
+        ...(report.rCommands.length
+          ? [{
+              cells: [
+                'TOTAL COMMANDES', '', '', '',
+                `${report.commandsDeliveredQty} / ${report.commandsOrderedQty}`,
+                money(report.commandsTotal), money(report.commandsPaid), money(report.commandsRest),
+              ],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucune commande sur la période',
+    });
+
+    // ---- 5 quinquies. Détail des produits commandés ----
+    sections.push({
+      title: 'Détail des produits commandés', icon: '🧱',
+      cols: [
+        { label: 'Commande / Produit' }, { label: 'Commandé', align: 'right' },
+        { label: 'Livré', align: 'right' }, { label: 'Reste à livrer', align: 'right' },
+        { label: 'P.U.', align: 'right' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: report.rCommands.flatMap((c): PrintRow[] => [
+        {
+          cells: [`${c.reference} — ${c.clientName}`, money(c.totalAmount)],
+          span: true, variant: 'category', tone: 'accent',
+        },
+        ...c.items.map((it): PrintRow => {
+          const u = it.sellByUnit && it.sellUnit ? ` ${it.sellUnit}` : '';
+          const done = it.deliveredQuantity ?? 0;
+          return {
+            cells: [
+              it.productName || '—', `${it.quantity}${u}`, `${done}${u}`,
+              `${Math.max(0, it.quantity - done)}${u}`,
+              money(it.unitPrice), money(it.totalPrice),
+            ],
+            variant: 'detail',
+          };
+        }),
+      ]),
+      emptyLabel: 'Aucun produit commandé sur la période',
+    });
+
+    // ---- 5 sexies. Bons de livraison de la période ----
+    sections.push({
+      title: 'Bons de livraison', icon: '🚚', headerTotal: money(report.deliveredValue),
+      note: 'Chaque bon retire du stock les matières premières de la production livrée.',
+      cols: [
+        { label: 'N° bon' }, { label: 'Commande' }, { label: t('client') },
+        { label: t('date') }, { label: 'Chauffeur' },
+        { label: 'Qté livrée', align: 'right' }, { label: 'Coût matière', align: 'right' },
+      ],
+      rows: [
+        ...report.rDeliveries
+          .slice()
+          .sort((a, b) => b.deliveredAt.localeCompare(a.deliveredAt))
+          .flatMap((d): PrintRow[] => {
+            const cmd = commands.find((c) => c.id === d.commandId);
+            const qty = d.items.reduce((a, i) => a + i.quantity, 0);
+            const cost = (d.consumptions ?? []).reduce((a, x) => a + x.lineCost, 0);
+            return [
+              {
+                cells: [
+                  d.reference, cmd?.reference ?? '—', cmd?.clientName ?? '—',
+                  formatDateTime(d.deliveredAt, language),
+                  d.driverName ? `${d.driverName}${d.driverPlate ? ` · ${d.driverPlate}` : ''}` : '—',
+                  String(Math.round(qty * 1000) / 1000), money(cost),
+                ],
+                tone: 'accent',
+              },
+              ...d.items.map((i): PrintRow => ({
+                cells: [`↳ ${i.productName}`, `${i.quantity}${i.sellUnit ? ` ${i.sellUnit}` : ''}`],
+                span: true, variant: 'detail', tone: 'muted',
+              })),
+              ...(d.consumptions ?? []).map((m): PrintRow => ({
+                cells: [
+                  `↳ matière : ${m.productName} − ${m.quantity}${m.unit ? ` ${m.unit}` : ''}`,
+                  money(m.lineCost),
+                ],
+                span: true, variant: 'detail', tone: 'neg',
+              })),
+            ];
+          }),
+        ...(report.rDeliveries.length
+          ? [{
+              cells: [
+                'TOTAL LIVRAISONS', '', '', '', '',
+                String(Math.round(report.deliveredQty * 1000) / 1000),
+                money(report.deliveryMaterialsCost),
+              ],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucune livraison sur la période',
+    });
+
+    // ---- 5 septies. Matières premières sorties par les livraisons ----
+    sections.push({
+      title: 'Matières premières déduites par les livraisons', icon: '📦',
+      headerTotal: money(report.deliveryMaterialsCost),
+      note: 'Sorties de « Gestion de stock » provoquées par les bons de livraison de la période.',
+      cols: [
+        { label: 'Matière première' }, { label: 'Quantité retirée', align: 'right' },
+        { label: 'Coût', align: 'right' },
+      ],
+      rows: [
+        ...report.deliveryMaterialsList.map((m): PrintRow => ({
+          cells: [
+            m.name,
+            `${Math.round(m.quantity * 1000) / 1000}${m.unit ? ` ${m.unit}` : ''}`,
+            money(m.cost),
+          ],
+          tone: 'neg',
+        })),
+        ...(report.deliveryMaterialsList.length
+          ? [totalRow(t('total'), money(report.deliveryMaterialsCost), 'neg')]
+          : []),
+      ],
+      emptyLabel: 'Aucune matière retirée par une livraison sur la période',
     });
 
     // ---- 5 ter. Saisies rétroactives (anciennes ventes / anciens achats) ----
@@ -636,6 +842,8 @@ export default function ReportsPage() {
       subtitle,
       kpis: [
         { label: t('totalSales'), value: money(report.totalSales), tone: 'pos' },
+        { label: 'Ventes HT (base imposable)', value: money(report.salesHT), tone: 'muted' },
+        { label: 'TVA collectée', value: money(report.tvaCollected), tone: 'accent' },
         { label: t('totalPurchasesAmount'), value: money(report.totalPurchases), tone: 'neg' },
         { label: t('totalExpenses'), value: money(report.totalExpenses), tone: 'neg' },
         { label: t('totalLossValue'), value: money(report.totalLossValue), tone: 'neg' },
@@ -675,6 +883,14 @@ export default function ReportsPage() {
             <OverviewTile icon={<TrendingUp size={20} />} label={t('netProfit')} value={report.netProfit} accent={report.netProfit >= 0 ? 'pistachio' : 'rose'} />
           </div>
 
+          {/* ===== Historique détaillé des opérations ===== */}
+          <SectionTitle icon={<History size={18} />} title="Historique détaillé des opérations" />
+          <OperationsTotals inPeriod={inPeriodPredicate} />
+          <OperationsHistory
+            inPeriod={inPeriodPredicate}
+            periodLabel={`${formatDate(from, language)} → ${formatDate(to, language)}`}
+          />
+
           {/* ===== Sales & client debts ===== */}
           <SectionTitle icon={<Receipt size={18} />} title={t('salesReport')} />
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -700,6 +916,28 @@ export default function ReportsPage() {
             <DrillCard icon={<Truck size={20} />} accent="lavender" label={t('suppliers')} value={suppliers.length} count={suppliers.length} isCount
               onClick={() => setDrill({ title: t('suppliers'), rows: suppliers.map((s) => ({ title: s.name, sub: s.phone, value: report.rPurchases.filter((p) => p.supplierId === s.id).reduce((a, p) => a + p.totalAmount, 0) })) })} />
           </div>
+
+          {/* ===== Commandes & livraisons ===== */}
+          <SectionTitle icon={<ClipboardList size={18} />} title="Commandes & livraisons" />
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <DrillCard icon={<ClipboardList size={20} />} accent="gold" label="Commandes" value={report.commandsTotal} count={report.rCommands.length}
+              onClick={() => setDrill({ title: 'Commandes de la période', rows: report.rCommands.map((c) => { const d = deliveryStatus(c); return { title: `${c.reference} — ${c.clientName}`, sub: `${formatDate(c.createdAt, language)} · ${c.items.length} produit(s) · ${d.isFull ? 'livrée' : d.isPartial ? `livrée à ${d.percent.toFixed(0)} %` : 'non livrée'}`, value: c.totalAmount }; }) })} />
+            <DrillCard icon={<AlertTriangle size={20} />} accent="rose" label="Reste à encaisser (commandes)" value={report.commandsRest} count={report.rCommands.filter((c) => c.restAmount > 0).length}
+              onClick={() => setDrill({ title: 'Commandes non soldées', rows: report.rCommands.filter((c) => c.restAmount > 0).map((c) => ({ title: `${c.reference} — ${c.clientName}`, sub: `Payé ${formatCurrency(c.paidAmount)} · ${formatDate(c.createdAt, language)}`, value: c.restAmount, danger: true })) })} />
+            <DrillCard icon={<Truck size={20} />} accent="lavender" label="Bons de livraison" value={report.deliveredValue} count={report.rDeliveries.length}
+              onClick={() => setDrill({ title: 'Bons de livraison', rows: report.rDeliveries.map((d) => { const cmd = commands.find((c) => c.id === d.commandId); const qty = d.items.reduce((a, i) => a + i.quantity, 0); return { title: `${d.reference} — ${cmd?.clientName ?? '—'}`, sub: `${formatDateTime(d.deliveredAt, language)} · ${Math.round(qty * 1000) / 1000} livré(s)${d.driverName ? ` · ${d.driverName}` : ''}`, value: (d.consumptions ?? []).reduce((a, x) => a + x.lineCost, 0) }; }) })} />
+            <DrillCard icon={<Package size={20} />} accent="caramel" label="Matières sorties par les livraisons" value={report.deliveryMaterialsCost} count={report.deliveryMaterialsList.length}
+              onClick={() => setDrill({ title: 'Matières premières déduites par les livraisons', rows: report.deliveryMaterialsList.map((m) => ({ title: m.name, sub: `${Math.round(m.quantity * 1000) / 1000}${m.unit ? ` ${m.unit}` : ''} retirés du stock`, value: m.cost, danger: true })) })} />
+          </div>
+          <p className="-mt-2 rounded-xl border border-gold/25 bg-gold/8 px-3.5 py-2 text-xs font-medium text-gold-dark">
+            <Truck size={12} className="inline mr-1" />
+            Quantités commandées <b>{Math.round(report.commandsOrderedQty * 1000) / 1000}</b> · livrées{' '}
+            <b>{Math.round(report.commandsDeliveredQty * 1000) / 1000}</b> · restant à livrer{' '}
+            <b>{Math.round(report.commandsPendingQty * 1000) / 1000}</b> sur{' '}
+            <b>{report.undeliveredCommands.length}</b> commande(s) encore ouverte(s). Une commande
+            n'entame pas le stock : chaque bon de livraison déduit les matières premières de la
+            production livrée.
+          </p>
 
           {/* ===== TVA & saisies rétroactives ===== */}
           <SectionTitle icon={<Percent size={18} />} title="TVA & saisies rétroactives" />

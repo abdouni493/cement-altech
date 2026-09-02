@@ -199,6 +199,19 @@ const toCommandDelivery = (r: any): CommandDelivery => ({
     quantity: num(i.quantity),
     sellUnit: i.sell_unit ?? undefined,
   })),
+  consumptions: (r.command_delivery_consumptions ?? []).map((c: any) => ({
+    id: c.id,
+    deliveryId: c.delivery_id,
+    commandItemId: c.command_item_id ?? undefined,
+    ficheTechnicId: c.fiche_technic_id ?? undefined,
+    productId: c.product_id ?? undefined,
+    productName: c.product_name,
+    unit: c.unit ?? undefined,
+    deliveredQuantity: num(c.delivered_quantity),
+    quantity: num(c.quantity),
+    unitCost: num(c.unit_cost),
+    lineCost: num(c.line_cost),
+  })),
 });
 
 const toPurchaseOrder = (r: any): PurchaseOrder => ({
@@ -615,8 +628,20 @@ export const db = {
 
   // /commands — livraisons
   commandDeliveries: {
-    list: async (): Promise<CommandDelivery[]> =>
-      (await selectOptional<any>('command_deliveries', '*, command_delivery_items(*)', 'delivered_at')).map(toCommandDelivery),
+    list: async (): Promise<CommandDelivery[]> => {
+      // Les matières déduites du stock ne sont lisibles qu'une fois
+      // `altech_production_update_livraison_stock_historique.sql` exécuté :
+      // avant cela on recharge les livraisons sans elles.
+      const full = '*, command_delivery_items(*), command_delivery_consumptions(*)';
+      try {
+        return (await select<any>('command_deliveries', full, 'delivered_at')).map(toCommandDelivery);
+      } catch (e) {
+        if (!isMissingSchema((e as Error).message)) throw e;
+        return (
+          await selectOptional<any>('command_deliveries', '*, command_delivery_items(*)', 'delivered_at')
+        ).map(toCommandDelivery);
+      }
+    },
   },
 
   // /workers — heures supplémentaires

@@ -1,11 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Wallet, Plus, Minus, ArrowDownLeft, ArrowUpRight, TrendingUp, TrendingDown,
   ShoppingCart, Banknote, Receipt, HardHat, FlaskConical, Beaker, Package,
   Pencil, Trash2, Calendar, PiggyBank, Coins, ArrowRightLeft, FileText,
-  ChevronDown, ChevronUp, Tag, Clock
+  ChevronDown, ChevronUp, Tag, Clock, History
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -16,6 +16,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StatCard } from '@/components/shared/StatCard';
 import { CategorySelect } from '@/components/shared/CategorySelect';
+import { OperationsHistory, OperationsTotals } from '@/components/shared/OperationsHistory';
 import { toast } from '@/components/ui/Toast';
 import { useCaisseStore } from '@/store/caisseStore';
 import { useSalesStore } from '@/store/salesStore';
@@ -98,10 +99,15 @@ export default function CaissePage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   const bounds = useMemo(() => periodBounds(period, from, to), [period, from, to]);
-  const inPeriod = (dateStr: string) => {
-    const ts = new Date(dateStr).getTime();
-    return ts >= bounds.start && ts <= bounds.end;
-  };
+  const inPeriod = useCallback(
+    (dateStr: string) => {
+      if (!dateStr) return false;
+      const ts = new Date(dateStr).getTime();
+      if (Number.isNaN(ts)) return false;
+      return ts >= bounds.start && ts <= bounds.end;
+    },
+    [bounds]
+  );
 
   const c = useMemo(() => {
     // ---- All-time figures → the actual current cash balance ----
@@ -280,6 +286,16 @@ export default function CaissePage() {
     }
     setTxOpen(false);
   };
+
+  /** Libellé lisible de la période active — rappelé sur l'historique. */
+  const periodLabel = useMemo(() => {
+    if (period === 'all') return 'Toutes les opérations';
+    if (period === 'custom') return `Du ${formatDate(from, language)} au ${formatDate(to, language)}`;
+    const labels: Record<string, string> = {
+      today: "Aujourd'hui", week: '7 derniers jours', month: '30 derniers jours', year: '12 derniers mois',
+    };
+    return labels[period] ?? '';
+  }, [period, from, to, language]);
 
   const periodOptions: { value: Period; label: string }[] = [
     { value: 'today', label: t('today') },
@@ -461,6 +477,17 @@ export default function CaissePage() {
           </div>
         </motion.div>
       )}
+
+      {/* ===== Opérations de la période : ventes / achats / commandes / livraisons ===== */}
+      <h3 className="font-display font-semibold text-text-primary mb-3 flex items-center gap-2">
+        <History size={18} className="text-gold-dark" /> Opérations de la période
+      </h3>
+      <div className="mb-6">
+        <OperationsTotals inPeriod={inPeriod} />
+      </div>
+      <div className="mb-6">
+        <OperationsHistory inPeriod={inPeriod} periodLabel={periodLabel} />
+      </div>
 
       {/* ===== Detailed store calculations ===== */}
       <h3 className="font-display font-semibold text-text-primary mb-3 flex items-center gap-2">

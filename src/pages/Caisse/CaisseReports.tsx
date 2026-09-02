@@ -5,7 +5,7 @@ import {
   FileText, Plus, ArrowLeft, Pencil, Trash2, Eye, Calendar, Clock, Coins,
   Receipt, ShoppingCart, Banknote, HardHat, Flame, TrendingUp, AlertTriangle,
   CheckCircle2, Wallet, Scale, FlaskConical, Beaker, Package, Tag, ArrowDownLeft,
-  ArrowUpRight, ArrowRightLeft, User, Filter, CalendarRange, Printer,
+  ArrowUpRight, ArrowRightLeft, User, Filter, CalendarRange, Printer, Percent,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -82,6 +82,15 @@ export interface ReportCalc {
   lossValueTotal: number;
   salesGross: number;
   salesPaid: number;
+  /** Ventes soumises à la TVA sur la période. */
+  tvaSales: CalcStores['sales'];
+  /** Base imposable : total des lignes moins les réductions. */
+  salesHT: number;
+  salesReduction: number;
+  /** TVA collectée sur la période. */
+  tvaCollected: number;
+  /** Taux rencontrés (19 %, 9 %, …). */
+  tvaRates: number[];
   purchasesTotal: number;
   purchasesPaid: number;
   expensesTotal: number;
@@ -118,6 +127,15 @@ export function computeReportCalc(report: CaisseReport, stores: CalcStores): Rep
 
   const salesGross = daySales.reduce((s, x) => s + x.finalAmount, 0);
   const salesPaid = daySales.reduce((s, x) => s + x.paidAmount, 0);
+  // ---- TVA de la période -------------------------------------------------
+  // `finalAmount` est le NET A PAYER TTC. Le compte rendu doit pouvoir montrer
+  // la base hors taxes, la TVA collectée et le total TTC.
+  const tvaSales = daySales.filter((x) => x.tvaEnabled && (x.tvaAmount || 0) > 0);
+  const salesHT = daySales.reduce((s, x) => s + Math.max(0, x.totalAmount - x.reduction), 0);
+  const salesReduction = daySales.reduce((s, x) => s + (x.reduction || 0), 0);
+  const tvaCollected = daySales.reduce((s, x) => s + (x.tvaAmount || 0), 0);
+  const tvaRates = [...new Set(tvaSales.map((x) => x.tvaRate ?? 0))].sort((a, b) => a - b);
+
   const purchasesTotal = dayPurchases.reduce((s, x) => s + x.totalAmount, 0);
   const purchasesPaid = dayPurchases.reduce((s, x) => s + x.paidAmount, 0);
   const expensesTotal = dayExpenses.reduce((s, x) => s + x.amount, 0);
@@ -157,7 +175,8 @@ export function computeReportCalc(report: CaisseReport, stores: CalcStores): Rep
   return {
     daySales, dayPurchases, dayExpenses, dayDestructions, dayProductions, dayWorkerPayments, dayDeposits, dayWithdrawals,
     dayLossProductions, lossQuantityTotal, lossValueTotal,
-    salesGross, salesPaid, purchasesTotal, purchasesPaid, expensesTotal, workerTotal, destroyedValue,
+    salesGross, salesPaid, tvaSales, salesHT, salesReduction, tvaCollected, tvaRates,
+    purchasesTotal, purchasesPaid, expensesTotal, workerTotal, destroyedValue,
     productionCost, productionRevenue, productionGains,
     depositsTotal, withdrawalsTotal, gains, theoretical, decalage,
   };
@@ -375,6 +394,8 @@ export function buildCaisseReportDoc(report: CaisseReport, stores: DetailStores,
     cols: [{ label: t('amount') }, { label: t('total'), align: 'right' }],
     rows: [
       { cells: [t('grossSales'), money(calc.salesGross)], tone: 'pos' },
+      { cells: ['dont ventes hors taxes (base imposable)', money(calc.salesHT)], tone: 'muted' },
+      { cells: ['dont TVA collectée', money(calc.tvaCollected)], tone: 'accent' },
       { cells: [t('totalPaid'), money(calc.salesPaid)], tone: 'pos' },
       { cells: [t('dayPurchases'), money(calc.purchasesTotal)], tone: 'neg' },
       { cells: [`${t('production')} — ${t('revenue')}`, money(calc.productionRevenue)], tone: 'accent' },
@@ -514,6 +535,43 @@ export function buildCaisseReportDoc(report: CaisseReport, stores: DetailStores,
     title: t('salesByCategory'), icon: '🧾', headerTotal: money(calc.salesGross),
     cols: [{ label: t('productName') }, { label: t('soldQty'), align: 'right' }, { label: t('revenue'), align: 'right' }],
     rows: salesCatRows, emptyLabel: t('noData'),
+  });
+
+  // ---- 5 bis. TVA collectée (facture par facture) ----
+  sections.push({
+    title: 'TVA collectée sur les ventes', icon: '🧮', headerTotal: money(calc.tvaCollected),
+    note: 'Base hors taxes = total des lignes moins la réduction. Net TTC = base HT + TVA.',
+    cols: [
+      { label: t('reference') }, { label: t('client') }, { label: t('date') },
+      { label: 'Base HT', align: 'right' }, { label: 'Taux', align: 'right' },
+      { label: 'TVA', align: 'right' }, { label: 'Net TTC', align: 'right' },
+    ],
+    rows: [
+      ...calc.daySales
+        .slice()
+        .sort((a, b) => (a.date < b.date ? 1 : -1))
+        .map((x): PrintRow => ({
+          cells: [
+            x.reference, clientNm(x.clientId), formatDate(x.date, language),
+            money(Math.max(0, x.totalAmount - x.reduction)),
+            x.tvaEnabled ? `${x.tvaRate ?? 0} %` : 'Sans TVA',
+            money(x.tvaAmount || 0), money(x.finalAmount),
+          ],
+          tone: x.tvaEnabled ? 'accent' : 'muted',
+        })),
+      ...(calc.daySales.length
+        ? [{
+            cells: [
+              'TOTAL', '', '',
+              money(calc.salesHT),
+              calc.tvaRates.length ? calc.tvaRates.map((r) => `${r} %`).join(' · ') : '—',
+              money(calc.tvaCollected), money(calc.salesGross),
+            ],
+            variant: 'total' as const, tone: 'accent' as const,
+          }]
+        : []),
+    ],
+    emptyLabel: t('noData'),
   });
 
   // ---- 6. Détail des ventes (facture par facture) ----
@@ -692,6 +750,7 @@ export function buildCaisseReportDoc(report: CaisseReport, stores: DetailStores,
     subtitle,
     meta: [
       { label: t('reportType'), value: period ? t('periodReport') : t('singleDayReport') },
+      { label: 'TVA collectée', value: money(calc.tvaCollected) },
       { label: t('createdBy'), value: report.createdBy || '—' },
       { label: t('declaredAmount'), value: money(report.declaredAmount) },
       { label: t('shouldBeInCaisse'), value: money(calc.theoretical) },
@@ -699,6 +758,8 @@ export function buildCaisseReportDoc(report: CaisseReport, stores: DetailStores,
     ],
     kpis: [
       { label: t('daySales'), value: money(calc.salesGross), tone: 'pos' },
+      { label: 'Ventes HT', value: money(calc.salesHT), tone: 'muted' },
+      { label: 'TVA collectée', value: money(calc.tvaCollected), tone: 'accent' },
       { label: t('dayPurchases'), value: money(calc.purchasesTotal), tone: 'neg' },
       { label: t('production'), value: money(calc.productionRevenue), tone: 'accent' },
       { label: t('dayExpenses'), value: money(calc.expensesTotal), tone: 'neg' },
@@ -715,6 +776,16 @@ export function buildCaisseReportDoc(report: CaisseReport, stores: DetailStores,
 // ============================================================
 // Live clock (shown in the "single day" creation mode)
 // ============================================================
+/** Vignette du bloc TVA du compte rendu de caisse. */
+function TvaTile({ label, value, color = 'text-text-primary' }: { label: string; value: string; color?: string }) {
+  return (
+    <div className="rounded-xl border border-gold/15 bg-vanilla/40 px-3 py-2.5">
+      <p className="text-[10px] uppercase tracking-wide text-text-muted leading-tight">{label}</p>
+      <p className={`text-sm font-bold tabular mt-0.5 ${color}`}>{value}</p>
+    </div>
+  );
+}
+
 function LiveClock() {
   const { t, language } = useLanguage();
   const [now, setNow] = useState(new Date());
@@ -1050,6 +1121,66 @@ function ReportDetail({ report, stores, onBack }: { report: CaisseReport; stores
         <CalcCard index={5} icon={<Flame size={20} />} accent="rose" label={t('dayDestructions')} value={calc.destroyedValue} count={calc.dayDestructions.length} />
         <CalcCard index={6} icon={<AlertTriangle size={20} />} accent="rose" label={t('totalLossValue')} value={calc.lossValueTotal} count={calc.dayLossProductions.length} />
       </div>
+
+      {/* ===== TVA collectée sur les ventes ===== */}
+      <SectionHeader icon={<Percent size={18} />} title="TVA collectée sur les ventes" total={calc.tvaCollected} />
+      <Card index={0} className="mb-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+          <TvaTile label="Ventes hors taxes (base imposable)" value={formatCurrency(calc.salesHT)} />
+          <TvaTile label="Réductions accordées" value={formatCurrency(calc.salesReduction)} />
+          <TvaTile
+            label={`TVA collectée${calc.tvaRates.length ? ` (${calc.tvaRates.map((r) => `${r} %`).join(' · ')})` : ''}`}
+            value={formatCurrency(calc.tvaCollected)}
+            color="text-gold-dark"
+          />
+          <TvaTile label="Total TTC facturé" value={formatCurrency(calc.salesGross)} color="text-pistachio" />
+        </div>
+        {calc.daySales.length === 0 ? (
+          <EmptyState message={t('noData')} icon={<Percent size={28} />} />
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-gold/15">
+            <table className="w-full text-sm">
+              <thead className="bg-vanilla/60 text-text-secondary"><tr>
+                <th className="text-left px-3 py-2">{t('reference')}</th>
+                <th className="text-left px-3 py-2">{t('client')}</th>
+                <th className="text-left px-3 py-2">{t('date')}</th>
+                <th className="text-right px-3 py-2">Base HT</th>
+                <th className="text-right px-3 py-2">Taux</th>
+                <th className="text-right px-3 py-2">TVA</th>
+                <th className="text-right px-3 py-2">Net TTC</th>
+              </tr></thead>
+              <tbody>
+                {calc.daySales.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((x) => (
+                  <tr key={x.id} className="border-t border-gold/10">
+                    <td className="px-3 py-2 font-medium text-text-primary">{x.reference}</td>
+                    <td className="px-3 py-2 text-text-secondary">{clientName(x.clientId)}</td>
+                    <td className="px-3 py-2 text-text-muted">{formatDate(x.date, language)}</td>
+                    <td className="px-3 py-2 text-right tabular">{formatCurrency(Math.max(0, x.totalAmount - x.reduction))}</td>
+                    <td className="px-3 py-2 text-right tabular">
+                      {x.tvaEnabled ? `${x.tvaRate ?? 0} %` : <span className="text-text-muted">Sans TVA</span>}
+                    </td>
+                    <td className={`px-3 py-2 text-right tabular ${x.tvaEnabled ? 'font-bold text-gold-dark' : 'text-text-muted'}`}>
+                      {formatCurrency(x.tvaAmount || 0)}
+                    </td>
+                    <td className="px-3 py-2 text-right tabular font-semibold">{formatCurrency(x.finalAmount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gold/25 bg-vanilla/50 font-bold">
+                  <td className="px-3 py-2" colSpan={3}>{t('total')}</td>
+                  <td className="px-3 py-2 text-right tabular">{formatCurrency(calc.salesHT)}</td>
+                  <td className="px-3 py-2 text-right tabular text-text-muted">
+                    {calc.tvaRates.length ? calc.tvaRates.map((r) => `${r} %`).join(' · ') : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular text-gold-dark">{formatCurrency(calc.tvaCollected)}</td>
+                  <td className="px-3 py-2 text-right tabular text-pistachio">{formatCurrency(calc.salesGross)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </Card>
 
       {/* ===== Purchases by category ===== */}
       <SectionHeader icon={<ShoppingCart size={18} />} title={t('purchasesByCategory')} total={calc.purchasesTotal} />

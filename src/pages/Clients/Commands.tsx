@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShoppingCart, Plus, Search, Calendar, Clock, Eye, Pencil, Trash2, CheckCircle2,
   AlertTriangle, Printer, UserPlus, X, Coins, User, Phone, Receipt, Truck,
-  PackageCheck, History, ClipboardList, MapPin, Hash,
+  PackageCheck, History, ClipboardList, MapPin, Hash, Package,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -1139,6 +1139,25 @@ export default function CommandsPage() {
                           </div>
                         ))}
                       </div>
+                      {/* Matières premières réellement retirées du stock par ce bon */}
+                      {(dl.consumptions?.length ?? 0) > 0 && (
+                        <div className="mt-2.5 rounded-lg border border-gold/15 bg-cream/60 p-2.5">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-gold-dark flex items-center gap-1.5 mb-1.5">
+                            <Package size={11} /> Matières déduites du stock
+                            <span className="ml-auto font-bold tabular text-text-secondary">
+                              {formatCurrency(dl.consumptions!.reduce((a, x) => a + x.lineCost, 0))}
+                            </span>
+                          </p>
+                          {dl.consumptions!.map((cs) => (
+                            <div key={cs.id} className="flex justify-between text-[11px] py-0.5">
+                              <span className="text-text-secondary">{cs.productName}</span>
+                              <span className="tabular font-semibold text-rose-deep">
+                                − {cs.quantity}{cs.unit ? ` ${cs.unit}` : ''}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       {dl.notes && <p className="text-[11px] text-text-muted italic mt-2">« {dl.notes} »</p>}
                     </div>
                   ))}

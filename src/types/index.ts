@@ -485,6 +485,27 @@ export interface CommandDeliveryItem {
   sellUnit?: string;
 }
 
+/**
+ * Matière première réellement RETIRÉE du stock par un bon de livraison.
+ * La commande n'entame rien ; c'est la livraison qui consomme la recette
+ * (fiche technique) au prorata des quantités remises au client.
+ */
+export interface CommandDeliveryConsumption {
+  id: string;
+  deliveryId: string;
+  commandItemId?: string;
+  ficheTechnicId?: string;
+  productId?: string;
+  productName: string;
+  unit?: string;
+  /** Quantité livrée de la ligne de commande à l'origine de cette déduction. */
+  deliveredQuantity: number;
+  /** Quantité retirée de « Gestion de stock ». */
+  quantity: number;
+  unitCost: number;
+  lineCost: number;
+}
+
 export interface CommandDelivery {
   id: string;
   commandId: string;
@@ -497,6 +518,8 @@ export interface CommandDelivery {
   /** Immatriculation du camion — facultative. */
   driverPlate?: string;
   items: CommandDeliveryItem[];
+  /** Matières premières déduites du stock par cette livraison. */
+  consumptions?: CommandDeliveryConsumption[];
   createdBy?: string;
 }
 

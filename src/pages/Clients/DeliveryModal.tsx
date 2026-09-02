@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Truck, PackageCheck, AlertTriangle, CalendarClock, User, Hash, MapPin } from 'lucide-react';
+import {
+  Truck, PackageCheck, AlertTriangle, CalendarClock, User, Hash, MapPin, Package,
+} from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Input, Textarea } from '@/components/ui/Input';
 import { Badge } from '@/components/ui/Badge';
 import { formatCurrency } from '@/lib/utils';
+import { stockRequirementsForDelivery } from '@/lib/ficheStock';
+import { useFicheTechnicStore } from '@/store/ficheTechnicStore';
+import { useStockStore } from '@/store/stockStore';
 import { toast } from '@/components/ui/Toast';
 import type { Command, DeliveryDriver } from '@/store/commandStore';
 import type { CommandDelivery, CommandDeliveryItem } from '@/types';
@@ -43,6 +48,8 @@ function toLocal(iso: string): string {
  * marquée « livrée » que lorsque toutes les quantités ont été remises.
  */
 export function DeliveryModal({ open, command, editing, onClose, onSave }: DeliveryModalProps) {
+  const ficheTechnics = useFicheTechnicStore((s) => s.ficheTechnics);
+  const products = useStockStore((s) => s.products);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [deliveredAt, setDeliveredAt] = useState(nowLocal());
   const [notes, setNotes] = useState('');
@@ -111,6 +118,28 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
       return { key, item: it, base, now, maxNow, remaining };
     });
   }, [command, quantities, editing]);
+
+  /**
+   * Matières premières qui vont réellement quitter « Gestion de stock » quand
+   * cette livraison sera validée. La commande, elle, n'a rien entamé : chaque
+   * recette est dépliée au prorata de la quantité livrée maintenant.
+   * (Le calcul est refait — et appliqué — par la base de données.)
+   */
+  const requirements = useMemo(() => {
+    const lines = rows
+      .filter((r) => r.now > 0)
+      .map((r) => ({
+        ficheTechnicId: r.item.ficheTechnicId,
+        productId: r.item.productId,
+        productName: r.item.productName,
+        quantity: r.now,
+      }));
+    if (!lines.length) return [];
+    return stockRequirementsForDelivery(lines, ficheTechnics, products);
+  }, [rows, ficheTechnics, products]);
+
+  const requirementsCost = requirements.reduce((s, r) => s + r.lineCost, 0);
+  const shortages = requirements.filter((r) => r.shortage);
 
   const totalRemaining = rows.reduce((s, r) => s + r.remaining, 0);
   const totalNow = rows.reduce((s, r) => s + r.now, 0);
@@ -300,6 +329,86 @@ export function DeliveryModal({ open, command, editing, onClose, onSave }: Deliv
                 </tr>
               </tfoot>
             </table>
+          </div>
+
+          {/* ---- Matières premières déduites du stock par cette livraison ---- */}
+          <div className="rounded-2xl border border-gold/20 bg-vanilla/30 overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gold/15 bg-gold/8 px-4 py-2.5">
+              <p className="text-xs font-bold uppercase tracking-wider text-gold-dark flex items-center gap-2">
+                <Package size={14} /> Matières déduites du stock par cette livraison
+              </p>
+              {requirements.length > 0 && (
+                <span className="text-xs font-bold tabular text-gold-dark">
+                  Coût matière {formatCurrency(requirementsCost)}
+                </span>
+              )}
+            </div>
+
+            {requirements.length === 0 ? (
+              <p className="px-4 py-3 text-xs italic text-text-muted">
+                Aucune matière à déduire : saisissez une quantité à livrer, ou les produits de cette
+                commande ne sont rattachés à aucune fiche technique ni à un produit du stock.
+              </p>
+            ) : (
+              <>
+                <p className="px-4 pt-3 text-[11px] italic text-text-muted">
+                  La commande n'entame pas le stock. Ces quantités seront retirées de « Gestion de
+                  stock » au moment où vous validez la livraison, au prorata des quantités remises.
+                </p>
+                <div className="overflow-x-auto px-2 pb-2">
+                  <table className="w-full text-xs">
+                    <thead className="text-text-secondary">
+                      <tr>
+                        <th className="text-left px-2 py-2">Matière première</th>
+                        <th className="text-right px-2 py-2">À déduire</th>
+                        <th className="text-right px-2 py-2">Stock actuel</th>
+                        <th className="text-right px-2 py-2">Stock après</th>
+                        <th className="text-right px-2 py-2">Coût</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {requirements.map((r) => {
+                        const u = r.unit ? ` ${r.unit}` : '';
+                        return (
+                          <tr key={r.productId ?? r.productName} className="border-t border-gold/10">
+                            <td className="px-2 py-1.5 font-medium text-text-primary">
+                              {r.productName}
+                              {r.available === undefined && (
+                                <span className="ml-1.5 text-[10px] font-semibold text-rose-deep">
+                                  (absente du stock)
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 text-right tabular font-semibold text-rose-deep">
+                              − {r.quantity}{u}
+                            </td>
+                            <td className="px-2 py-1.5 text-right tabular text-text-muted">
+                              {r.available === undefined ? '—' : `${r.available}${u}`}
+                            </td>
+                            <td className={`px-2 py-1.5 text-right tabular font-semibold ${r.shortage ? 'text-rose-deep' : 'text-pistachio'}`}>
+                              {r.available === undefined
+                                ? '—'
+                                : `${Math.round((r.available - r.quantity) * 1000) / 1000}${u}`}
+                            </td>
+                            <td className="px-2 py-1.5 text-right tabular text-gold-dark">
+                              {formatCurrency(r.lineCost)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {shortages.length > 0 && (
+              <p className="mx-3 mb-3 rounded-xl border border-caramel/40 bg-caramel/10 px-3 py-2 text-[11px] font-semibold text-caramel">
+                <AlertTriangle size={12} className="inline mr-1" />
+                Stock insuffisant pour {shortages.map((x) => x.productName).join(', ')} — la livraison
+                ramènera ces matières à zéro.
+              </p>
+            )}
           </div>
 
           {/* Valeur de la livraison — reprise telle quelle sur le bon imprimé */}

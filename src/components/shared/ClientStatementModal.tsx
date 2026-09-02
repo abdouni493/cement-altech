@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  FileBarChart, Printer, ShoppingBag, Coins, ClipboardList, Wallet, RotateCcw, Package,
+  FileBarChart, Printer, ShoppingBag, Coins, ClipboardList, Wallet, RotateCcw, Package, Percent,
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -80,6 +80,16 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     const salesTotal = salesList.reduce((s, x) => s + x.finalAmount, 0);
     const salesPaid = salesList.reduce((s, x) => s + x.paidAmount, 0);
     const salesRest = salesList.reduce((s, x) => s + x.restAmount, 0);
+
+    // ---- TVA de la période ------------------------------------------------
+    // `finalAmount` est le NET A PAYER TTC : base hors taxes (total des lignes
+    // moins la réduction) + TVA. Le compte rendu doit montrer les trois, à
+    // l'écran comme sur le document imprimé.
+    const tvaSales = salesList.filter((x) => x.tvaEnabled && (x.tvaAmount || 0) > 0);
+    const salesHT = salesList.reduce((s, x) => s + Math.max(0, x.totalAmount - x.reduction), 0);
+    const salesReduction = salesList.reduce((s, x) => s + (x.reduction || 0), 0);
+    const tvaCollected = salesList.reduce((s, x) => s + (x.tvaAmount || 0), 0);
+    const tvaRates = [...new Set(tvaSales.map((x) => x.tvaRate ?? 0))].sort((a, b) => a - b);
     const commandsTotal = commandsList.reduce((s, x) => s + x.totalAmount, 0);
     const commandsPaid = commandsList.reduce((s, x) => s + x.paidAmount, 0);
     const commandsRest = commandsList.reduce((s, x) => s + x.restAmount, 0);
@@ -121,6 +131,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     return {
       salesList, commandsList, paymentsList, versements, purchased,
       salesTotal, salesPaid, salesRest,
+      tvaSales, salesHT, salesReduction, tvaCollected, tvaRates,
       commandsTotal, commandsPaid, commandsRest,
       settled, versed, articles,
       billed: salesTotal + commandsTotal,
@@ -174,6 +185,67 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
           : []),
       ],
       emptyLabel: 'Aucune vente sur la période',
+    };
+
+    // ---- TVA : base HT, taux, montant collecté, net TTC, facture par facture
+    const tvaSection: PrintTableSection = {
+      title: 'TVA de la période',
+      icon: '🧮',
+      note:
+        'Base hors taxes = total des lignes moins la réduction. '
+        + 'Net à payer TTC = base HT + TVA.',
+      headerTotal: formatCurrency(data.tvaCollected),
+      cols: [
+        { label: 'N° facture' }, { label: 'Date' },
+        { label: 'Base HT', align: 'right' }, { label: 'Taux', align: 'right' },
+        { label: 'TVA', align: 'right' }, { label: 'Net TTC', align: 'right' },
+      ],
+      rows: [
+        ...data.salesList.map<PrintRow>((x) => ({
+          cells: [
+            `${x.reference}${x.isHistorical ? ' (ancienne vente)' : ''}`,
+            formatDate(x.date, language),
+            formatCurrency(Math.max(0, x.totalAmount - x.reduction)),
+            x.tvaEnabled ? `${x.tvaRate ?? 0} %` : 'Sans TVA',
+            formatCurrency(x.tvaAmount || 0),
+            formatCurrency(x.finalAmount),
+          ],
+          tone: x.tvaEnabled ? 'accent' : 'muted',
+        })),
+        ...(data.salesList.length
+          ? [{
+              cells: [
+                'TOTAL', '',
+                formatCurrency(data.salesHT),
+                data.tvaRates.length ? data.tvaRates.map((r) => `${r} %`).join(' · ') : '—',
+                formatCurrency(data.tvaCollected),
+                formatCurrency(data.salesTotal),
+              ],
+              variant: 'total' as const,
+            }]
+          : []),
+      ],
+      emptyLabel: 'Aucune vente sur la période',
+    };
+
+    // Récapitulatif fiscal — les trois montants attendus sur un compte rendu
+    const tvaSummarySection: PrintTableSection = {
+      title: 'Récapitulatif TVA',
+      icon: '📐',
+      cols: [{ label: 'Libellé' }, { label: 'Montant', align: 'right' }],
+      rows: [
+        { cells: ['Total hors taxes (base imposable)', formatCurrency(data.salesHT)], tone: 'accent' },
+        { cells: ['Réductions accordées', formatCurrency(data.salesReduction)], tone: 'muted' },
+        {
+          cells: [
+            `TVA collectée${data.tvaRates.length ? ` (${data.tvaRates.map((r) => `${r} %`).join(' · ')})` : ''}`,
+            formatCurrency(data.tvaCollected),
+          ],
+          tone: 'accent',
+        },
+        { cells: ['Ventes soumises à la TVA', `${data.tvaSales.length} / ${data.salesList.length}`], tone: 'muted' },
+        { cells: ['TOTAL TTC FACTURÉ (ventes)', formatCurrency(data.salesTotal)], variant: 'total', tone: 'pos' },
+      ],
     };
 
     const detailSection: PrintTableSection = {
@@ -373,12 +445,16 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
           { label: 'Total facturé', value: formatCurrency(data.billed), tone: 'accent' },
           { label: 'Total encaissé', value: formatCurrency(data.collected), tone: 'pos' },
           { label: 'Reste dû (période)', value: formatCurrency(data.outstanding), tone: 'neg' },
+          { label: 'Ventes HT (base imposable)', value: formatCurrency(data.salesHT), tone: 'muted' },
+          { label: 'TVA collectée', value: formatCurrency(data.tvaCollected), tone: 'accent' },
+          { label: 'Ventes TTC', value: formatCurrency(data.salesTotal), tone: 'pos' },
           { label: 'Opérations', value: String(
               data.salesList.length + data.commandsList.length + data.paymentsList.length + data.versements.length
             ) },
         ],
         sections: [
-          salesSection, detailSection, commandsSection, commandDetailSection,
+          salesSection, tvaSection, tvaSummarySection, detailSection,
+          commandsSection, commandDetailSection,
           purchasedSection, paymentsSection, versementsSection,
         ],
       },
@@ -432,6 +508,9 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   { label: 'Total facturé', value: formatCurrency(data.billed), color: 'text-gold-dark' },
                   { label: 'Total encaissé', value: formatCurrency(data.collected), color: 'text-pistachio' },
                   { label: 'Reste dû', value: formatCurrency(data.outstanding), color: 'text-rose-deep' },
+                  { label: 'Ventes HT', value: formatCurrency(data.salesHT) },
+                  { label: 'TVA collectée', value: formatCurrency(data.tvaCollected), color: 'text-gold-dark' },
+                  { label: 'Ventes TTC', value: formatCurrency(data.salesTotal), color: 'text-pistachio' },
                   { label: 'Ventes', value: String(data.salesList.length) },
                   { label: 'Commandes', value: String(data.commandsList.length) },
                   { label: 'Règlements', value: formatCurrency(data.settled), color: 'text-pistachio' },
@@ -461,6 +540,36 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                     {formatCurrency(s.restAmount)}
                   </span>,
                 ])}
+              />
+
+              <ReportSection
+                title="TVA de la période" icon={<Percent size={14} />}
+                total={formatCurrency(data.tvaCollected)}
+                note="Base hors taxes = total des lignes moins la réduction. Net TTC = base HT + TVA."
+                head={['N° facture', 'Date', 'Base HT', 'Taux', 'TVA', 'Net TTC']}
+                empty="Aucune vente sur cette période"
+                rows={[
+                  ...data.salesList.map((x) => [
+                    <span key="r" className="font-semibold">{x.reference}</span>,
+                    formatDate(x.date, language),
+                    formatCurrency(Math.max(0, x.totalAmount - x.reduction)),
+                    x.tvaEnabled ? `${x.tvaRate ?? 0} %` : <span key="n" className="text-text-muted">Sans TVA</span>,
+                    <span key="t" className={x.tvaEnabled ? 'font-bold text-gold-dark' : 'text-text-muted'}>
+                      {formatCurrency(x.tvaAmount || 0)}
+                    </span>,
+                    <span key="f" className="font-semibold">{formatCurrency(x.finalAmount)}</span>,
+                  ]),
+                  ...(data.salesList.length
+                    ? [[
+                        <span key="l" className="font-bold uppercase text-text-secondary">Total</span>,
+                        '',
+                        <span key="h" className="font-bold">{formatCurrency(data.salesHT)}</span>,
+                        data.tvaRates.length ? data.tvaRates.map((r) => `${r} %`).join(' · ') : '—',
+                        <span key="tv" className="font-bold text-gold-dark">{formatCurrency(data.tvaCollected)}</span>,
+                        <span key="tt" className="font-bold text-pistachio">{formatCurrency(data.salesTotal)}</span>,
+                      ]]
+                    : []),
+                ]}
               />
 
               <ReportSection
