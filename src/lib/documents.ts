@@ -322,8 +322,8 @@ export interface DeliveryPeriodReportData {
 }
 
 /**
- * BON DE LIVRAISON SUR UNE PÉRIODE — mêmes colonnes que le bon unitaire :
- * DÉSIGNATION · ADRESSE DE LIVRAISON · QUANTITÉ · PRIX U · P.T H.T, puis
+ * BON DE LIVRAISON SUR UNE PÉRIODE — chaque ligne est une livraison datée :
+ * DATE · DÉSIGNATION · ADRESSE DE LIVRAISON · QUANTITÉ · PRIX U · P.T H.T, puis
  * TOTAL H.T / T.V.A / TOTAL T.T.C / VERSEMENT / RESTE À PAYER.
  */
 export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store: StoreSettings) {
@@ -336,6 +336,7 @@ export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store:
 
   const rows: DocRow[] = data.lines.map((l) => ({
     cells: [
+      formatDate(l.date),
       l.designation.toUpperCase(),
       (l.location || data.client.address || '/').toUpperCase(),
       qty(l.quantity),
@@ -353,12 +354,15 @@ export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store:
       metaLines: [`LIVRAISON DU ${formatDate(data.from)} AU ${formatDate(data.to)}`],
       tables: [
         {
+          // Colonne DATE en tête : chaque ligne est une livraison distincte,
+          // avec sa propre date de remise.
           columns: [
+            { label: 'Date', align: 'center', width: '12%' },
             { label: 'Désignation', align: 'left' },
-            { label: 'Adresse de livraison', align: 'left', width: '24%' },
-            { label: 'Quantité', align: 'center', width: '13%' },
-            { label: 'Prix U', align: 'right', width: '17%' },
-            { label: 'P.T H.T', align: 'right', width: '19%' },
+            { label: 'Adresse de livraison', align: 'left', width: '21%' },
+            { label: 'Quantité', align: 'center', width: '11%' },
+            { label: 'Prix U', align: 'right', width: '15%' },
+            { label: 'P.T H.T', align: 'right', width: '16%' },
           ],
           rows,
           totals: totalsBlock({

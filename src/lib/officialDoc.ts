@@ -327,7 +327,7 @@ function tableHtml(t: DocTable): string {
   const voidCell = voidSpan > 0 ? `<td class="tot-void" colspan="${voidSpan}"></td>` : '';
   const totals = (t.totals ?? [])
     .map(
-      (x) => `<tr${x.strong ? ' class="grand"' : ''}>
+      (x) => `<tr class="tot${x.strong ? ' grand' : ''}">
         ${voidCell}
         <td class="tot-label" colspan="${labelSpan}">${esc(x.label)}</td>
         <td class="tot-value">${x.value}</td>
@@ -335,12 +335,16 @@ function tableHtml(t: DocTable): string {
     )
     .join('');
 
+  /* Les totaux sont rendus comme DERNIÈRES lignes du corps du tableau, et non
+     dans un <tfoot> : un <tfoot> est répété par le navigateur au bas de CHAQUE
+     page quand le tableau déborde sur plusieurs feuilles, ce qui affichait le
+     bloc de totaux sur toutes les pages. En corps de tableau, il n'apparaît
+     qu'une seule fois, à la fin réelle du tableau (sur la dernière page). */
   return `
     ${t.title ? `<div class="sec-title">${esc(t.title)}</div>` : ''}
     <table>
       <thead>${head}</thead>
-      <tbody>${body}</tbody>
-      ${totals ? `<tfoot>${totals}</tfoot>` : ''}
+      <tbody>${body}${totals}</tbody>
     </table>
     ${t.note ? `<div class="obs">${esc(t.note)}</div>` : ''}`;
 }
