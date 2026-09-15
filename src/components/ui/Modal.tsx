@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
@@ -21,20 +21,36 @@ const sizes = {
   xl: 'max-w-6xl',
 };
 
+/**
+ * Pile des fenêtres réellement ouvertes. Une modale ouverte PAR-DESSUS une
+ * autre (le choix de la TVA au-dessus du compte rendu, par exemple) doit être
+ * la SEULE que la touche Échap referme, et le défilement de la page ne se
+ * rétablit qu'une fois la dernière fenêtre refermée.
+ */
+const openStack: symbol[] = [];
+
 export function Modal({ open, onClose, title, children, size = 'md', footer }: ModalProps) {
+  // La fermeture passe par une ref : l'effet ne se rejoue donc pas à chaque
+  // rendu et l'ordre de la pile reste celui des ouvertures.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
   useEffect(() => {
+    if (!open) return;
+    const id = Symbol('modal');
+    openStack.push(id);
+    document.body.style.overflow = 'hidden';
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && openStack[openStack.length - 1] === id) closeRef.current();
     };
-    if (open) {
-      document.addEventListener('keydown', handler);
-      document.body.style.overflow = 'hidden';
-    }
+    document.addEventListener('keydown', handler);
     return () => {
       document.removeEventListener('keydown', handler);
-      document.body.style.overflow = '';
+      const i = openStack.indexOf(id);
+      if (i >= 0) openStack.splice(i, 1);
+      if (openStack.length === 0) document.body.style.overflow = '';
     };
-  }, [open, onClose]);
+  }, [open]);
 
   return createPortal(
     <AnimatePresence>

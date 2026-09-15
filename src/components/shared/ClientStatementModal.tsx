@@ -13,7 +13,10 @@ import { useCommandStore, deliveryStatus } from '@/store/commandStore';
 import { useClientDebtStore } from '@/store/clientDebtStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
-import { formatCurrency, formatDate, formatDateTime, todayISO, paymentMethodLabel } from '@/lib/utils';
+import {
+  formatCurrency, formatDate, formatDateTime, todayISO, paymentMethodLabel,
+  computeTva, DEFAULT_TVA_RATE,
+} from '@/lib/utils';
 import { computePartyBalance } from '@/lib/partyBalance';
 import { netCommandTotals } from '@/lib/commandBilling';
 import { printDetailedReport, type PrintRow, type PrintTableSection } from '@/lib/reportPrint';
@@ -41,10 +44,21 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
   const [to, setTo] = useState(todayISO());
   const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
 
+  // ---- TVA DU COMPTE RENDU IMPRIMÉ --------------------------------------
+  // L'impression passe d'abord par une question : applique-t-on la TVA sur le
+  // total final ? « Non » imprime directement le compte rendu, « Oui » ouvre la
+  // saisie du taux (19 % par défaut, modifiable) avant d'imprimer.
+  const [tvaAsk, setTvaAsk] = useState(false);
+  const [tvaOn, setTvaOn] = useState(false);
+  const [tvaRate, setTvaRate] = useState(DEFAULT_TVA_RATE);
+
   // Un compte rendu appartient à UN client : à l'ouverture d'une autre fiche on
   // repart d'une période vierge, sinon l'écran affiche encore le rapport
   // généré pour le client précédent.
   useEffect(() => {
+    setTvaAsk(false);
+    setTvaOn(false);
+    setTvaRate(DEFAULT_TVA_RATE);
     if (!client) return;
     setFrom(firstDayOfMonth());
     setTo(todayISO());
@@ -228,20 +242,15 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     ].filter(Boolean).join(' · ');
 
   /**
-   * COMPTE RENDU CLIENT — document volontairement DÉPOUILLÉ : la marchandise
-   * de la période avec sa QUANTITÉ, son PRIX UNITAIRE et son MONTANT, puis
-   * TOTAL H.T, T.V.A, TOTAL T.T.C, VERSEMENT et LE REST. Tout le reste
-   * (factures ligne à ligne, KPI, TVA détaillée, anciennes dettes, excédents)
-   * reste consultable à l'écran mais n'est plus imprimé.
+   * MARCHANDISES DE LA PÉRIODE — une ligne par produit ET par prix pratiqué,
+   * ventes et commandes réunies. C'est la base HORS TAXES du compte rendu :
+   * l'aperçu de la fenêtre « TVA » et le document imprimé partent des mêmes
+   * lignes, donc exactement du même TOTAL H.T.
    */
-  const doPrint = () => {
-    if (!client || !data || !period) return;
-
-    // Une ligne par produit ET par prix pratiqué — ventes et commandes réunies.
-    const grouped = new Map<
-      string,
-      { name: string; unit?: string; quantity: number; unitPrice: number; amount: number }
-    >();
+  type PrintLine = { name: string; unit?: string; quantity: number; unitPrice: number; amount: number };
+  const printLines = useMemo<PrintLine[]>(() => {
+    if (!data) return [];
+    const grouped = new Map<string, PrintLine>();
     const push = (name: string, unit: string | undefined, quantity: number, unitPrice: number) => {
       if (!(quantity > 0)) return;
       const key = `${name.trim().toLowerCase()}|${unit ?? ''}|${unitPrice}`;
@@ -258,13 +267,60 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         push(it.productName || '—', it.sellByUnit ? it.sellUnit : undefined, it.quantity, it.unitPrice)
       )
     );
-    const lines = [...grouped.values()].sort((a, b) => b.amount - a.amount);
+    return [...grouped.values()].sort((a, b) => b.amount - a.amount);
+  }, [data]);
 
-    const ht = lines.reduce((s, l) => s + l.amount, 0);
-    const tva = data.tvaCollected;
+  /** TOTAL H.T imprimé : montant des marchandises de la période, avant TVA. */
+  const printHT = printLines.reduce((s, l) => s + l.amount, 0);
+  /** Aperçu en direct du taux saisi dans la fenêtre « TVA ». */
+  const tvaPreview = computeTva(printHT, 0, tvaOn, tvaRate);
+
+  /** Ouvre la question « TVA ? » avec des valeurs neuves à chaque impression. */
+  const askTva = () => {
+    setTvaOn(false);
+    setTvaRate(DEFAULT_TVA_RATE);
+    setTvaAsk(true);
+  };
+
+  /**
+   * COMPTE RENDU CLIENT — document volontairement DÉPOUILLÉ : la marchandise
+   * de la période avec sa QUANTITÉ, son PRIX UNITAIRE et son MONTANT, puis
+   * TOTAL H.T, T.V.A, TOTAL T.T.C, VERSEMENT et LE REST. Tout le reste
+   * (factures ligne à ligne, KPI, TVA détaillée, anciennes dettes, excédents)
+   * reste consultable à l'écran mais n'est plus imprimé.
+   *
+   * Le total est TOUJOURS présenté HORS TAXES d'abord ; la TVA choisie au
+   * moment de l'impression vient ensuite et donne le TOTAL T.T.C final.
+   */
+  const doPrint = (applyTva: boolean, rate: number) => {
+    if (!client || !data || !period) return;
+
+    const lines = printLines;
+    const ht = printHT;
+    // TVA demandée à l'impression ; sans elle on retombe sur la TVA réellement
+    // facturée par les ventes de la période (0 si aucune facture n'en porte).
+    const { tvaAmount: askedTva } = computeTva(ht, 0, applyTva, rate);
+    const invoicedTva = data.tvaCollected;
+    const tva = applyTva ? askedTva : invoicedTva;
     const ttc = ht + tva;
     const paid = data.collected;
-    const rest = data.outstanding;
+    // Le reste comptable de la période, augmenté de la TVA qu'on vient de
+    // facturer : c'est ce que le client doit encore, TVA comprise.
+    const rest = data.outstanding + askedTva;
+
+    // Sans TVA ni sur le document ni sur les factures, le compte rendu se
+    // termine sur un TOTAL unique — inutile d'afficher une TVA à zéro.
+    const totalRows: PrintRow[] =
+      applyTva || invoicedTva > 0
+        ? [
+            { cells: ['TOTAL H.T', '', '', formatCurrency(ht)], variant: 'subtotal' },
+            {
+              cells: [applyTva ? `T.V.A ${rate} %` : 'T.V.A', '', '', formatCurrency(tva)],
+              variant: 'subtotal',
+            },
+            { cells: ['TOTAL T.T.C', '', '', formatCurrency(ttc)], variant: 'total' },
+          ]
+        : [{ cells: ['TOTAL', '', '', formatCurrency(ht)], variant: 'total' }];
 
     const section: PrintTableSection = {
       title: 'Marchandises de la période',
@@ -283,9 +339,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
             formatCurrency(l.amount),
           ],
         })),
-        { cells: ['TOTAL H.T', '', '', formatCurrency(ht)], variant: 'subtotal' },
-        { cells: ['T.V.A', '', '', formatCurrency(tva)], variant: 'subtotal' },
-        { cells: ['TOTAL T.T.C', '', '', formatCurrency(ttc)], variant: 'total' },
+        ...totalRows,
         { cells: ['VERSEMENT', '', '', formatCurrency(paid)], variant: 'subtotal' },
         { cells: ['LE REST', '', '', formatCurrency(rest)], variant: 'total' },
       ],
@@ -297,7 +351,10 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         docTitle: `Compte rendu ${client.name}`,
         headTitle: 'COMPTE RENDU CLIENT',
         subtitle: periodLabel,
-        meta: [{ label: 'Client', value: client.name }],
+        meta: [
+          { label: 'Client', value: client.name },
+          { label: 'T.V.A', value: applyTva ? `${rate} % appliquée sur le total` : 'Non appliquée' },
+        ],
         sections: [section],
       },
       settings,
@@ -367,7 +424,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   <Button size="sm" variant="secondary" onClick={doPrintDeliveries}>
                     <Truck size={14} /> Bon de livraisons (période)
                   </Button>
-                  <Button size="sm" variant="gold" onClick={doPrint}>
+                  <Button size="sm" variant="gold" onClick={askTva}>
                     <Printer size={14} /> Imprimer le compte rendu
                   </Button>
                 </div>
@@ -583,8 +640,101 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
               />
             </div>
           )}
+
+          {/* ================== TVA DU COMPTE RENDU IMPRIMÉ ==================
+              Posée à chaque impression : « Non » imprime directement le compte
+              rendu, « Oui » ouvre la saisie du taux (19 % par défaut) puis
+              imprime le document avec la TVA ajoutée au total final. */}
+          <Modal open={tvaAsk} onClose={() => setTvaAsk(false)} size="sm" title="TVA du compte rendu">
+            <div className="space-y-4">
+              <div className="flex flex-col items-center text-center">
+                <div className="h-14 w-14 rounded-full bg-gold/15 flex items-center justify-center mb-3">
+                  <Percent size={28} className="text-gold-dark" />
+                </div>
+                <p className="text-sm font-bold text-text-primary">
+                  Appliquer la TVA sur le total final ?
+                </p>
+                <p className="text-xs text-text-muted mt-1">
+                  Le compte rendu affiche d&rsquo;abord le total <b>hors taxes</b> ; la TVA choisie ici
+                  s&rsquo;ajoute ensuite pour donner le <b>total T.T.C</b>.
+                </p>
+              </div>
+
+              {/* Aperçu exact des totaux tels qu'ils seront imprimés */}
+              <div className="grid grid-cols-3 gap-2">
+                <TotalTile label="Total H.T" value={formatCurrency(printHT)} />
+                <TotalTile
+                  label={tvaOn ? `TVA ${tvaRate} %` : 'TVA (désactivée)'}
+                  value={formatCurrency(tvaPreview.tvaAmount)}
+                  muted={!tvaOn}
+                />
+                <TotalTile label="Total T.T.C" value={formatCurrency(tvaPreview.totalTTC)} />
+              </div>
+
+              {tvaOn && (
+                <div className="border border-gold/25 rounded-2xl p-3.5 bg-vanilla/40 space-y-2">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-text-secondary">
+                    Taux de TVA appliqué
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number" step="any" min={0} max={100} autoFocus
+                      value={tvaRate}
+                      onChange={(e) => setTvaRate(Math.max(0, Number(e.target.value)))}
+                      className="w-24 h-9 rounded-lg border-2 border-[--border-input] bg-[--surface-input] px-2 text-center text-sm tabular font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-gold/30 focus:border-gold"
+                    />
+                    <span className="text-sm font-semibold text-text-secondary">%</span>
+                    <span className="text-xs text-text-muted">
+                      = {formatCurrency(tvaPreview.tvaAmount)}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-text-muted">
+                    19 % par défaut — modifiez librement le taux avant d&rsquo;imprimer.
+                  </p>
+                </div>
+              )}
+
+              {!tvaOn ? (
+                <div className="flex gap-2">
+                  <Button
+                    variant="secondary" className="flex-1 text-xs"
+                    onClick={() => { setTvaAsk(false); doPrint(false, 0); }}
+                  >
+                    <Printer size={15} /> Non, sans TVA
+                  </Button>
+                  <Button variant="gold" className="flex-1 text-xs font-bold" onClick={() => setTvaOn(true)}>
+                    <Percent size={15} /> Oui, appliquer la TVA
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <Button variant="secondary" className="flex-1 text-xs" onClick={() => setTvaOn(false)}>
+                    Finalement sans TVA
+                  </Button>
+                  <Button
+                    variant="gold" className="flex-1 text-xs font-bold"
+                    onClick={() => { setTvaAsk(false); doPrint(true, tvaRate); }}
+                  >
+                    <Printer size={15} /> Imprimer avec TVA
+                  </Button>
+                </div>
+              )}
+            </div>
+          </Modal>
         </div>
       )}
     </Modal>
+  );
+}
+
+/** Tuile de total dans la fenêtre « TVA » : H.T, TVA et T.T.C avant impression. */
+function TotalTile({ label, value, muted }: { label: string; value: string; muted?: boolean }) {
+  return (
+    <div className="rounded-xl border border-gold/20 bg-vanilla/50 px-2.5 py-2 text-center">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">{label}</p>
+      <p className={`mt-0.5 text-sm font-bold tabular ${muted ? 'text-text-muted' : 'text-gold-dark'}`}>
+        {value}
+      </p>
+    </div>
   );
 }
