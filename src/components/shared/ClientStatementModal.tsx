@@ -242,10 +242,16 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     ].filter(Boolean).join(' · ');
 
   /**
-   * MARCHANDISES DE LA PÉRIODE — une ligne par produit ET par prix pratiqué,
-   * ventes et commandes réunies. C'est la base HORS TAXES du compte rendu :
-   * l'aperçu de la fenêtre « TVA » et le document imprimé partent des mêmes
-   * lignes, donc exactement du même TOTAL H.T.
+   * MARCHANDISES DE LA PÉRIODE — une ligne par produit ET par prix pratiqué.
+   * C'est la base HORS TAXES du compte rendu : l'aperçu de la fenêtre « TVA »
+   * et le document imprimé partent des mêmes lignes, donc du même TOTAL H.T.
+   *
+   * NE JAMAIS COMPTER DEUX FOIS LA MÊME MARCHANDISE : depuis « la livraison est
+   * une vente », chaque bon de livraison crée une facture qui porte déjà les
+   * produits livrés. Les commandes n'apportent donc que leur part ENCORE À
+   * LIVRER — sans quoi une commande livrée apparaissait en double et le TOTAL
+   * H.T, la T.V.A et le TOTAL T.T.C étaient multipliés (même règle que
+   * `netCommandTotals()` côté montants).
    */
   type PrintLine = { name: string; unit?: string; quantity: number; unitPrice: number; amount: number };
   const printLines = useMemo<PrintLine[]>(() => {
@@ -264,7 +270,12 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     );
     data.commandsList.forEach((c) =>
       c.items.forEach((it) =>
-        push(it.productName || '—', it.sellByUnit ? it.sellUnit : undefined, it.quantity, it.unitPrice)
+        push(
+          it.productName || '—',
+          it.sellByUnit ? it.sellUnit : undefined,
+          Math.max(0, it.quantity - (it.deliveredQuantity ?? 0)),
+          it.unitPrice
+        )
       )
     );
     return [...grouped.values()].sort((a, b) => b.amount - a.amount);
@@ -296,31 +307,25 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     if (!client || !data || !period) return;
 
     const lines = printLines;
+    // 1. LE TOTAL HORS TAXES : la marchandise de la période, et rien d'autre.
     const ht = printHT;
-    // TVA demandée à l'impression ; sans elle on retombe sur la TVA réellement
-    // facturée par les ventes de la période (0 si aucune facture n'en porte).
-    const { tvaAmount: askedTva } = computeTva(ht, 0, applyTva, rate);
-    const invoicedTva = data.tvaCollected;
-    const tva = applyTva ? askedTva : invoicedTva;
-    const ttc = ht + tva;
+    // 2. LE MONTANT DE LA TVA : ce total hors taxes × le taux choisi.
+    // 3. LE TOTAL T.T.C : total hors taxes + montant de la TVA.
+    //    TVA refusée → montant nul et T.T.C = H.T (le document reste hors taxes).
+    const { tvaAmount: tva, totalTTC: ttc } = computeTva(ht, 0, applyTva, rate);
     const paid = data.collected;
     // Le reste comptable de la période, augmenté de la TVA qu'on vient de
     // facturer : c'est ce que le client doit encore, TVA comprise.
-    const rest = data.outstanding + askedTva;
+    const rest = data.outstanding + tva;
 
-    // Sans TVA ni sur le document ni sur les factures, le compte rendu se
-    // termine sur un TOTAL unique — inutile d'afficher une TVA à zéro.
-    const totalRows: PrintRow[] =
-      applyTva || invoicedTva > 0
-        ? [
-            { cells: ['TOTAL H.T', '', '', formatCurrency(ht)], variant: 'subtotal' },
-            {
-              cells: [applyTva ? `T.V.A ${rate} %` : 'T.V.A', '', '', formatCurrency(tva)],
-              variant: 'subtotal',
-            },
-            { cells: ['TOTAL T.T.C', '', '', formatCurrency(ttc)], variant: 'total' },
-          ]
-        : [{ cells: ['TOTAL', '', '', formatCurrency(ht)], variant: 'total' }];
+    // TVA refusée : le tableau se termine sur un TOTAL unique, hors taxes.
+    const totalRows: PrintRow[] = applyTva
+      ? [
+          { cells: ['TOTAL H.T', '', '', formatCurrency(ht)], variant: 'subtotal' },
+          { cells: [`T.V.A ${rate} %`, '', '', formatCurrency(tva)], variant: 'subtotal' },
+          { cells: ['TOTAL T.T.C', '', '', formatCurrency(ttc)], variant: 'total' },
+        ]
+      : [{ cells: ['TOTAL', '', '', formatCurrency(ht)], variant: 'total' }];
 
     const section: PrintTableSection = {
       title: 'Marchandises de la période',
@@ -668,7 +673,10 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   value={formatCurrency(tvaPreview.tvaAmount)}
                   muted={!tvaOn}
                 />
-                <TotalTile label="Total T.T.C" value={formatCurrency(tvaPreview.totalTTC)} />
+                <TotalTile
+                  label={tvaOn ? 'Total T.T.C' : 'Total imprimé'}
+                  value={formatCurrency(tvaPreview.totalTTC)}
+                />
               </div>
 
               {tvaOn && (
