@@ -18,9 +18,8 @@ import {
   computeTva, DEFAULT_TVA_RATE,
 } from '@/lib/utils';
 import { computePartyBalance } from '@/lib/partyBalance';
-import { netCommandTotals } from '@/lib/commandBilling';
-import { printDetailedReport, type PrintRow, type PrintTableSection } from '@/lib/reportPrint';
-import { printDeliveryPeriodReport, type DeliveryPeriodLine } from '@/lib/documents';
+import { netCommand, netCommandTotals } from '@/lib/commandBilling';
+import { printClientStatement, printDeliveryPeriodReport, type DeliveryPeriodLine } from '@/lib/documents';
 import type { Client } from '@/types';
 
 /**
@@ -294,11 +293,12 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
   };
 
   /**
-   * COMPTE RENDU CLIENT — document volontairement DÉPOUILLÉ : la marchandise
-   * de la période avec sa QUANTITÉ, son PRIX UNITAIRE et son MONTANT, puis
-   * TOTAL H.T, T.V.A, TOTAL T.T.C, VERSEMENT et LE REST. Tout le reste
-   * (factures ligne à ligne, KPI, TVA détaillée, anciennes dettes, excédents)
-   * reste consultable à l'écran mais n'est plus imprimé.
+   * COMPTE RENDU CLIENT — imprimé sur le MÊME papier officiel que le bon de
+   * livraison : en-tête de l'entreprise, bloc « DOIT » avec les identifiants
+   * fiscaux du client, tableau des MARCHANDISES de la période (DÉSIGNATION ·
+   * QUANTITÉ · PRIX U · P.T H.T), totaux accrochés aux deux dernières colonnes
+   * — TOTAL H.T / T.V.A / TOTAL T.T.C / VERSEMENT / LE REST — et, en bas à
+   * gauche, CHAQUE VERSEMENT du client avec sa date.
    *
    * Le total est TOUJOURS présenté HORS TAXES d'abord ; la TVA choisie au
    * moment de l'impression vient ensuite et donne le TOTAL T.T.C final.
@@ -306,64 +306,58 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
   const doPrint = (applyTva: boolean, rate: number) => {
     if (!client || !data || !period) return;
 
-    const lines = printLines;
     // 1. LE TOTAL HORS TAXES : la marchandise de la période, et rien d'autre.
     const ht = printHT;
     // 2. LE MONTANT DE LA TVA : ce total hors taxes × le taux choisi.
-    // 3. LE TOTAL T.T.C : total hors taxes + montant de la TVA.
     //    TVA refusée → montant nul et T.T.C = H.T (le document reste hors taxes).
-    const { tvaAmount: tva, totalTTC: ttc } = computeTva(ht, 0, applyTva, rate);
+    const { tvaAmount: tva } = computeTva(ht, 0, applyTva, rate);
     const paid = data.collected;
     // Le reste comptable de la période, augmenté de la TVA qu'on vient de
     // facturer : c'est ce que le client doit encore, TVA comprise.
     const rest = data.outstanding + tva;
 
-    // TVA refusée : le tableau se termine sur un TOTAL unique, hors taxes.
-    const totalRows: PrintRow[] = applyTva
-      ? [
-          { cells: ['TOTAL H.T', '', '', formatCurrency(ht)], variant: 'subtotal' },
-          { cells: [`T.V.A ${rate} %`, '', '', formatCurrency(tva)], variant: 'subtotal' },
-          { cells: ['TOTAL T.T.C', '', '', formatCurrency(ttc)], variant: 'total' },
-        ]
-      : [{ cells: ['TOTAL', '', '', formatCurrency(ht)], variant: 'total' }];
+    // CHAQUE VERSEMENT DU CLIENT SUR LA PÉRIODE, avec sa date — repris en bas à
+    // gauche du document comme sur le bon de livraison. On y additionne, sans
+    // jamais compter deux fois le même argent (« la livraison est une vente ») :
+    //  · l'encaissement de chaque vente/livraison, à sa date ;
+    //  · l'acompte encore rattaché à chaque commande non facturée, à sa date ;
+    //  · les règlements de dette et les versements sur dettes enregistrées.
+    // Leur somme vaut exactement le VERSEMENT (total encaissé) du document.
+    const versements = [
+      ...data.salesList
+        .filter((s) => s.paidAmount > 0)
+        .map((s) => ({ amount: s.paidAmount, date: s.date })),
+      ...data.commandsList
+        .map((c) => ({ net: netCommand(c, sales), c }))
+        .filter((x) => x.net.paid > 0)
+        .map((x) => ({ amount: x.net.paid, date: x.c.receiveDate || x.c.createdAt.slice(0, 10) })),
+      ...data.paymentsList.map((p) => ({ amount: p.amount, date: p.paidAt })),
+      ...data.versements.map((v) => ({ amount: v.amount, date: v.date || v.createdAt })),
+    ].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
-    const section: PrintTableSection = {
-      title: 'Marchandises de la période',
-      cols: [
-        { label: 'Désignation' },
-        { label: 'Quantité', align: 'right' },
-        { label: 'Prix unitaire', align: 'right' },
-        { label: 'Total', align: 'right' },
-      ],
-      rows: [
-        ...lines.map<PrintRow>((l) => ({
-          cells: [
-            l.name.toUpperCase(),
-            `${l.quantity}${l.unit ? ` ${l.unit}` : ''}`,
-            formatCurrency(l.unitPrice),
-            formatCurrency(l.amount),
-          ],
-        })),
-        ...totalRows,
-        { cells: ['VERSEMENT', '', '', formatCurrency(paid)], variant: 'subtotal' },
-        { cells: ['LE REST', '', '', formatCurrency(rest)], variant: 'total' },
-      ],
-      emptyLabel: 'Aucune marchandise sur la période',
-    };
-
-    printDetailedReport(
+    printClientStatement(
       {
-        docTitle: `Compte rendu ${client.name}`,
-        headTitle: 'COMPTE RENDU CLIENT',
-        subtitle: periodLabel,
-        meta: [
-          { label: 'Client', value: client.name },
-          { label: 'T.V.A', value: applyTva ? `${rate} % appliquée sur le total` : 'Non appliquée' },
-        ],
-        sections: [section],
+        client: {
+          name: client.name, phone: client.phone, address: client.address,
+          rc: client.rc, nif: client.nif, nis: client.nis, article: client.article,
+        },
+        from: period.from,
+        to: period.to,
+        lines: printLines.map((l) => ({
+          designation: l.name,
+          quantity: l.quantity,
+          unit: l.unit,
+          unitPrice: l.unitPrice,
+          amount: l.amount,
+        })),
+        applyTva,
+        tvaRate: rate,
+        tvaAmount: tva,
+        paidAmount: paid,
+        restAmount: rest,
+        versements,
       },
-      settings,
-      language
+      settings
     );
   };
 

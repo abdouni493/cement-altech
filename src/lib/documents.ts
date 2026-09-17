@@ -380,6 +380,94 @@ export function printDeliveryPeriodReport(data: DeliveryPeriodReportData, store:
   );
 }
 
+/* ------------------------------------------- compte rendu CLIENT (période) */
+
+export interface ClientStatementLine {
+  designation: string;
+  quantity: number;
+  unit?: string;
+  unitPrice: number;
+  amount: number;
+}
+
+export interface ClientStatementReportData {
+  client: ClientFiscal;
+  from: string;
+  to: string;
+  lines: ClientStatementLine[];
+  /** Applique la TVA au pied du tableau (HT / TVA / TTC). */
+  applyTva?: boolean;
+  tvaRate?: number;    // défaut 19
+  tvaAmount?: number;  // montant de TVA déjà calculé (facultatif)
+  /** Total déjà versé (VERSEMENT) et reste dû (LE REST) sur la période. */
+  paidAmount?: number;
+  restAmount?: number;
+  /** Versements du client sur la période — repris en bas à gauche, avec dates. */
+  versements?: { amount: number; date: string; label?: string }[];
+}
+
+/**
+ * COMPTE RENDU CLIENT — imprimé sur le MÊME papier officiel que le bon de
+ * livraison : en-tête de l'entreprise, bloc « DOIT » avec les identifiants
+ * fiscaux du client, tableau des MARCHANDISES de la période
+ * (DÉSIGNATION · QUANTITÉ · PRIX U · P.T H.T), puis les totaux accrochés aux
+ * deux dernières colonnes — TOTAL H.T / T.V.A / TOTAL T.T.C / VERSEMENT /
+ * LE REST — et, en bas à gauche, CHAQUE VERSEMENT du client avec sa date
+ * (« VERSEMENT DE … LE … »), enfin « LE CLIENT » et « SIGNATURE ».
+ */
+export function printClientStatement(data: ClientStatementReportData, store: StoreSettings) {
+  const ht = data.lines.reduce((s, l) => s + l.amount, 0);
+  const rate = data.tvaRate ?? 19;
+  const tva = data.applyTva ? (data.tvaAmount ?? Math.round(ht * rate) / 100) : 0;
+  const ttc = ht + tva;
+  const paid = data.paidAmount ?? 0;
+  const rest = data.restAmount ?? Math.max(0, ttc - paid);
+
+  const rows: DocRow[] = data.lines.map((l) => {
+    const u = dosage(l.unit) === '/' ? '' : ` ${l.unit}`;
+    return {
+      cells: [
+        l.designation.toUpperCase(),
+        `${qty(l.quantity)}${u}`,
+        formatCurrency(l.unitPrice),
+        formatCurrency(l.amount),
+      ],
+    };
+  });
+
+  printOfficialDocument(
+    {
+      title: 'COMPTE RENDU CLIENT',
+      docDate: data.to,
+      doitName: data.client.name,
+      doitLines: fiscalLines(data.client),
+      metaLines: [`COMPTE RENDU DU ${formatDate(data.from)} AU ${formatDate(data.to)}`],
+      tables: [
+        {
+          columns: [
+            { label: 'Désignation', align: 'left' },
+            { label: 'Quantité', align: 'center', width: '16%' },
+            { label: 'Prix U', align: 'right', width: '20%' },
+            { label: 'P.T H.T', align: 'right', width: '22%' },
+          ],
+          rows,
+          totals: totalsBlock({
+            ht, tvaEnabled: data.applyTva, tvaRate: rate, tvaAmount: tva, ttc,
+            paid, rest, showPayment: true,
+          }),
+          emptyLabel: 'Aucune marchandise sur la période',
+        },
+      ],
+      footNotes: (data.versements ?? []).map((v) =>
+        v.label ? `${v.label.toUpperCase()} : ${formatCurrency(v.amount)} LE ${formatDate(v.date)}` : versementLine(v.amount, v.date)
+      ),
+      signatures: ['Le client', 'Signature'],
+      fileName: `Compte_Rendu_${data.client.name.replace(/\s+/g, '_')}`,
+    },
+    store
+  );
+}
+
 /* --------------------------------------------- bon de commande CLIENT */
 
 export interface CommandOrderLine {
