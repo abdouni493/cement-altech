@@ -16,6 +16,9 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Badge } from '@/components/ui/Badge';
 import { SearchBar } from '@/components/ui/SearchBar';
+import { ViewToggle } from '@/components/ui/ViewToggle';
+import { DataTable, ViewSwitch, useViewMode, type DataColumn } from '@/components/ui/DataTable';
+import type { ActionItem } from '@/components/ui/ActionMenu';
 import { StatCard } from '@/components/shared/StatCard';
 import { toast } from '@/components/ui/Toast';
 import { DeliveryModal } from './DeliveryModal';
@@ -34,7 +37,7 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime, todayISO, DEFAULT_TVA_RATE } from '@/lib/utils';
 import { commandTtc, deliverySalesOf } from '@/lib/commandBilling';
 import { printCommandOrder, printDeliveryNote } from '@/lib/documents';
-import { cardVariants } from '@/lib/animations';
+import { cardVariants, EASE } from '@/lib/animations';
 import type { Client, CommandDelivery } from '@/types';
 
 type DateFilter = 'today' | 'week' | 'month' | 'period' | 'all';
@@ -63,6 +66,9 @@ export default function CommandsPage() {
   const [scope, setScope] = useState<'real' | 'historical'>('real');
   const [from, setFrom] = useState(todayISO());
   const [to, setTo] = useState(todayISO());
+  /* Affichage de la liste. Comme toutes les autres interfaces, l'ecran des
+     commandes s'ouvre en TABLEAU ; le choix de l'operateur est memorise. */
+  const [view, setView] = useViewMode('commands');
 
   // Create / edit form
   const [formOpen, setFormOpen] = useState(false);
@@ -532,6 +538,204 @@ export default function CommandsPage() {
       settings
     );
 
+  /* ==========================================================================
+   *  AFFICHAGE EN TABLEAU
+   * --------------------------------------------------------------------------
+   *  Une commande porte beaucoup d'informations : client, livraison, argent.
+   *  En carte, il faut faire defiler ; en TABLEAU, une seule ligne suffit et
+   *  l'on compare vingt commandes d'un coup d'oeil — c'est le mode par defaut,
+   *  comme sur les autres ecrans de l'application.
+   *
+   *  Les boutons d'action ne sont PAS alignes sur la ligne : ils tiennent dans
+   *  le menu « trois points » de la derniere colonne.
+   * ======================================================================== */
+  const commandColumns: DataColumn<Command>[] = [
+    {
+      key: 'reference',
+      label: 'Référence',
+      render: (cmd) => (
+        <div className="min-w-0">
+          <span className="flex items-center gap-1.5 font-bold text-gold">
+            {cmd.reference}
+            {cmd.isHistorical && (
+              <Badge variant="warning" className="px-1.5 py-0 text-[9px]">
+                <History size={9} /> Ancienne
+              </Badge>
+            )}
+          </span>
+          {cmd.bonNumber && (
+            <span className="block text-[10px] text-text-muted">Bon N° {cmd.bonNumber}</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'client',
+      label: 'Client',
+      render: (cmd) => (
+        <div className="min-w-0">
+          <span className="block font-semibold text-text-primary truncate">{cmd.clientName}</span>
+          {cmd.clientPhone && (
+            <span className="block text-[10px] text-text-muted">{cmd.clientPhone}</span>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'created',
+      label: 'Créée le',
+      hideOnMobile: true,
+      render: (cmd) => formatDate(cmd.createdAt.slice(0, 10), language),
+    },
+    {
+      key: 'receive',
+      label: 'Livraison prévue',
+      hideOnMobile: true,
+      render: (cmd) => (
+        <span className="font-semibold text-gold-dark">
+          {formatDate(cmd.receiveDate, language)} · {cmd.receiveHour}h{cmd.receiveMinute}
+        </span>
+      ),
+    },
+    {
+      key: 'delivery',
+      label: 'Livraison',
+      render: (cmd) => {
+        const d = deliveryStatus(cmd);
+        return (
+          <div className="min-w-[110px]">
+            <div className="mb-1 flex items-center justify-between gap-2 text-[10px] text-text-muted">
+              <span className="tabular">{d.delivered} / {d.ordered}</span>
+              <span className="tabular font-semibold">{d.percent.toFixed(0)}%</span>
+            </div>
+            {/* Une jauge vaut mieux qu'un pourcentage : l'oeil repère en une
+                fraction de seconde les commandes qui traînent. L'échelle est
+                animée (transform), jamais la largeur : aucun recalcul. */}
+            <div className="h-1.5 overflow-hidden rounded-full border border-gold/10 bg-vanilla">
+              <motion.div
+                initial={{ scaleX: 0 }}
+                animate={{ scaleX: Math.max(0, Math.min(1, d.percent / 100)) }}
+                transition={{ duration: 0.45, ease: EASE }}
+                style={{ transformOrigin: 'left' }}
+                className={`h-full rounded-full ${d.isFull ? 'bg-gradient-mint' : 'bg-gradient-button'}`}
+              />
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'state',
+      label: 'État',
+      align: 'center',
+      render: (cmd) => {
+        const d = deliveryStatus(cmd);
+        return d.isFull ? (
+          <Badge variant="success"><PackageCheck size={10} /> Livrée</Badge>
+        ) : d.isPartial ? (
+          <Badge variant="warning"><Truck size={10} /> Partielle</Badge>
+        ) : (
+          <Badge variant="danger"><AlertTriangle size={10} /> Non livrée</Badge>
+        );
+      },
+    },
+    {
+      key: 'total',
+      label: 'Total TTC',
+      align: 'right',
+      render: (cmd) => (
+        <span className="font-bold text-gold-dark">{formatCurrency(commandTtc(cmd))}</span>
+      ),
+    },
+    {
+      key: 'paid',
+      label: 'Versé',
+      align: 'right',
+      hideOnMobile: true,
+      render: (cmd) => <span className="text-pistachio">{formatCurrency(cmd.paidAmount)}</span>,
+    },
+    {
+      key: 'rest',
+      label: 'Reste',
+      align: 'right',
+      render: (cmd) => (
+        <span className={cmd.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>
+          {formatCurrency(cmd.restAmount)}
+        </span>
+      ),
+    },
+  ];
+
+  /**
+   * Actions d'une ligne — TOUTES celles de la carte, rien de moins : détails,
+   * livraison, historique, impression, règlement, annulation du reste,
+   * augmentation, modification et suppression.
+   */
+  const commandActions = (cmd: Command): ActionItem[] => {
+    const d = deliveryStatus(cmd);
+    const nb = deliveriesOf(cmd.id).length;
+    return [
+      { label: 'Détails', icon: <Eye size={15} />, onClick: () => setViewingCmd(cmd) },
+      {
+        label: d.isFull ? 'Entièrement livrée' : 'Nouvelle livraison',
+        icon: <Truck size={15} />,
+        disabled: d.isFull,
+        onClick: () => { setEditingDelivery(null); setDeliverCmd(cmd); },
+      },
+      { label: `Livraisons (${nb})`, icon: <History size={15} />, onClick: () => setHistoryCmd(cmd) },
+      { label: 'Bon de commande', icon: <Printer size={15} />, onClick: () => printBonDeCommande(cmd) },
+      {
+        label: 'Payer la dette',
+        icon: <Coins size={15} />,
+        hidden: cmd.restAmount <= 0 || !can('clients', 'pay'),
+        onClick: () => { setPayCmd(cmd); setPayAmount(cmd.restAmount); },
+      },
+      {
+        label: 'Annuler le reste',
+        icon: <ScissorsSquare size={15} />,
+        hidden: !can('clients', 'edit'),
+        disabled: d.remaining <= 0,
+        onClick: () => setAdjust({ mode: 'cancel', cmd }),
+      },
+      {
+        label: 'Augmenter la commande',
+        icon: <PlusCircle size={15} />,
+        hidden: !can('clients', 'edit'),
+        onClick: () => setAdjust({ mode: 'increase', cmd }),
+      },
+      {
+        label: 'Modifier',
+        icon: <Pencil size={15} />,
+        hidden: !can('clients', 'edit'),
+        onClick: () => handleOpenEditForm(cmd),
+      },
+      {
+        label: 'Supprimer',
+        icon: <Trash2 size={15} />,
+        danger: true,
+        hidden: !can('clients', 'delete'),
+        onClick: () => setDeleteId(cmd.id),
+      },
+    ];
+  };
+
+  /** Ligne de totaux collée en bas du tableau. */
+  const commandFooter = (
+    <tr className="border-t-2 border-gold/30 bg-vanilla/60 font-bold">
+      <td className="px-4 py-2.5 text-xs uppercase tracking-wide text-text-secondary" colSpan={2}>
+        {filteredCommands.length} commande(s)
+      </td>
+      <td className="hidden px-4 py-2.5 md:table-cell" />
+      <td className="hidden px-4 py-2.5 md:table-cell" />
+      <td className="px-4 py-2.5" />
+      <td className="px-4 py-2.5" />
+      <td className="px-4 py-2.5 text-right tabular text-gold-dark">{formatCurrency(stats.totalValue)}</td>
+      <td className="hidden px-4 py-2.5 text-right tabular text-pistachio md:table-cell">{formatCurrency(stats.totalPaid)}</td>
+      <td className="px-4 py-2.5 text-right tabular text-rose-deep">{formatCurrency(stats.totalRest)}</td>
+      <td className="px-4 py-2.5" />
+    </tr>
+  );
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -618,17 +822,21 @@ export default function CommandsPage() {
               <option value="paid">Totalement payées</option>
               <option value="debt">Avec dette</option>
             </select>
-            <select
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value as DateFilter)}
-              className="w-full h-11 px-4 rounded-xl border border-gold/20 bg-[--surface-input] text-text-primary text-sm focus:outline-none focus:ring-2 focus:ring-gold"
-            >
-              <option value="all">Toutes les dates</option>
-              <option value="today">Aujourd'hui</option>
-              <option value="week">7 derniers jours</option>
-              <option value="month">30 derniers jours</option>
-              <option value="period">Par période</option>
-            </select>
+            <div className="flex items-center gap-3">
+              <select
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value as DateFilter)}
+                className="h-11 flex-1 rounded-xl border border-gold/20 bg-[--surface-input] px-4 text-sm text-text-primary focus:outline-none focus:ring-2 focus:ring-gold"
+              >
+                <option value="all">Toutes les dates</option>
+                <option value="today">Aujourd'hui</option>
+                <option value="week">7 derniers jours</option>
+                <option value="month">30 derniers jours</option>
+                <option value="period">Par période</option>
+              </select>
+              {/* Tableau (par défaut) ou cartes — le choix est mémorisé. */}
+              <ViewToggle view={view} onChange={setView} />
+            </div>
           </div>
           <AnimatePresence>
             {dateFilter === 'period' && (
@@ -646,9 +854,22 @@ export default function CommandsPage() {
         </div>
       </Card>
 
-      {/* Cards */}
+      {/* ======================= LISTE DES COMMANDES =======================
+          Tableau par défaut — comme toutes les autres interfaces. Les cartes
+          restent disponibles d'un clic, et la bascule se fait en fondu. */}
       {filteredCommands.length === 0 ? (
         <EmptyState message="Aucune commande pour ces filtres" icon={<ShoppingCart size={36} />} />
+      ) : (
+      <ViewSwitch view={view}>
+      {view === 'table' ? (
+        <DataTable
+          rows={filteredCommands}
+          columns={commandColumns}
+          rowKey={(cmd) => cmd.id}
+          actions={commandActions}
+          footer={commandFooter}
+          onRowClick={(cmd) => setViewingCmd(cmd)}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {filteredCommands.map((cmd, i) => {
@@ -901,6 +1122,8 @@ export default function CommandsPage() {
             );
           })}
         </div>
+      )}
+      </ViewSwitch>
       )}
 
       {/* ========= Annuler le reste / augmenter la commande ========= */}

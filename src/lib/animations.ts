@@ -60,6 +60,17 @@ export const rowVariants: Variants = {
   }),
 };
 
+/**
+ * Bascule « tableau ↔ cartes ».
+ * Un fondu très court accompagné d'un souffle d'échelle : la page change
+ * d'affichage sans jamais donner l'impression d'un rechargement.
+ */
+export const viewSwitchVariants: Variants = {
+  hidden: { opacity: 0, y: 6, scale: 0.995 },
+  visible: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.18, ease: EASE } },
+  exit: { opacity: 0, y: -6, scale: 0.995, transition: SNAP },
+};
+
 export const modalVariants: Variants = {
   hidden: { opacity: 0, scale: 0.97, y: 10 },
   visible: { opacity: 1, scale: 1, y: 0, transition: { duration: 0.18, ease: EASE } },

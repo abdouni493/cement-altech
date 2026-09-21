@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { motion } from 'framer-motion';
-import { rowVariants } from '@/lib/animations';
+import { AnimatePresence, motion } from 'framer-motion';
+import { rowVariants, viewSwitchVariants } from '@/lib/animations';
 import { cn } from '@/lib/utils';
 import { ActionMenu, type ActionItem } from './ActionMenu';
 
@@ -134,6 +134,26 @@ export function DataTable<T>({
 
 export type ViewMode = 'table' | 'cards';
 
+/* ----------------------------------------------------------------------------
+ *  L'ENTREPRISE A TRANCHE : TOUTES LES INTERFACES S'OUVRENT EN TABLEAU.
+ *  Les postes qui tournaient deja avec l'application avaient memorise « cartes »
+ *  dans leur navigateur ; cette preference ancienne masquerait le nouveau
+ *  defaut. On la remet donc A PLAT une seule fois, au premier lancement de
+ *  cette version. Ensuite, le choix de l'operateur est de nouveau respecte.
+ * ------------------------------------------------------------------------- */
+const VIEW_DEFAULT_VERSION = '2026-09-table';
+const VIEW_VERSION_KEY = 'altech.view.default';
+
+function resetStaleViewPreferences() {
+  try {
+    if (localStorage.getItem(VIEW_VERSION_KEY) === VIEW_DEFAULT_VERSION) return;
+    Object.keys(localStorage)
+      .filter((k) => k.startsWith('altech.view.') && k !== VIEW_VERSION_KEY)
+      .forEach((k) => localStorage.removeItem(k));
+    localStorage.setItem(VIEW_VERSION_KEY, VIEW_DEFAULT_VERSION);
+  } catch { /* navigation privee : on garde simplement le defaut */ }
+}
+
 /**
  * Preference d'affichage d'un ecran, MEMORISEE par ecran.
  * Valeur par defaut : « tableau » — c'est la demande de l'entreprise pour
@@ -143,6 +163,7 @@ export function useViewMode(screen: string, fallback: ViewMode = 'table') {
   const storageKey = `altech.view.${screen}`;
   const [view, setView] = useState<ViewMode>(() => {
     try {
+      resetStaleViewPreferences();
       const saved = localStorage.getItem(storageKey);
       return saved === 'cards' || saved === 'table' ? saved : fallback;
     } catch {
@@ -153,4 +174,26 @@ export function useViewMode(screen: string, fallback: ViewMode = 'table') {
     try { localStorage.setItem(storageKey, view); } catch { /* mode prive */ }
   }, [storageKey, view]);
   return [view, setView] as const;
+}
+
+/* ----------------------------------------------------------------------------
+ *  TRANSITION ENTRE LES DEUX AFFICHAGES
+ *  Le tableau et les cartes ne se remplacent pas d'un coup sec : l'un s'efface
+ *  pendant que l'autre arrive. `mode="wait"` evite que les deux se superposent
+ *  et ne fasse sauter la page.
+ * ------------------------------------------------------------------------- */
+export function ViewSwitch({ view, children }: { view: string; children: ReactNode }) {
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={view}
+        variants={viewSwitchVariants}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+      >
+        {children}
+      </motion.div>
+    </AnimatePresence>
+  );
 }
