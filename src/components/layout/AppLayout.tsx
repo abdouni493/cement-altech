@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { ErrorBoundary } from './ErrorBoundary';
+import { FAST } from '@/lib/animations';
 
 export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -21,11 +22,14 @@ export function AppLayout() {
             "wait" mode — which could deadlock at opacity:0 if an exit was interrupted
             and leave pages blank until a refresh.
           */}
+          {/* L'entree d'un ecran dure 0,16 s et n'anime QUE `opacity` et `y`
+              (composes par le GPU) : la navigation parait instantanee au lieu
+              de faire attendre un tiers de seconde a chaque changement de page. */}
           <motion.div
             key={location.pathname}
-            initial={{ opacity: 0, y: 16 }}
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            transition={FAST}
           >
             <ErrorBoundary key={location.pathname}>
               <Outlet />

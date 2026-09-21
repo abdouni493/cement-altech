@@ -12,6 +12,9 @@ import { Modal } from '@/components/ui/Modal';
 import { Input, Textarea } from '@/components/ui/Input';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { ViewToggle } from '@/components/ui/ViewToggle';
+import { DataTable, useViewMode, type DataColumn } from '@/components/ui/DataTable';
+import type { ActionItem } from '@/components/ui/ActionMenu';
 import { StatCard } from '@/components/shared/StatCard';
 import { CategorySelect } from '@/components/shared/CategorySelect';
 import { UnitSelect } from '@/components/shared/UnitSelect';
@@ -40,6 +43,8 @@ export default function ExpensesPage() {
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
   const [catFilter, setCatFilter] = useState<string>('');
+  // Affichage en TABLEAU par defaut, comme sur tous les ecrans.
+  const [view, setView] = useViewMode('expenses');
 
   // expense form
   const [formOpen, setFormOpen] = useState(false);
@@ -196,6 +201,45 @@ export default function ExpensesPage() {
       settings
     );
 
+  /* ------------------------------------------------------------ tableaux --
+   * Depenses et bons de commande en mode TABLEAU : les actions passent dans
+   * le menu « trois points » de la derniere colonne.
+   * --------------------------------------------------------------------- */
+  const expenseColumns: DataColumn<Expense>[] = [
+    { key: 'name', label: 'Dépense', render: (e) => <span className="font-semibold">{e.name}</span> },
+    { key: 'cat', label: 'Catégorie', render: (e) => e.categoryName || '—' },
+    { key: 'desc', label: 'Description', hideOnMobile: true, render: (e) => e.description || '—' },
+    { key: 'date', label: 'Date', render: (e) => formatDate(e.date, language) },
+    { key: 'by', label: 'Créé par', hideOnMobile: true, render: (e) => e.createdBy || '—' },
+    { key: 'amount', label: 'Montant', align: 'right',
+      render: (e) => <span className="font-bold text-rose-deep">{formatCurrency(e.amount)}</span> },
+  ];
+
+  const expenseActions = (e: Expense): ActionItem[] => [
+    { label: 'Modifier', icon: <Pencil size={15} />, hidden: !can('expenses', 'edit'),
+      onClick: () => openEdit(e) },
+    { label: 'Supprimer', icon: <Trash2 size={15} />, danger: true, hidden: !can('expenses', 'delete'),
+      onClick: () => setDeleteId(e.id) },
+  ];
+
+  const orderColumns: DataColumn<PurchaseOrder>[] = [
+    { key: 'ref', label: 'Référence', render: (o) => <span className="font-semibold">{o.reference}</span> },
+    { key: 'supplier', label: 'Fournisseur', render: (o) => o.supplierName || 'Sans fournisseur' },
+    { key: 'date', label: 'Date', render: (o) => formatDate(o.date, language) },
+    { key: 'items', label: 'Produits', align: 'right', render: (o) => o.items.length },
+    { key: 'detail', label: 'Détail', hideOnMobile: true,
+      render: (o) => o.items.map((it) => `${it.productName} (${it.quantity}${it.unit ? ` ${it.unit}` : ''})`).join(' · ') || '—' },
+    { key: 'notes', label: 'Note', hideOnMobile: true, render: (o) => o.notes || '—' },
+  ];
+
+  const orderActions = (o: PurchaseOrder): ActionItem[] => [
+    { label: 'Imprimer', icon: <Printer size={15} />, onClick: () => doPrintOrder(o) },
+    { label: 'Modifier', icon: <Pencil size={15} />, hidden: !can('expenses', 'edit'),
+      onClick: () => openOrderEdit(o) },
+    { label: 'Supprimer', icon: <Trash2 size={15} />, danger: true, hidden: !can('expenses', 'delete'),
+      onClick: () => setDeleteOrderId(o.id) },
+  ];
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -305,8 +349,19 @@ export default function ExpensesPage() {
             </Card>
           )}
 
+          <div className="flex justify-end">
+            <ViewToggle view={view} onChange={setView} />
+          </div>
+
           {filtered.length === 0 ? (
             <EmptyState message="Aucune dépense pour ces filtres" icon={<Banknote size={32} />} />
+          ) : view === 'table' ? (
+            <DataTable
+              rows={filtered}
+              columns={expenseColumns}
+              rowKey={(e) => e.id}
+              actions={expenseActions}
+            />
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
               {filtered.map((e, i) => (
@@ -351,6 +406,18 @@ export default function ExpensesPage() {
       {tab === 'orders' && (
         filteredOrders.length === 0 ? (
           <EmptyState message="Aucun bon de commande" icon={<ClipboardList size={32} />} />
+        ) : view === 'table' ? (
+          <div className="space-y-3">
+            <div className="flex justify-end">
+              <ViewToggle view={view} onChange={setView} />
+            </div>
+            <DataTable
+              rows={filteredOrders}
+              columns={orderColumns}
+              rowKey={(o) => o.id}
+              actions={orderActions}
+            />
+          </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {filteredOrders.map((o, i) => (

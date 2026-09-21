@@ -12,6 +12,7 @@ import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { ViewToggle } from '@/components/ui/ViewToggle';
+import { useViewMode } from '@/components/ui/DataTable';
 import { PayDebtModal } from '@/components/shared/PayDebtModal';
 import { EditSaleModal } from '@/components/shared/EditSaleModal';
 import { StatCard } from '@/components/shared/StatCard';
@@ -41,7 +42,9 @@ export default function SalesPage() {
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
   const [origin, setOrigin] = useState<OriginFilter>('all');
-  const [view, setView] = useState<'cards' | 'table'>('cards');
+  // L'affichage en TABLEAU est le mode par defaut de tous les ecrans ;
+  // le choix de l'operateur est memorise pour cet ecran.
+  const [view, setView] = useViewMode('sales');
   const [viewing, setViewing] = useState<Sale | null>(null);
   const [paying, setPaying] = useState<Sale | null>(null);
   const [editing, setEditing] = useState<Sale | null>(null);
@@ -287,6 +290,39 @@ export default function SalesPage() {
                 </tbody>
               </table>
             </div>
+            {/* ------------------------------------------------------------
+                LES VERSEMENTS DE LA FACTURE.
+                Une facture nee d'un bon de livraison est souvent deja payee
+                par l'acompte de la commande : la liste ci-dessous montre d'ou
+                vient chaque dinar, pour qu'aucune facture reglee ne puisse
+                plus passer pour une dette.
+            ------------------------------------------------------------- */}
+            {viewing.payments.length > 0 && (
+              <div className="rounded-xl border border-gold/15 bg-vanilla/30 p-3">
+                <p className="mb-2 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-text-muted">
+                  <Wallet size={13} className="text-gold" /> Versements de cette facture
+                </p>
+                {viewing.payments.map((p, i) => (
+                  <div key={i} className="flex items-center justify-between gap-3 border-b border-gold/10 py-1 text-xs last:border-0">
+                    <span className="min-w-0 truncate">
+                      {formatDate(p.date, language)} — {p.description || 'Règlement'}
+                      {p.origin === 'delivery_advance' && (
+                        <Badge variant="info" className="ml-1.5 text-[9px]">acompte commande</Badge>
+                      )}
+                      {p.origin === 'delivery_cash' && (
+                        <Badge variant="success" className="ml-1.5 text-[9px]">encaissé à la remise</Badge>
+                      )}
+                    </span>
+                    <span className="shrink-0 font-bold tabular text-pistachio">{formatCurrency(p.amount)}</span>
+                  </div>
+                ))}
+                <div className="mt-1.5 flex justify-between border-t border-gold/20 pt-1.5 text-xs font-bold">
+                  <span>Total versé</span>
+                  <span className="tabular text-pistachio">{formatCurrency(viewing.paidAmount)}</span>
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-2 text-sm">
               <Tile label={viewing.tvaEnabled ? 'Total brut HT' : t('total')} value={formatCurrency(viewing.totalAmount)} />
               <Tile label={t('reduction')} value={formatCurrency(viewing.reduction)} />

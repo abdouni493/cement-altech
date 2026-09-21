@@ -93,7 +93,9 @@ export function DeliveryModal({
         init[key] = line?.quantity ?? 0;
       } else {
         // by default we propose the whole remaining quantity
-        init[key] = Math.max(0, it.quantity - (it.deliveredQuantity ?? 0));
+        init[key] = Math.max(
+          0, it.quantity - (it.deliveredQuantity ?? 0) - (it.cancelledQuantity ?? 0)
+        );
       }
     });
     setQuantities(init);
@@ -120,7 +122,16 @@ export function DeliveryModal({
       (editing?.tvaRate || command.tvaRate || DEFAULT_TVA_RATE) as number
     );
     setCashPaid(editing?.cashPaid ?? 0);
-    setAdvanceApplied(editing?.advanceApplied ?? 0);
+    // L'ACOMPTE DE LA COMMANDE EST IMPUTE D'OFFICE SUR LE BON.
+    //
+    // C'etait la cause du bug « toutes mes ventes affichent une dette alors
+    // que le client a deja tout paye » : le client (souvent un passager)
+    // reglait sa commande d'avance, mais le bon de livraison partait avec un
+    // acompte impute de 0. La facture engendree naissait donc « non payee »,
+    // s'affichait en DETTE dans /ventes et faussait la caisse et les rapports.
+    // On propose desormais la totalite de l'acompte encore disponible ;
+    // l'operateur peut toujours le reduire s'il ne veut pas l'imputer ici.
+    setAdvanceApplied(editing ? (editing.advanceApplied ?? 0) : -1);
   }, [open, command, editing]);
 
   /** Coche « même chauffeur » → on recopie celui de la commande. */
@@ -145,8 +156,10 @@ export function DeliveryModal({
         : 0;
       const base = Math.max(0, alreadyDelivered - editedQty);
       const now = Number(quantities[key] ?? 0);
-      const maxNow = Math.max(0, it.quantity - base);
-      const remaining = Math.max(0, it.quantity - base - now);
+      // La quantite a laquelle le client a RENONCE n'est plus a livrer.
+      const expected = Math.max(0, it.quantity - (it.cancelledQuantity ?? 0));
+      const maxNow = Math.max(0, expected - base);
+      const remaining = Math.max(0, expected - base - now);
       return { key, item: it, base, now, maxNow, remaining };
     });
   }, [command, quantities, editing]);
@@ -186,7 +199,14 @@ export function DeliveryModal({
   const totalTtc = amountNow + tvaAmount;
   /** Acompte imputable : ce qui reste de l'acompte, plafonné par la facture. */
   const maxAdvance = Math.max(0, Math.min(advanceAvailable, totalTtc));
-  const advanceUsed = Math.max(0, Math.min(advanceApplied, maxAdvance));
+  /**
+   * `-1` signifie « l'operateur n'a rien saisi » : on impute alors tout
+   * l'acompte disponible, plafonne par le montant du bon. Des qu'il touche au
+   * champ, sa valeur fait foi (0 compris).
+   */
+  const advanceUsed = advanceApplied < 0
+    ? maxAdvance
+    : Math.max(0, Math.min(advanceApplied, maxAdvance));
   const maxCash = Math.max(0, totalTtc - advanceUsed);
   const cashUsed = Math.max(0, Math.min(cashPaid, maxCash));
   const paidTotal = advanceUsed + cashUsed;
@@ -536,7 +556,7 @@ export function DeliveryModal({
                     <div className="flex gap-1.5">
                       <input
                         type="number" step="any" min={0} max={maxAdvance}
-                        value={advanceApplied}
+                        value={advanceUsed}
                         onChange={(e) => setAdvanceApplied(Math.max(0, Number(e.target.value)))}
                         className="flex-1 h-10 rounded-lg border-2 border-[--border-input] bg-[--surface-input] px-3 text-sm tabular font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-gold/30 focus:border-gold"
                       />

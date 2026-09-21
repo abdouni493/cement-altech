@@ -82,6 +82,16 @@ export interface Payment {
   date: string;
   amount: number;
   description?: string;
+  /**
+   * D'ou vient l'ecriture :
+   *  · `delivery_advance` — part de l'acompte de la commande imputee sur ce
+   *    bon de livraison. CE N'EST PAS DE L'ARGENT NEUF : il est deja entre en
+   *    caisse a la creation de la commande. L'historique et le compte rendu
+   *    l'ignorent donc, sinon le meme versement serait compte deux fois.
+   *  · `delivery_cash`    — encaissement reel au moment de la remise ;
+   *  · vide                — encaissement de caisse ou reglement de dette.
+   */
+  origin?: string;
 }
 
 export interface Purchase {
@@ -622,6 +632,54 @@ export interface CommandDelivery {
   items: CommandDeliveryItem[];
   /** Matières premières déduites du stock par cette livraison. */
   consumptions?: CommandDeliveryConsumption[];
+  createdBy?: string;
+}
+
+/* ============================================================================
+ *  AJUSTEMENT D'UNE COMMANDE — ANNULATION DU RESTE OU AUGMENTATION
+ * ----------------------------------------------------------------------------
+ *  Deux situations que l'entreprise rencontre tous les jours :
+ *
+ *   · ANNULATION — le client a commandé 100 unités, il s'arrête à 70 et
+ *     renonce au reste. Le solde non livré ne doit plus apparaître comme une
+ *     dette ni comme une quantité à livrer : la commande est ramenée aux
+ *     quantités réellement remises, et l'écart est archivé ici.
+ *
+ *   · AUGMENTATION — le client a atteint (ou non) les 100 unités et en
+ *     redemande. Plutôt que de créer une deuxième commande, la ligne existante
+ *     est augmentée et le supplément est archivé ici.
+ *
+ *  Ces mouvements apparaissent dans l'historique du client et dans une partie
+ *  dédiée du rapport général.
+ * ========================================================================== */
+export type CommandAdjustmentType = 'cancel' | 'increase';
+
+export interface CommandAdjustmentLine {
+  commandItemId?: string;
+  productName: string;
+  /** Quantité annulée (type `cancel`) ou ajoutée (type `increase`). */
+  quantity: number;
+  unitPrice: number;
+  /** quantity × unitPrice. */
+  amount: number;
+  unit?: string;
+}
+
+export interface CommandAdjustment {
+  id: string;
+  commandId: string;
+  commandReference?: string;
+  clientId?: string;
+  clientName?: string;
+  type: CommandAdjustmentType;
+  date: string;          // YYYY-MM-DD
+  createdAt: string;     // ISO datetime
+  reason?: string;
+  lines: CommandAdjustmentLine[];
+  /** Quantité totale annulée / ajoutée. */
+  totalQuantity: number;
+  /** Valeur hors taxes annulée / ajoutée. */
+  totalAmount: number;
   createdBy?: string;
 }
 

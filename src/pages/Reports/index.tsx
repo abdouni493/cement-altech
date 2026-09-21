@@ -1,17 +1,17 @@
-import { useCallback, useMemo, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   TrendingUp, FileText, Printer, Wallet, ShoppingCart, Banknote, Package,
-  Receipt, AlertTriangle, Flame, HardHat, Truck, Users, FlaskConical, Beaker,
-  ArrowDownLeft, ArrowUpRight, Scale, ChevronRight, Coins, Trophy, TrendingDown,
-  ChevronDown, ChevronUp, Tag, Clock, History, Percent, ClipboardList
+  Receipt, Truck, Users, HardHat, Coins, History, ClipboardList,
+  ScissorsSquare, Undo2, PiggyBank, FlaskConical, ListChecks, CheckSquare,
+  Square, LayoutGrid, Building2, Factory, Layers,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Modal } from '@/components/ui/Modal';
-import { EmptyState } from '@/components/ui/EmptyState';
+import { Badge } from '@/components/ui/Badge';
 import { useLanguage } from '@/hooks/useLanguage';
 import { useSalesStore } from '@/store/salesStore';
 import { usePurchaseStore } from '@/store/purchaseStore';
@@ -21,30 +21,53 @@ import { useComptoirStore } from '@/store/comptoirStore';
 import { useStockStore } from '@/store/stockStore';
 import { useClientStore } from '@/store/clientStore';
 import { useSupplierStore } from '@/store/supplierStore';
+import { useClientDebtStore } from '@/store/clientDebtStore';
 import { useWorkerStore } from '@/store/workerStore';
 import { useCaisseStore } from '@/store/caisseStore';
 import { useCommandStore, deliveryStatus } from '@/store/commandStore';
 import { useCaisseReportStore } from '@/store/caisseReportStore';
 import { useSettingsStore } from '@/store/settingsStore';
-import { formatCurrency, formatDate, formatDateTime, isWithinRange, paymentMethodLabel } from '@/lib/utils';
-import { printDetailedReport, type ReportDoc, type PrintTableSection, type PrintRow } from '@/lib/reportPrint';
+import { formatCurrency, formatDate, formatDateTime, todayISO, paymentMethodLabel } from '@/lib/utils';
 import { commandTtc, netCommandTotals } from '@/lib/commandBilling';
-import { computeReportCalc } from '@/pages/Caisse/CaisseReports';
-import { OperationsHistory, OperationsTotals } from '@/components/shared/OperationsHistory';
-import type { Expense, CaisseTransaction } from '@/types';
+import { buildClientHistory, buildSupplierHistory, withinPeriod } from '@/lib/partyHistory';
+import { printListDocument } from '@/lib/statementPrint';
+import { panelVariants, EASE } from '@/lib/animations';
+import { cn } from '@/lib/utils';
+import { groupByParty, type ReportPart, type ReportStat } from './reportParts';
+import type { DocColumn, DocRow } from '@/lib/officialDoc';
 
-type Row = { title: string; sub?: string; value: number; danger?: boolean };
+/* ============================================================================
+ *  RAPPORT GENERAL
+ * ----------------------------------------------------------------------------
+ *  L'operateur choisit une DATE DE DEBUT et une DATE DE FIN, puis l'ecran
+ *  presente l'activite de la periode PARTIE PAR PARTIE, regroupees en trois
+ *  familles :
+ *
+ *    CLIENTS      ventes · commandes · livraisons · versements ·
+ *                 anciennes ventes · anciennes commandes ·
+ *                 anciennes livraisons · anciennes dettes ·
+ *                 annulations et augmentations de commande
+ *    FOURNISSEURS achats · versements · anciens achats · anciennes dettes
+ *    ENTREPRISE   depenses · employes · caisse · productions
+ *
+ *  Chaque partie a son bouton « Imprimer cette partie », et le bouton du haut
+ *  imprime le RAPPORT GENERAL apres une LISTE A COCHER. Tous les documents
+ *  sortent sur le modele du bon de livraison (colonne DATE, colonne
+ *  DESIGNATION, montants a droite, totaux accroches aux deux dernieres
+ *  colonnes) — il n'y a plus de tableau de resume en tete du document.
+ *
+ *  Les listes qui portent un nom de client ou de fournisseur sont GROUPEES par
+ *  tiers (Client1, Client1, Client2, Client2...) et non dispersees.
+ * ========================================================================== */
 
-const ACCENTS: Record<string, string> = {
-  gold: 'from-[#FF9CC0] to-[#F0568A]',
-  rose: 'from-[#FFB0CB] to-[#F2547D]',
-  pistachio: 'from-[#A6E9CE] to-[#3FB591]',
-  caramel: 'from-[#FFD08A] to-[#F2944A]',
-  lavender: 'from-[#CDB0F5] to-[#9B7ED8]',
-};
-const ACCENT_TEXT: Record<string, string> = {
-  gold: 'text-gold-dark', rose: 'text-rose-deep', pistachio: 'text-pistachio', caramel: 'text-gold-dark', lavender: 'text-[#7B5BB8]',
-};
+const GROUPS: { key: ReportPart['group']; label: string; icon: JSX.Element }[] = [
+  { key: 'clients', label: 'Clients', icon: <Users size={15} /> },
+  { key: 'suppliers', label: 'Fournisseurs', icon: <Truck size={15} /> },
+  { key: 'company', label: 'Entreprise', icon: <Building2 size={15} /> },
+];
+
+const DATE_COL: DocColumn = { label: 'Date', align: 'center', width: '12%' };
+const DESIGNATION_COL: DocColumn = { label: 'Designation', align: 'left' };
 
 export default function ReportsPage() {
   const { t, language } = useLanguage();
@@ -53,1559 +76,1424 @@ export default function ReportsPage() {
   const expenses = useExpenseStore((s) => s.expenses);
   const productions = useProductionStore((s) => s.productions);
   const destructions = useComptoirStore((s) => s.destructions);
-  const comptoirItems = useComptoirStore((s) => s.items);
   const products = useStockStore((s) => s.products);
-  const units = useStockStore((s) => s.units);
   const clients = useClientStore((s) => s.clients);
-  const suppliers = useSupplierStore((s) => s.suppliers);
+  const clientPayments = useClientStore((s) => s.payments);
   const clientOldDebts = useClientStore((s) => s.oldDebts);
-  const supplierOldDebts = useSupplierStore((s) => s.oldDebts);
   const clientRefunds = useClientStore((s) => s.refunds);
+  const suppliers = useSupplierStore((s) => s.suppliers);
+  const supplierPayments = useSupplierStore((s) => s.payments);
+  const supplierOldDebts = useSupplierStore((s) => s.oldDebts);
   const supplierRefunds = useSupplierStore((s) => s.refunds);
+  const debts = useClientDebtStore((s) => s.debts);
   const workers = useWorkerStore((s) => s.workers);
   const transactions = useCaisseStore((s) => s.transactions);
+  const initialBalance = useCaisseStore((s) => s.initialBalance);
   const commands = useCommandStore((s) => s.commands);
   const deliveries = useCommandStore((s) => s.deliveries);
+  const adjustments = useCommandStore((s) => s.adjustments);
   const caisseReports = useCaisseReportStore((s) => s.reports);
   const settings = useSettingsStore((s) => s.settings);
 
-  const [from, setFrom] = useState('2026-06-01');
-  const [to, setTo] = useState('2026-06-30');
-  const [generated, setGenerated] = useState(false);
-  const [drill, setDrill] = useState<{ title: string; rows: Row[] } | null>(null);
+  const firstOfMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-01`;
+  const [from, setFrom] = useState(firstOfMonth);
+  const [to, setTo] = useState(todayISO());
+  const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
+  const [group, setGroup] = useState<ReportPart['group']>('clients');
+  const [active, setActive] = useState('sales');
+  const [printOpen, setPrintOpen] = useState(false);
+  const [checked, setChecked] = useState<string[]>([]);
 
-  // Accordion toggle states
-  const [expandedProdId, setExpandedProdId] = useState<string | null>(null);
-  const [expandedCatName, setExpandedCatName] = useState<string | null>(null);
+  const money = formatCurrency;
+  const nameOfClient = (id: string | null) => (id ? clients.find((c) => c.id === id)?.name || 'Client inconnu' : 'Client passager');
+  const addressOfClient = (id: string | null) => (id ? clients.find((c) => c.id === id)?.address || '—' : '—');
+  const nameOfSupplier = (id: string) => suppliers.find((s) => s.id === id)?.name || 'Fournisseur inconnu';
 
-  const report = useMemo(() => {
-    if (!generated) return null;
-    const inRange = (d: string) => isWithinRange(d, from, to);
-    const rSales = sales.filter((s) => inRange(s.date));
-    const rPurchases = purchases.filter((p) => inRange(p.date));
-    const rExpenses = expenses.filter((e) => inRange(e.date));
-    const rProductions = productions.filter((p) => inRange(p.date));
-    const rDestructions = destructions.filter((d) => inRange(d.date));
-    const rTx = transactions.filter((x) => inRange(x.date));
-    const rReports = caisseReports.filter((r) => inRange(r.date));
+  /* ======================================================================= */
+  /*  CONSTRUCTION DES PARTIES                                               */
+  /* ======================================================================= */
+  const parts = useMemo<ReportPart[]>(() => {
+    if (!period) return [];
+    const { from: f, to: t2 } = period;
+    const inP = (d?: string) => withinPeriod(d, f, t2);
+    const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
+    const list: ReportPart[] = [];
 
-    // ---- Commandes & livraisons -------------------------------------------
-    // Une commande entre dans le rapport si elle a été créée OU si sa livraison
-    // est prévue dans la période ; une livraison compte à sa date de remise.
-    const rCommands = commands.filter((c) => inRange(c.createdAt) || inRange(c.receiveDate));
-    const rDeliveries = deliveries.filter((d) => inRange(d.deliveredAt));
-    const commandsTotal = rCommands.reduce((s, c) => s + commandTtc(c), 0);
-    const commandsPaid = rCommands.reduce((s, c) => s + c.paidAmount, 0);
-    const commandsRest = rCommands.reduce((s, c) => s + c.restAmount, 0);
-    /**
-     * Part des commandes qui n'est PAS encore devenue une facture de vente :
-     * chaque bon de livraison facture ce qu'il remet, on ne compte donc jamais
-     * deux fois la même marchandise dans le chiffre d'affaires ni dans la dette.
-     */
-    const commandsNet = netCommandTotals(rCommands, sales);
-    const commandsOrderedQty = rCommands.reduce(
-      (s, c) => s + c.items.reduce((a, i) => a + i.quantity, 0), 0
+    /* ------------------------------------------------------- CLIENTS ---- */
+
+    // Historique unifie de CHAQUE client : c'est lui qui garantit que les
+    // versements affiches ici sont EXACTEMENT ceux de la fiche du client.
+    const clientHistories = clients.map((c) => ({
+      client: c,
+      h: buildClientHistory({
+        clientId: c.id,
+        sales, commands, deliveries, payments: clientPayments,
+        oldDebts: clientOldDebts, refunds: clientRefunds, debts, adjustments,
+      }),
+    }));
+
+    // ---- 1. VENTES (avec la colonne ADRESSE demandee) ----
+    const rSales = groupByParty(
+      sales.filter((s) => !s.isHistorical && inP(s.date)),
+      (s) => nameOfClient(s.clientId),
+      (s) => s.date
     );
-    const commandsDeliveredQty = rCommands.reduce(
-      (s, c) => s + c.items.reduce((a, i) => a + (i.deliveredQuantity ?? 0), 0), 0
+    list.push({
+      key: 'sales', group: 'clients', label: 'Ventes', icon: <Receipt size={15} />,
+      note: "Factures de caisse ET factures nées d'un bon de livraison, groupées par client.",
+      count: rSales.length,
+      total: money(sum(rSales.map((s) => s.finalAmount))),
+      stats: [
+        { label: 'Factures', value: String(rSales.length) },
+        { label: 'Total facturé', value: money(sum(rSales.map((s) => s.finalAmount))), tone: 'accent' },
+        { label: 'Total encaissé', value: money(sum(rSales.map((s) => s.paidAmount))), tone: 'pos' },
+        { label: 'Reste dû', value: money(sum(rSales.map((s) => s.restAmount))), tone: 'neg' },
+        { label: 'TVA collectée', value: money(sum(rSales.map((s) => s.tvaAmount || 0))), tone: 'accent' },
+      ],
+      columns: [
+        { label: 'Client' }, { label: 'Adresse' }, { label: 'N° facture' }, { label: 'Date' },
+        { label: 'Origine', align: 'center' }, { label: 'Articles', align: 'right' },
+        { label: 'Total', align: 'right' }, { label: 'Payé', align: 'right' }, { label: 'Reste', align: 'right' },
+      ],
+      rows: rSales.map((s) => [
+        <span key="c" className="font-semibold">{nameOfClient(s.clientId)}</span>,
+        addressOfClient(s.clientId),
+        s.reference,
+        formatDate(s.date, language),
+        <Badge key="o" variant={s.deliveryId ? 'info' : 'neutral'} className="text-[10px]">
+          {s.deliveryId ? 'Livraison' : 'Caisse'}
+        </Badge>,
+        s.products.length,
+        money(s.finalAmount),
+        <span key="p" className="text-pistachio">{money(s.paidAmount)}</span>,
+        <span key="r" className={s.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>
+          {money(s.restAmount)}
+        </span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Adresse', align: 'left', width: '20%' },
+        { label: 'Paye', align: 'right', width: '17%' },
+        { label: 'Total', align: 'right', width: '17%' },
+      ],
+      printRows: rSales.map((s): DocRow => ({
+        cells: [
+          formatDate(s.date),
+          `${nameOfClient(s.clientId).toUpperCase()} — ${s.reference}`,
+          addressOfClient(s.clientId).toUpperCase(),
+          money(s.paidAmount),
+          money(s.finalAmount),
+        ],
+      })),
+      printTotalLabel: 'Total des ventes',
+      printTotalValue: money(sum(rSales.map((s) => s.finalAmount))),
+    });
+
+    // ---- 2. COMMANDES ----
+    const rCommands = groupByParty(
+      commands.filter((c) => !c.isHistorical && (inP(c.createdAt) || inP(c.receiveDate))),
+      (c) => c.clientName,
+      (c) => c.receiveDate || c.createdAt
     );
-    const commandsPendingQty = Math.max(0, commandsOrderedQty - commandsDeliveredQty);
-    const undeliveredCommands = rCommands.filter((c) => !deliveryStatus(c).isFull);
-    const deliveredQty = rDeliveries.reduce(
-      (s, d) => s + d.items.reduce((a, i) => a + i.quantity, 0), 0
-    );
-    // Matières premières retirées du stock par les livraisons de la période
-    const deliveryMaterials = new Map<string, { name: string; unit?: string; quantity: number; cost: number }>();
-    rDeliveries.forEach((d) =>
-      (d.consumptions ?? []).forEach((m) => {
-        const key = `${m.productName.trim().toLowerCase()}|${m.unit ?? ''}`;
-        const cur = deliveryMaterials.get(key) ?? { name: m.productName, unit: m.unit, quantity: 0, cost: 0 };
-        cur.quantity += m.quantity;
-        cur.cost += m.lineCost;
-        deliveryMaterials.set(key, cur);
+    const cmdNet = netCommandTotals(rCommands, sales);
+    list.push({
+      key: 'commands', group: 'clients', label: 'Commandes', icon: <ClipboardList size={15} />,
+      note: "Les commandes déjà livrées sont facturées par leurs bons : seule la part non encore livrée s'ajoute au chiffre d'affaires.",
+      count: rCommands.length,
+      total: money(sum(rCommands.map(commandTtc))),
+      stats: [
+        { label: 'Commandes', value: String(rCommands.length) },
+        { label: 'Total TTC', value: money(sum(rCommands.map(commandTtc))), tone: 'accent' },
+        { label: 'Non encore facturé', value: money(cmdNet.billed), tone: 'accent' },
+        { label: 'Versé', value: money(sum(rCommands.map((c) => c.paidAmount))), tone: 'pos' },
+        { label: 'Reste dû', value: money(sum(rCommands.map((c) => c.restAmount))), tone: 'neg' },
+      ],
+      columns: [
+        { label: 'Client' }, { label: 'N° commande' }, { label: 'Créée le' }, { label: 'Livraison' },
+        { label: 'Commandé', align: 'right' }, { label: 'Livré', align: 'right' },
+        { label: 'Annulé', align: 'right' }, { label: 'Total TTC', align: 'right' },
+        { label: 'Reste', align: 'right' },
+      ],
+      rows: rCommands.map((c) => {
+        const st = deliveryStatus(c);
+        return [
+          <span key="c" className="font-semibold">{c.clientName}</span>,
+          c.reference,
+          formatDate(c.createdAt.slice(0, 10), language),
+          c.receiveDate ? formatDate(c.receiveDate, language) : '—',
+          st.ordered, st.delivered,
+          <span key="x" className={st.cancelled > 0 ? 'font-bold text-rose-deep' : ''}>{st.cancelled}</span>,
+          money(commandTtc(c)),
+          <span key="r" className={c.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>
+            {money(c.restAmount)}
+          </span>,
+        ];
+      }),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Commande', align: 'center', width: '11%' },
+        { label: 'Livre', align: 'center', width: '11%' },
+        { label: 'Total TTC', align: 'right', width: '18%' },
+      ],
+      printRows: rCommands.map((c): DocRow => {
+        const st = deliveryStatus(c);
+        return {
+          cells: [
+            formatDate(c.receiveDate || c.createdAt.slice(0, 10)),
+            `${c.clientName.toUpperCase()} — ${c.reference}`,
+            st.ordered, st.delivered, money(commandTtc(c)),
+          ],
+        };
+      }),
+      printTotalLabel: 'Total des commandes',
+      printTotalValue: money(sum(rCommands.map(commandTtc))),
+    });
+
+    // ---- 3. LIVRAISONS ----
+    const commandById = new Map(commands.map((c) => [c.id, c]));
+    const rDeliveries = deliveries
+      .filter((d) => !d.isHistorical && inP(d.deliveredAt))
+      .map((d) => ({ d, cmd: commandById.get(d.commandId) }));
+    const deliveryLines = rDeliveries.flatMap(({ d, cmd }) =>
+      d.items.map((it) => {
+        const line = cmd?.items.find(
+          (x) => (it.commandItemId && x.id === it.commandItemId) || x.productName === it.productName
+        );
+        return {
+          date: d.deliveredAt.slice(0, 10),
+          client: cmd?.clientName ?? '—',
+          reference: d.reference,
+          location: d.location || cmd?.clientAddress || '—',
+          designation: it.productName,
+          quantity: it.quantity,
+          unit: it.sellUnit,
+          unitPrice: line?.unitPrice ?? 0,
+          amount: it.quantity * (line?.unitPrice ?? 0),
+        };
       })
     );
-    const deliveryMaterialsList = [...deliveryMaterials.values()].sort((a, b) => b.cost - a.cost);
-    const deliveryMaterialsCost = deliveryMaterialsList.reduce((s, x) => s + x.cost, 0);
-    /** Valeur marchande livrée : quantité remise × prix unitaire de la commande. */
-    const deliveredValue = rDeliveries.reduce((s, d) => {
-      const cmd = commands.find((c) => c.id === d.commandId);
-      return s + d.items.reduce((a, i) => {
-        const line = cmd?.items.find(
-          (it) => (i.commandItemId && i.commandItemId === it.id) || it.productName === i.productName
-        );
-        return a + i.quantity * (line?.unitPrice ?? 0);
-      }, 0);
-    }, 0);
+    const sortedDeliveryLines = groupByParty(deliveryLines, (l) => l.client, (l) => l.date);
+    list.push({
+      key: 'deliveries', group: 'clients', label: 'Livraisons', icon: <Truck size={15} />,
+      note: 'Chaque bon de livraison éclaté ligne à ligne : date, lieu, produit, quantité et valeur.',
+      count: rDeliveries.length,
+      total: money(sum(deliveryLines.map((l) => l.amount))),
+      stats: [
+        { label: 'Bons de livraison', value: String(rDeliveries.length) },
+        { label: 'Quantité remise', value: String(Math.round(sum(deliveryLines.map((l) => l.quantity)) * 1000) / 1000) },
+        { label: 'Valeur H.T', value: money(sum(deliveryLines.map((l) => l.amount))), tone: 'accent' },
+        { label: 'Encaissé', value: money(sum(rDeliveries.map(({ d }) => d.paidAmount ?? 0))), tone: 'pos' },
+        { label: 'Reste dû', value: money(sum(rDeliveries.map(({ d }) => d.restAmount ?? 0))), tone: 'neg' },
+      ],
+      columns: [
+        { label: 'Client' }, { label: 'N° BL' }, { label: 'Date' }, { label: 'Lieu' },
+        { label: 'Désignation' }, { label: 'Quantité', align: 'right' },
+        { label: 'P.U', align: 'right' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: sortedDeliveryLines.map((l) => [
+        <span key="c" className="font-semibold">{l.client}</span>,
+        l.reference,
+        formatDate(l.date, language),
+        l.location,
+        l.designation,
+        `${l.quantity}${l.unit ? ` ${l.unit}` : ''}`,
+        money(l.unitPrice),
+        <span key="a" className="font-bold text-gold-dark">{money(l.amount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Adresse de livraison', align: 'left', width: '21%' },
+        { label: 'Quantite', align: 'center', width: '11%' },
+        { label: 'P.T H.T', align: 'right', width: '17%' },
+      ],
+      printRows: sortedDeliveryLines.map((l): DocRow => ({
+        cells: [
+          formatDate(l.date),
+          `${l.client.toUpperCase()} — ${l.designation.toUpperCase()}`,
+          l.location.toUpperCase(),
+          l.quantity,
+          money(l.amount),
+        ],
+      })),
+      printTotalLabel: 'Total livre H.T',
+      printTotalValue: money(sum(deliveryLines.map((l) => l.amount))),
+    });
 
-    // ---- Ventes de caisse VS ventes issues d'un bon de livraison ----------
-    //  Une livraison EST une vente : sa facture vit dans `sales`. On les
-    //  distingue seulement pour expliquer d'où vient le chiffre d'affaires.
-    const posSales = rSales.filter((x) => !x.deliveryId);
-    const deliverySales = rSales.filter((x) => !!x.deliveryId);
-    const posSalesTotal = posSales.reduce((s, x) => s + x.finalAmount, 0);
-    const deliverySalesTotal = deliverySales.reduce((s, x) => s + x.finalAmount, 0);
-    const deliverySalesPaid = deliverySales.reduce((s, x) => s + x.paidAmount, 0);
-    const deliverySalesRest = deliverySales.reduce((s, x) => s + x.restAmount, 0);
-    /** Valeur T.T.C réellement facturée par les bons de livraison de la période. */
-    const deliveriesInvoiced = rDeliveries.reduce((s, d) => s + (d.totalTtc ?? 0), 0);
-    const deliveriesPaid = rDeliveries.reduce((s, d) => s + (d.paidAmount ?? 0), 0);
-    const deliveriesRest = rDeliveries.reduce((s, d) => s + (d.restAmount ?? 0), 0);
-    const deliveriesTva = rDeliveries.reduce((s, d) => s + (d.tvaAmount ?? 0), 0);
-
-    const totalSales = rSales.reduce((s, x) => s + x.finalAmount, 0);
-    const totalPurchases = rPurchases.reduce((s, x) => s + x.totalAmount, 0);
-    const totalExpenses = rExpenses.reduce((s, x) => s + x.amount, 0);
-
-    const workerPayments = workers.reduce((s, w) => s + w.payments.filter((p) => inRange(p.date)).reduce((a, p) => a + p.amount, 0), 0);
-    const workerAcomptes = workers.reduce((s, w) => s + w.acomptes.filter((a) => inRange(a.date)).reduce((x, a) => x + a.amount, 0), 0);
-    // Heures supplémentaires : payées sur la période, et dette restante
-    const workerSalaries = workers.reduce(
-      (s, w) => s + w.payments.filter((p) => inRange(p.date) && p.kind !== 'overtime').reduce((a, p) => a + p.amount, 0),
-      0
+    // ---- 4. VERSEMENTS CLIENTS ----
+    const clientPaymentRows = groupByParty(
+      clientHistories.flatMap(({ client, h }) =>
+        h.payments.filter((p) => inP(p.date)).map((p) => ({ ...p, clientName: client.name }))
+      ),
+      (p) => p.clientName,
+      (p) => p.date
     );
-    const overtimePaid = workers.reduce(
-      (s, w) => s + w.payments.filter((p) => inRange(p.date) && p.kind === 'overtime').reduce((a, p) => a + p.amount, 0),
-      0
+    list.push({
+      key: 'clientPayments', group: 'clients', label: 'Versements clients', icon: <Coins size={15} />,
+      note:
+        "Tout l'argent reçu des clients : versement direct, versement sur une dette enregistrée, "
+        + "encaissement porté par une vente ou un bon de livraison, acompte de commande. "
+        + "C'est la même liste que celle de la fiche du client.",
+      count: clientPaymentRows.length,
+      total: money(sum(clientPaymentRows.map((p) => p.amount))),
+      stats: [
+        { label: 'Écritures', value: String(clientPaymentRows.length) },
+        { label: 'Total encaissé', value: money(sum(clientPaymentRows.map((p) => p.amount))), tone: 'pos' },
+        {
+          label: 'Versements directs',
+          value: money(sum(clientPaymentRows.filter((p) => p.source === 'direct').map((p) => p.amount))),
+          tone: 'pos',
+        },
+        {
+          label: 'Sur dettes enregistrées',
+          value: money(sum(clientPaymentRows.filter((p) => p.source === 'debt').map((p) => p.amount))),
+          tone: 'pos',
+        },
+        {
+          label: 'Sur factures',
+          value: money(sum(clientPaymentRows.filter((p) => p.source === 'document').map((p) => p.amount))),
+          tone: 'pos',
+        },
+      ],
+      columns: [
+        { label: 'Client' }, { label: 'Date' }, { label: 'Origine' },
+        { label: 'Type', align: 'center' }, { label: 'Mode' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: clientPaymentRows.map((p) => [
+        <span key="c" className="font-semibold">{p.clientName}</span>,
+        formatDateTime(p.date, language),
+        p.origin,
+        <Badge key="t" variant={p.source === 'direct' ? 'success' : p.source === 'debt' ? 'warning' : 'info'} className="text-[10px]">
+          {p.source === 'direct' ? 'Direct' : p.source === 'debt' ? 'Sur dette' : p.source === 'advance' ? 'Acompte' : 'Facture'}
+        </Badge>,
+        p.source === 'direct' ? paymentMethodLabel(p) : '—',
+        <span key="a" className="font-bold text-pistachio">{money(p.amount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Mode', align: 'left', width: '20%' },
+        { label: 'Montant', align: 'right', width: '20%' },
+      ],
+      printRows: clientPaymentRows.map((p): DocRow => ({
+        cells: [
+          formatDate(p.date.slice(0, 10)),
+          `${p.clientName.toUpperCase()} — ${p.origin.toUpperCase()}`,
+          p.source === 'direct' ? paymentMethodLabel(p).toUpperCase() : '/',
+          money(p.amount),
+        ],
+      })),
+      printTotalLabel: 'Total encaisse des clients',
+      printTotalValue: money(sum(clientPaymentRows.map((p) => p.amount))),
+    });
+
+    // ---- 5. ANCIENNES VENTES ----
+    const oldSales = groupByParty(
+      sales.filter((s) => s.isHistorical && inP(s.date)),
+      (s) => nameOfClient(s.clientId),
+      (s) => s.date
     );
-    const rOvertimes = workers.flatMap((w) =>
-      (w.overtimes ?? []).filter((o) => inRange(o.date)).map((o) => ({ ...o, workerName: w.fullName }))
+    list.push({
+      key: 'oldSales', group: 'clients', label: 'Anciennes ventes', icon: <History size={15} />,
+      note: 'Ventes antérieures au logiciel — ni le stock ni la caisse ne les ont vues passer.',
+      count: oldSales.length,
+      total: money(sum(oldSales.map((s) => s.finalAmount))),
+      stats: [
+        { label: 'Factures', value: String(oldSales.length) },
+        { label: 'Total', value: money(sum(oldSales.map((s) => s.finalAmount))), tone: 'accent' },
+        { label: 'Payé', value: money(sum(oldSales.map((s) => s.paidAmount))), tone: 'pos' },
+        { label: 'Reste dû', value: money(sum(oldSales.map((s) => s.restAmount))), tone: 'neg' },
+      ],
+      columns: [
+        { label: 'Client' }, { label: 'N° facture' }, { label: 'Date' },
+        { label: 'Articles', align: 'right' }, { label: 'Total', align: 'right' },
+        { label: 'Payé', align: 'right' }, { label: 'Reste', align: 'right' },
+      ],
+      rows: oldSales.map((s) => [
+        <span key="c" className="font-semibold">{nameOfClient(s.clientId)}</span>,
+        s.reference, formatDate(s.date, language), s.products.length,
+        money(s.finalAmount),
+        <span key="p" className="text-pistachio">{money(s.paidAmount)}</span>,
+        <span key="r" className="text-rose-deep">{money(s.restAmount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Paye', align: 'right', width: '18%' },
+        { label: 'Total', align: 'right', width: '18%' },
+      ],
+      printRows: oldSales.map((s): DocRow => ({
+        cells: [
+          formatDate(s.date),
+          `${nameOfClient(s.clientId).toUpperCase()} — ANCIENNE VENTE ${s.reference}`,
+          money(s.paidAmount), money(s.finalAmount),
+        ],
+      })),
+      printTotalLabel: 'Total des anciennes ventes',
+      printTotalValue: money(sum(oldSales.map((s) => s.finalAmount))),
+    });
+
+    // ---- 6. ANCIENNES COMMANDES ----
+    const oldCommands = groupByParty(
+      commands.filter((c) => c.isHistorical && (inP(c.createdAt) || inP(c.receiveDate))),
+      (c) => c.clientName,
+      (c) => c.receiveDate || c.createdAt
     );
-    const overtimeHours = rOvertimes.reduce((s, o) => s + o.hours, 0);
-    const overtimeUnpaid = workers.reduce(
-      (s, w) => s + (w.overtimes ?? []).filter((o) => !o.isPaid).reduce((a, o) => a + o.amount, 0),
-      0
+    list.push({
+      key: 'oldCommands', group: 'clients', label: 'Anciennes commandes', icon: <History size={15} />,
+      count: oldCommands.length,
+      total: money(sum(oldCommands.map(commandTtc))),
+      stats: [
+        { label: 'Commandes', value: String(oldCommands.length) },
+        { label: 'Total TTC', value: money(sum(oldCommands.map(commandTtc))), tone: 'accent' },
+        { label: 'Versé', value: money(sum(oldCommands.map((c) => c.paidAmount))), tone: 'pos' },
+        { label: 'Reste dû', value: money(sum(oldCommands.map((c) => c.restAmount))), tone: 'neg' },
+      ],
+      columns: [
+        { label: 'Client' }, { label: 'N° commande' }, { label: 'Date' },
+        { label: 'Commandé', align: 'right' }, { label: 'Livré', align: 'right' },
+        { label: 'Total TTC', align: 'right' }, { label: 'Reste', align: 'right' },
+      ],
+      rows: oldCommands.map((c) => {
+        const st = deliveryStatus(c);
+        return [
+          <span key="c" className="font-semibold">{c.clientName}</span>,
+          c.reference, formatDate(c.createdAt.slice(0, 10), language),
+          st.ordered, st.delivered, money(commandTtc(c)),
+          <span key="r" className="text-rose-deep">{money(c.restAmount)}</span>,
+        ];
+      }),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Commande', align: 'center', width: '12%' },
+        { label: 'Total TTC', align: 'right', width: '20%' },
+      ],
+      printRows: oldCommands.map((c): DocRow => ({
+        cells: [
+          formatDate(c.receiveDate || c.createdAt.slice(0, 10)),
+          `${c.clientName.toUpperCase()} — ANCIENNE COMMANDE ${c.reference}`,
+          deliveryStatus(c).ordered, money(commandTtc(c)),
+        ],
+      })),
+      printTotalLabel: 'Total des anciennes commandes',
+      printTotalValue: money(sum(oldCommands.map(commandTtc))),
+    });
+
+    // ---- 7. ANCIENNES LIVRAISONS ----
+    const oldDeliveries = deliveries
+      .filter((d) => d.isHistorical && inP(d.deliveredAt))
+      .map((d) => ({ d, cmd: commandById.get(d.commandId) }));
+    const oldDeliveryQty = sum(oldDeliveries.map(({ d }) => sum(d.items.map((i) => i.quantity))));
+    list.push({
+      key: 'oldDeliveries', group: 'clients', label: 'Anciennes livraisons', icon: <History size={15} />,
+      note: "Livraisons d'anciennes commandes : aucune matière n'a été retirée du stock.",
+      count: oldDeliveries.length,
+      total: money(sum(oldDeliveries.map(({ d }) => d.totalHt ?? 0))),
+      stats: [
+        { label: 'Bons', value: String(oldDeliveries.length) },
+        { label: 'Quantité remise', value: String(Math.round(oldDeliveryQty * 1000) / 1000) },
+        { label: 'Valeur H.T', value: money(sum(oldDeliveries.map(({ d }) => d.totalHt ?? 0))), tone: 'accent' },
+      ],
+      columns: [
+        { label: 'Client' }, { label: 'N° BL' }, { label: 'Date' }, { label: 'Commande' },
+        { label: 'Quantité', align: 'right' }, { label: 'Total H.T', align: 'right' },
+      ],
+      rows: oldDeliveries.map(({ d, cmd }) => [
+        <span key="c" className="font-semibold">{cmd?.clientName ?? '—'}</span>,
+        d.reference, formatDate(d.deliveredAt.slice(0, 10), language), cmd?.reference ?? '—',
+        sum(d.items.map((i) => i.quantity)),
+        money(d.totalHt ?? 0),
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Quantite', align: 'center', width: '12%' },
+        { label: 'P.T H.T', align: 'right', width: '20%' },
+      ],
+      printRows: oldDeliveries.map(({ d, cmd }): DocRow => ({
+        cells: [
+          formatDate(d.deliveredAt.slice(0, 10)),
+          `${(cmd?.clientName ?? '—').toUpperCase()} — ANCIEN BON ${d.reference}`,
+          sum(d.items.map((i) => i.quantity)),
+          money(d.totalHt ?? 0),
+        ],
+      })),
+      printTotalLabel: 'Total des anciennes livraisons',
+      printTotalValue: money(sum(oldDeliveries.map(({ d }) => d.totalHt ?? 0))),
+    });
+
+    // ---- 8. ANCIENNES DETTES CLIENTS ----
+    const cOldDebts = groupByParty(
+      clientOldDebts.filter((d) => inP(d.date)),
+      (d) => d.partyName ?? '—',
+      (d) => d.date
     );
-    const destroyedValue = rDestructions.reduce((s, d) => s + d.value, 0);
-    const netProfit = totalSales - totalPurchases - totalExpenses - workerPayments - destroyedValue;
+    list.push({
+      key: 'clientOldDebts', group: 'clients', label: 'Anciennes dettes', icon: <PiggyBank size={15} />,
+      note: "Ardoises antérieures au logiciel — aucune écriture de caisse à leur saisie.",
+      count: cOldDebts.length,
+      total: money(sum(cOldDebts.map((d) => d.amount))),
+      stats: [
+        { label: 'Ardoises', value: String(cOldDebts.length) },
+        { label: 'Total', value: money(sum(cOldDebts.map((d) => d.amount))), tone: 'accent' },
+        { label: 'Réglé', value: money(sum(cOldDebts.map((d) => d.paidAmount))), tone: 'pos' },
+        { label: 'Reste dû', value: money(sum(cOldDebts.map((d) => d.restAmount))), tone: 'neg' },
+      ],
+      columns: [
+        { label: 'Client' }, { label: 'Date' }, { label: 'Description' },
+        { label: 'Montant', align: 'right' }, { label: 'Réglé', align: 'right' }, { label: 'Reste', align: 'right' },
+      ],
+      rows: cOldDebts.map((d) => [
+        <span key="c" className="font-semibold">{d.partyName ?? '—'}</span>,
+        formatDate(d.date, language), d.description || '—',
+        money(d.amount),
+        <span key="p" className="text-pistachio">{money(d.paidAmount)}</span>,
+        <span key="r" className={d.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>{money(d.restAmount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Regle', align: 'right', width: '18%' },
+        { label: 'Reste', align: 'right', width: '18%' },
+      ],
+      printRows: cOldDebts.map((d): DocRow => ({
+        cells: [
+          formatDate(d.date),
+          `${(d.partyName ?? '—').toUpperCase()} — ${(d.description || 'ANCIENNE DETTE').toUpperCase()}`,
+          money(d.paidAmount), money(d.restAmount),
+        ],
+      })),
+      printTotalLabel: 'Total reste du',
+      printTotalValue: money(sum(cOldDebts.map((d) => d.restAmount))),
+    });
 
-    // ---- Saisies rétroactives & TVA ----------------------------------------
-    // Anciennes ventes / anciens achats : enregistrés a posteriori, ils comptent
-    // dans le chiffre d'affaires et les dettes de la période mais n'ont jamais
-    // touché le stock actuel ni la caisse. On les isole pour pouvoir lire le
-    // rapport « hors reprise d'historique ».
-    const historicalSales = rSales.filter((x) => x.isHistorical);
-    const historicalPurchases = rPurchases.filter((x) => x.isHistorical);
-    const historicalSalesTotal = historicalSales.reduce((a, x) => a + x.finalAmount, 0);
-    const historicalPurchasesTotal = historicalPurchases.reduce((a, x) => a + x.totalAmount, 0);
-    const currentSalesTotal = totalSales - historicalSalesTotal;
-    const currentPurchasesTotal = totalPurchases - historicalPurchasesTotal;
+    // ---- 9. ANNULATIONS / AUGMENTATIONS DE COMMANDE (nouveau) ----
+    const rAdjust = groupByParty(
+      adjustments.filter((a) => inP(a.date)),
+      (a) => a.clientName ?? '—',
+      (a) => a.date
+    );
+    const cancelled = rAdjust.filter((a) => a.type === 'cancel');
+    const increased = rAdjust.filter((a) => a.type === 'increase');
+    list.push({
+      key: 'adjustments', group: 'clients', label: 'Annulations / augmentations', icon: <ScissorsSquare size={15} />,
+      note:
+        "Le client a renoncé au solde d'une commande, ou en a redemandé. L'écart n'apparaît plus "
+        + 'comme une quantité à livrer ni comme une dette.',
+      count: rAdjust.length,
+      total: `${money(sum(increased.map((a) => a.totalAmount)))} / −${money(sum(cancelled.map((a) => a.totalAmount)))}`,
+      stats: [
+        { label: 'Opérations', value: String(rAdjust.length) },
+        { label: 'Quantité annulée', value: String(sum(cancelled.map((a) => a.totalQuantity))), tone: 'neg' },
+        { label: 'Valeur annulée', value: money(sum(cancelled.map((a) => a.totalAmount))), tone: 'neg' },
+        { label: 'Quantité ajoutée', value: String(sum(increased.map((a) => a.totalQuantity))), tone: 'pos' },
+        { label: 'Valeur ajoutée', value: money(sum(increased.map((a) => a.totalAmount))), tone: 'pos' },
+      ],
+      columns: [
+        { label: 'Client' }, { label: 'Date' }, { label: 'Commande' },
+        { label: 'Opération', align: 'center' }, { label: 'Produits' },
+        { label: 'Quantité', align: 'right' }, { label: 'Valeur H.T', align: 'right' }, { label: 'Motif' },
+      ],
+      rows: rAdjust.map((a) => [
+        <span key="c" className="font-semibold">{a.clientName ?? '—'}</span>,
+        formatDate(a.date, language),
+        a.commandReference ?? '—',
+        <Badge key="t" variant={a.type === 'cancel' ? 'danger' : 'success'} className="text-[10px]">
+          {a.type === 'cancel' ? 'Annulation' : 'Augmentation'}
+        </Badge>,
+        a.lines.map((l) => `${l.productName} (${l.quantity})`).join(' · '),
+        <span key="q" className={a.type === 'cancel' ? 'text-rose-deep' : 'text-pistachio'}>
+          {a.type === 'cancel' ? '−' : '+'}{a.totalQuantity}
+        </span>,
+        <span key="v" className={a.type === 'cancel' ? 'font-bold text-rose-deep' : 'font-bold text-pistachio'}>
+          {a.type === 'cancel' ? '−' : '+'}{money(a.totalAmount)}
+        </span>,
+        a.reason || '—',
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Operation', align: 'center', width: '15%' },
+        { label: 'Quantite', align: 'center', width: '11%' },
+        { label: 'Valeur H.T', align: 'right', width: '18%' },
+      ],
+      printRows: rAdjust.map((a): DocRow => ({
+        cells: [
+          formatDate(a.date),
+          `${(a.clientName ?? '—').toUpperCase()} — ${a.commandReference ?? ''} ${a.lines.map((l) => l.productName).join(', ').toUpperCase()}`,
+          a.type === 'cancel' ? 'ANNULATION' : 'AUGMENTATION',
+          `${a.type === 'cancel' ? '-' : '+'}${a.totalQuantity}`,
+          `${a.type === 'cancel' ? '-' : '+'}${money(a.totalAmount)}`,
+        ],
+      })),
+      printTotalLabel: 'Solde des ajustements',
+      printTotalValue: money(sum(increased.map((a) => a.totalAmount)) - sum(cancelled.map((a) => a.totalAmount))),
+    });
 
-    const tvaSales = rSales.filter((x) => x.tvaEnabled);
-    const tvaCollected = rSales.reduce((a, x) => a + (x.tvaAmount || 0), 0);
-    const salesHT = rSales.reduce((a, x) => a + Math.max(0, x.totalAmount - x.reduction), 0);
+    // ---- 10. EXCEDENTS RENDUS AUX CLIENTS ----
+    const cRefunds = groupByParty(
+      clientRefunds.filter((r) => inP(r.refundedAt)),
+      (r) => r.partyName ?? '—',
+      (r) => r.refundedAt
+    );
+    list.push({
+      key: 'clientRefunds', group: 'clients', label: 'Excédents rendus', icon: <Undo2 size={15} />,
+      note: "Argent restitué aux clients qui avaient versé plus que leur dette — sortie de caisse.",
+      count: cRefunds.length,
+      total: money(sum(cRefunds.map((r) => r.amount))),
+      stats: [
+        { label: 'Remboursements', value: String(cRefunds.length) },
+        { label: 'Total rendu', value: money(sum(cRefunds.map((r) => r.amount))), tone: 'neg' },
+      ],
+      columns: [
+        { label: 'Client' }, { label: 'Date' }, { label: 'Reçu n°' },
+        { label: 'Mode' }, { label: 'Montant rendu', align: 'right' },
+      ],
+      rows: cRefunds.map((r) => [
+        <span key="c" className="font-semibold">{r.partyName ?? '—'}</span>,
+        formatDateTime(r.refundedAt, language),
+        `EXC-${r.id.slice(0, 8).toUpperCase()}`,
+        paymentMethodLabel(r),
+        <span key="a" className="font-bold text-caramel">− {money(r.amount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Mode', align: 'left', width: '20%' },
+        { label: 'Montant', align: 'right', width: '20%' },
+      ],
+      printRows: cRefunds.map((r): DocRow => ({
+        cells: [
+          formatDate(r.refundedAt.slice(0, 10)),
+          `${(r.partyName ?? '—').toUpperCase()} — REMBOURSEMENT EXC-${r.id.slice(0, 8).toUpperCase()}`,
+          paymentMethodLabel(r).toUpperCase(), money(r.amount),
+        ],
+      })),
+      printTotalLabel: 'Total rendu aux clients',
+      printTotalValue: money(sum(cRefunds.map((r) => r.amount))),
+    });
 
-    const clientDebts = rSales.filter((s) => s.restAmount > 0);
-    const supplierDebts = rPurchases.filter((p) => p.restAmount > 0);
-    const salesDebt = clientDebts.reduce((s, x) => s + x.restAmount, 0);
-    /** Dette client complète : factures + commandes pas encore livrées. */
-    const totalClientDebt = salesDebt + commandsNet.rest;
-    const totalSupplierDebt = supplierDebts.reduce((s, x) => s + x.restAmount, 0);
+    /* --------------------------------------------------- FOURNISSEURS ---- */
 
-    const stockValue = products.reduce((s, p) => s + p.currentQuantity * p.purchasePrice, 0);
-    const lowStock = products.filter((p) => p.currentQuantity <= p.minAlertQuantity);
-    const comptoirValue = comptoirItems.reduce((s, i) => s + i.quantity * i.unitPrice, 0);
+    const supplierHistories = suppliers.map((s) => ({
+      supplier: s,
+      h: buildSupplierHistory({
+        supplierId: s.id, purchases, payments: supplierPayments,
+        oldDebts: supplierOldDebts, refunds: supplierRefunds,
+      }),
+    }));
 
+    // ---- 11. ACHATS ----
+    const rPurchases = groupByParty(
+      purchases.filter((p) => !p.isHistorical && inP(p.date)),
+      (p) => nameOfSupplier(p.supplierId),
+      (p) => p.date
+    );
+    list.push({
+      key: 'purchases', group: 'suppliers', label: 'Achats', icon: <ShoppingCart size={15} />,
+      note: 'Factures d’achat groupées par fournisseur.',
+      count: rPurchases.length,
+      total: money(sum(rPurchases.map((p) => p.totalAmount))),
+      stats: [
+        { label: 'Factures', value: String(rPurchases.length) },
+        { label: 'Total acheté', value: money(sum(rPurchases.map((p) => p.totalAmount))), tone: 'accent' },
+        { label: 'Total réglé', value: money(sum(rPurchases.map((p) => p.paidAmount))), tone: 'pos' },
+        { label: 'Reste dû', value: money(sum(rPurchases.map((p) => p.restAmount))), tone: 'neg' },
+        { label: 'Articles', value: String(sum(rPurchases.map((p) => p.products.length))) },
+      ],
+      columns: [
+        { label: 'Fournisseur' }, { label: 'N° facture' }, { label: 'Date' }, { label: 'N° BL' },
+        { label: 'Articles', align: 'right' }, { label: 'Total', align: 'right' },
+        { label: 'Réglé', align: 'right' }, { label: 'Reste', align: 'right' },
+      ],
+      rows: rPurchases.map((p) => [
+        <span key="s" className="font-semibold">{nameOfSupplier(p.supplierId)}</span>,
+        p.reference, formatDate(p.date, language), p.bonNumber || '—', p.products.length,
+        money(p.totalAmount),
+        <span key="p" className="text-pistachio">{money(p.paidAmount)}</span>,
+        <span key="r" className={p.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>{money(p.restAmount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Articles', align: 'center', width: '10%' },
+        { label: 'Regle', align: 'right', width: '18%' },
+        { label: 'Total', align: 'right', width: '18%' },
+      ],
+      printRows: rPurchases.map((p): DocRow => ({
+        cells: [
+          formatDate(p.date),
+          `${nameOfSupplier(p.supplierId).toUpperCase()} — FACTURE ${p.reference}`,
+          p.products.length, money(p.paidAmount), money(p.totalAmount),
+        ],
+      })),
+      printTotalLabel: 'Total des achats',
+      printTotalValue: money(sum(rPurchases.map((p) => p.totalAmount))),
+    });
+
+    // ---- 12. VERSEMENTS FOURNISSEURS ----
+    const supplierPaymentRows = groupByParty(
+      supplierHistories.flatMap(({ supplier, h }) =>
+        h.payments.filter((p) => inP(p.date)).map((p) => ({ ...p, supplierName: supplier.name }))
+      ),
+      (p) => p.supplierName,
+      (p) => p.date
+    );
+    list.push({
+      key: 'supplierPayments', group: 'suppliers', label: 'Versements fournisseurs', icon: <Coins size={15} />,
+      note: "Règlements saisis sur la carte du fournisseur ET règlements portés par une facture d'achat.",
+      count: supplierPaymentRows.length,
+      total: money(sum(supplierPaymentRows.map((p) => p.amount))),
+      stats: [
+        { label: 'Écritures', value: String(supplierPaymentRows.length) },
+        { label: 'Total réglé', value: money(sum(supplierPaymentRows.map((p) => p.amount))), tone: 'neg' },
+      ],
+      columns: [
+        { label: 'Fournisseur' }, { label: 'Date' }, { label: 'Origine' },
+        { label: 'Type', align: 'center' }, { label: 'Mode' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: supplierPaymentRows.map((p) => [
+        <span key="s" className="font-semibold">{p.supplierName}</span>,
+        formatDateTime(p.date, language), p.origin,
+        <Badge key="t" variant={p.source === 'direct' ? 'success' : 'info'} className="text-[10px]">
+          {p.source === 'direct' ? 'Direct' : 'Facture'}
+        </Badge>,
+        p.source === 'direct' ? paymentMethodLabel(p) : '—',
+        <span key="a" className="font-bold text-rose-deep">{money(p.amount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Mode', align: 'left', width: '20%' },
+        { label: 'Montant', align: 'right', width: '20%' },
+      ],
+      printRows: supplierPaymentRows.map((p): DocRow => ({
+        cells: [
+          formatDate(p.date.slice(0, 10)),
+          `${p.supplierName.toUpperCase()} — ${p.origin.toUpperCase()}`,
+          p.source === 'direct' ? paymentMethodLabel(p).toUpperCase() : '/',
+          money(p.amount),
+        ],
+      })),
+      printTotalLabel: 'Total regle aux fournisseurs',
+      printTotalValue: money(sum(supplierPaymentRows.map((p) => p.amount))),
+    });
+
+    // ---- 13. ANCIENS ACHATS ----
+    const oldPurchases = groupByParty(
+      purchases.filter((p) => p.isHistorical && inP(p.date)),
+      (p) => nameOfSupplier(p.supplierId),
+      (p) => p.date
+    );
+    list.push({
+      key: 'oldPurchases', group: 'suppliers', label: 'Anciens achats', icon: <History size={15} />,
+      note: "Factures antérieures au logiciel — ni le stock ni la caisse ne les ont vues passer.",
+      count: oldPurchases.length,
+      total: money(sum(oldPurchases.map((p) => p.totalAmount))),
+      stats: [
+        { label: 'Factures', value: String(oldPurchases.length) },
+        { label: 'Total', value: money(sum(oldPurchases.map((p) => p.totalAmount))), tone: 'accent' },
+        { label: 'Réglé', value: money(sum(oldPurchases.map((p) => p.paidAmount))), tone: 'pos' },
+        { label: 'Reste dû', value: money(sum(oldPurchases.map((p) => p.restAmount))), tone: 'neg' },
+      ],
+      columns: [
+        { label: 'Fournisseur' }, { label: 'N° facture' }, { label: 'Date' },
+        { label: 'Articles', align: 'right' }, { label: 'Total', align: 'right' },
+        { label: 'Réglé', align: 'right' }, { label: 'Reste', align: 'right' },
+      ],
+      rows: oldPurchases.map((p) => [
+        <span key="s" className="font-semibold">{nameOfSupplier(p.supplierId)}</span>,
+        p.reference, formatDate(p.date, language), p.products.length,
+        money(p.totalAmount),
+        <span key="p" className="text-pistachio">{money(p.paidAmount)}</span>,
+        <span key="r" className="text-rose-deep">{money(p.restAmount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Regle', align: 'right', width: '18%' },
+        { label: 'Total', align: 'right', width: '18%' },
+      ],
+      printRows: oldPurchases.map((p): DocRow => ({
+        cells: [
+          formatDate(p.date),
+          `${nameOfSupplier(p.supplierId).toUpperCase()} — ANCIEN ACHAT ${p.reference}`,
+          money(p.paidAmount), money(p.totalAmount),
+        ],
+      })),
+      printTotalLabel: 'Total des anciens achats',
+      printTotalValue: money(sum(oldPurchases.map((p) => p.totalAmount))),
+    });
+
+    // ---- 14. ANCIENNES DETTES FOURNISSEURS ----
+    const sOldDebts = groupByParty(
+      supplierOldDebts.filter((d) => inP(d.date)),
+      (d) => d.partyName ?? '—',
+      (d) => d.date
+    );
+    list.push({
+      key: 'supplierOldDebts', group: 'suppliers', label: 'Anciennes dettes', icon: <PiggyBank size={15} />,
+      note: "Sommes déjà dues aux fournisseurs avant le logiciel.",
+      count: sOldDebts.length,
+      total: money(sum(sOldDebts.map((d) => d.amount))),
+      stats: [
+        { label: 'Ardoises', value: String(sOldDebts.length) },
+        { label: 'Total', value: money(sum(sOldDebts.map((d) => d.amount))), tone: 'accent' },
+        { label: 'Réglé', value: money(sum(sOldDebts.map((d) => d.paidAmount))), tone: 'pos' },
+        { label: 'Reste dû', value: money(sum(sOldDebts.map((d) => d.restAmount))), tone: 'neg' },
+      ],
+      columns: [
+        { label: 'Fournisseur' }, { label: 'Date' }, { label: 'Description' },
+        { label: 'Montant', align: 'right' }, { label: 'Réglé', align: 'right' }, { label: 'Reste', align: 'right' },
+      ],
+      rows: sOldDebts.map((d) => [
+        <span key="s" className="font-semibold">{d.partyName ?? '—'}</span>,
+        formatDate(d.date, language), d.description || '—',
+        money(d.amount),
+        <span key="p" className="text-pistachio">{money(d.paidAmount)}</span>,
+        <span key="r" className={d.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>{money(d.restAmount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Regle', align: 'right', width: '18%' },
+        { label: 'Reste', align: 'right', width: '18%' },
+      ],
+      printRows: sOldDebts.map((d): DocRow => ({
+        cells: [
+          formatDate(d.date),
+          `${(d.partyName ?? '—').toUpperCase()} — ${(d.description || 'ANCIENNE DETTE').toUpperCase()}`,
+          money(d.paidAmount), money(d.restAmount),
+        ],
+      })),
+      printTotalLabel: 'Total reste du',
+      printTotalValue: money(sum(sOldDebts.map((d) => d.restAmount))),
+    });
+
+    // ---- 15. EXCEDENTS RECUPERES ----
+    const sRefunds = groupByParty(
+      supplierRefunds.filter((r) => inP(r.refundedAt)),
+      (r) => r.partyName ?? '—',
+      (r) => r.refundedAt
+    );
+    list.push({
+      key: 'supplierRefunds', group: 'suppliers', label: 'Excédents récupérés', icon: <Undo2 size={15} />,
+      count: sRefunds.length,
+      total: money(sum(sRefunds.map((r) => r.amount))),
+      stats: [
+        { label: 'Récupérations', value: String(sRefunds.length) },
+        { label: 'Total récupéré', value: money(sum(sRefunds.map((r) => r.amount))), tone: 'pos' },
+      ],
+      columns: [
+        { label: 'Fournisseur' }, { label: 'Date' }, { label: 'Reçu n°' },
+        { label: 'Mode' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: sRefunds.map((r) => [
+        <span key="s" className="font-semibold">{r.partyName ?? '—'}</span>,
+        formatDateTime(r.refundedAt, language),
+        `EXC-${r.id.slice(0, 8).toUpperCase()}`,
+        paymentMethodLabel(r),
+        <span key="a" className="font-bold text-pistachio">+ {money(r.amount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Mode', align: 'left', width: '20%' },
+        { label: 'Montant', align: 'right', width: '20%' },
+      ],
+      printRows: sRefunds.map((r): DocRow => ({
+        cells: [
+          formatDate(r.refundedAt.slice(0, 10)),
+          `${(r.partyName ?? '—').toUpperCase()} — RECUPERATION EXC-${r.id.slice(0, 8).toUpperCase()}`,
+          paymentMethodLabel(r).toUpperCase(), money(r.amount),
+        ],
+      })),
+      printTotalLabel: 'Total recupere',
+      printTotalValue: money(sum(sRefunds.map((r) => r.amount))),
+    });
+
+    /* ------------------------------------------------------ ENTREPRISE -- */
+
+    // ---- 16. DEPENSES ----
+    const rExpenses = [...expenses.filter((e) => inP(e.date))].sort((a, b) => {
+      const byCat = (a.categoryName || 'Sans catégorie').localeCompare(b.categoryName || 'Sans catégorie', 'fr');
+      return byCat !== 0 ? byCat : a.date.localeCompare(b.date);
+    });
+    list.push({
+      key: 'expenses', group: 'company', label: 'Dépenses', icon: <Banknote size={15} />,
+      note: 'Dépenses de la période, groupées par catégorie.',
+      count: rExpenses.length,
+      total: money(sum(rExpenses.map((e) => e.amount))),
+      stats: [
+        { label: 'Dépenses', value: String(rExpenses.length) },
+        { label: 'Total', value: money(sum(rExpenses.map((e) => e.amount))), tone: 'neg' },
+        { label: 'Catégories', value: String(new Set(rExpenses.map((e) => e.categoryName || '—')).size) },
+      ],
+      columns: [
+        { label: 'Catégorie' }, { label: 'Nom' }, { label: 'Description' },
+        { label: 'Date' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: rExpenses.map((e) => [
+        <span key="c" className="font-semibold">{e.categoryName || 'Sans catégorie'}</span>,
+        e.name, e.description || '—', formatDate(e.date, language),
+        <span key="a" className="font-bold text-rose-deep">{money(e.amount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Categorie', align: 'left', width: '22%' },
+        { label: 'Montant', align: 'right', width: '20%' },
+      ],
+      printRows: rExpenses.map((e): DocRow => ({
+        cells: [
+          formatDate(e.date), e.name.toUpperCase(),
+          (e.categoryName || 'SANS CATEGORIE').toUpperCase(), money(e.amount),
+        ],
+      })),
+      printTotalLabel: 'Total des depenses',
+      printTotalValue: money(sum(rExpenses.map((e) => e.amount))),
+    });
+
+    // ---- 17. EMPLOYES ----
+    type WorkerRow = {
+      worker: string; kind: string; date: string; description: string; amount: number;
+    };
+    const workerRows: WorkerRow[] = [];
+    workers.forEach((w) => {
+      (w.payments ?? []).filter((p) => inP(p.date)).forEach((p) =>
+        workerRows.push({
+          worker: w.fullName,
+          kind: p.kind === 'overtime' ? 'Heures supplémentaires' : 'Salaire',
+          date: p.date,
+          description: p.description || p.period || '—',
+          amount: p.amount,
+        })
+      );
+      (w.acomptes ?? []).filter((a) => inP(a.date)).forEach((a) =>
+        workerRows.push({ worker: w.fullName, kind: 'Acompte', date: a.date, description: a.description || '—', amount: a.amount })
+      );
+      (w.absences ?? []).filter((a) => inP(a.date)).forEach((a) =>
+        workerRows.push({ worker: w.fullName, kind: 'Absence', date: a.date, description: a.description || '—', amount: a.cost })
+      );
+      (w.overtimes ?? []).filter((o) => inP(o.date)).forEach((o) =>
+        workerRows.push({
+          worker: w.fullName, kind: o.isPaid ? 'H. sup. payées' : 'H. sup. à payer',
+          date: o.date,
+          description: `${o.hours.toFixed(2)} h × ${money(o.hourlyRate)}${o.description ? ` — ${o.description}` : ''}`,
+          amount: o.amount,
+        })
+      );
+    });
+    const sortedWorkerRows = groupByParty(workerRows, (r) => r.worker, (r) => r.date);
+    list.push({
+      key: 'workers', group: 'company', label: 'Employés', icon: <HardHat size={15} />,
+      note: 'Salaires, acomptes, absences et heures supplémentaires de la période, groupés par employé.',
+      count: sortedWorkerRows.length,
+      total: money(sum(sortedWorkerRows.map((r) => r.amount))),
+      stats: [
+        { label: 'Écritures', value: String(sortedWorkerRows.length) },
+        { label: 'Salaires payés', value: money(sum(sortedWorkerRows.filter((r) => r.kind === 'Salaire').map((r) => r.amount))), tone: 'neg' },
+        { label: 'Acomptes', value: money(sum(sortedWorkerRows.filter((r) => r.kind === 'Acompte').map((r) => r.amount))), tone: 'neg' },
+        { label: 'Heures sup.', value: money(sum(sortedWorkerRows.filter((r) => r.kind.startsWith('H. sup')).map((r) => r.amount))), tone: 'neg' },
+        { label: 'Coût des absences', value: money(sum(sortedWorkerRows.filter((r) => r.kind === 'Absence').map((r) => r.amount))), tone: 'neg' },
+      ],
+      columns: [
+        { label: 'Employé' }, { label: 'Type' }, { label: 'Date' },
+        { label: 'Description' }, { label: 'Montant', align: 'right' },
+      ],
+      rows: sortedWorkerRows.map((r) => [
+        <span key="w" className="font-semibold">{r.worker}</span>,
+        <Badge key="k" variant={r.kind === 'Absence' ? 'danger' : r.kind === 'Acompte' ? 'warning' : 'info'} className="text-[10px]">
+          {r.kind}
+        </Badge>,
+        formatDate(r.date, language), r.description,
+        <span key="a" className="font-bold text-rose-deep">{money(r.amount)}</span>,
+      ]),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Type', align: 'left', width: '20%' },
+        { label: 'Montant', align: 'right', width: '20%' },
+      ],
+      printRows: sortedWorkerRows.map((r): DocRow => ({
+        cells: [formatDate(r.date), `${r.worker.toUpperCase()} — ${r.description.toUpperCase()}`, r.kind.toUpperCase(), money(r.amount)],
+      })),
+      printTotalLabel: 'Total employes',
+      printTotalValue: money(sum(sortedWorkerRows.map((r) => r.amount))),
+    });
+
+    // ---- 18. CAISSE ----
+    const rTx = [...transactions.filter((x) => inP(x.date))].sort((a, b) => a.date.localeCompare(b.date));
     const deposits = rTx.filter((x) => x.type === 'deposit');
     const withdrawals = rTx.filter((x) => x.type === 'withdrawal');
-    const depositsTotal = deposits.reduce((s, x) => s + x.amount, 0);
-    const withdrawalsTotal = withdrawals.reduce((s, x) => s + x.amount, 0);
-
-    // Caisse report decalages
-    const reportCalcs = rReports.map((r) => ({ report: r, calc: computeReportCalc(r, { sales, purchases, expenses, destructions, workers, transactions }) }));
-    const totalDecalage = reportCalcs.reduce((s, x) => s + x.calc.decalage, 0);
-
-    // Comptoir analysis (best / worst sellers within range)
-    const salesMap = new Map<string, { name: string; units: number; revenue: number; unit?: string; sellByUnit?: boolean }>();
-    rSales.forEach((s) => s.products.forEach((l) => {
-      const key = l.productName || '—';
-      const e = salesMap.get(key) || { name: key, units: 0, revenue: 0, unit: l.unit, sellByUnit: l.sellByUnit };
-      e.units += l.quantity; e.revenue += l.quantity * l.sellingPrice;
-      if (l.sellByUnit) { e.sellByUnit = true; e.unit = l.unit; }
-      salesMap.set(key, e);
-    }));
-    const soldRanked = [...salesMap.values()].sort((a, b) => b.units - a.units);
-    const productSalesRevenue = soldRanked.reduce((s, p) => s + p.revenue, 0);
-
-    // Comptoir rest right now (per product) + total value
-    const restItems = comptoirItems
-      .filter((i) => i.quantity > 0)
-      .map((i) => ({ name: i.productName, quantity: i.quantity, value: i.quantity * i.unitPrice, unit: i.sellByUnit ? i.unit : undefined }))
-      .sort((a, b) => b.value - a.value);
-
-    // ---- Group purchases by unit (sac / tonne / m³ …) ----
-    const purchasesCatMap = new Map<string, { categoryName: string; totalAmount: number; products: { [name: string]: { name: string; quantity: number; unit?: string; totalCost: number } } }>();
-    rPurchases.forEach(pur => {
-      pur.products.forEach(line => {
-        const prod = products.find(p => p.id === line.productId);
-        const catName = line.unit || prod?.unit || 'Sans unité';
-        
-        if (!purchasesCatMap.has(catName)) {
-          purchasesCatMap.set(catName, { categoryName: catName, totalAmount: 0, products: {} });
-        }
-        const catGroup = purchasesCatMap.get(catName)!;
-        const lineTotal = line.quantity * line.purchasePrice;
-        catGroup.totalAmount += lineTotal;
-
-        const pName = line.productName || '—';
-        if (!catGroup.products[pName]) {
-          catGroup.products[pName] = { name: pName, quantity: 0, unit: line.unit, totalCost: 0 };
-        }
-        const pGroup = catGroup.products[pName];
-        pGroup.quantity += line.quantity;
-        pGroup.totalCost += lineTotal;
-      });
-    });
-    const purchasesByCategory = [...purchasesCatMap.values()].map(cat => ({
-      ...cat,
-      productsList: Object.values(cat.products).sort((a, b) => b.totalCost - a.totalCost)
-    })).sort((a, b) => b.totalAmount - a.totalAmount);
-
-    // ---- Productions avec perte (loss) ----
-    const lossProductions = rProductions.filter((p) => p.hasLoss && (p.lossQuantity ?? 0) > 0);
-    const totalLossQty = lossProductions.reduce((s, p) => s + (p.lossQuantity ?? 0), 0);
-    const totalLossValue = lossProductions.reduce((s, p) => s + (p.lossValue ?? 0), 0);
-
-    // ---- Expenses grouped by category ----
-    const expCatMap = new Map<string, { id: string; name: string; total: number; items: Expense[] }>();
-    rExpenses.forEach((e) => {
-      const id = e.categoryId || '__none__';
-      const name = e.categoryName || t('noCategory');
-      const g = expCatMap.get(id) || { id, name, total: 0, items: [] };
-      g.total += e.amount;
-      g.items.push(e);
-      expCatMap.set(id, g);
-    });
-    const expensesByCategory = [...expCatMap.values()].sort((a, b) => b.total - a.total);
-
-    // ---- Deposits / withdrawals grouped by category ----
-    const groupTxByCat = (list: CaisseTransaction[]) => {
-      const map = new Map<string, { id: string; name: string; total: number; items: CaisseTransaction[] }>();
-      list.forEach((x) => {
-        const id = x.categoryId || '__none__';
-        const name = x.categoryName || t('noCategory');
-        const g = map.get(id) || { id, name, total: 0, items: [] };
-        g.total += x.amount;
-        g.items.push(x);
-        map.set(id, g);
-      });
-      return [...map.values()].sort((a, b) => b.total - a.total);
-    };
-    const depositsByCategory = groupTxByCat(deposits);
-    const withdrawalsByCategory = groupTxByCat(withdrawals);
-
-    // ---- Anciennes dettes & excedents rendus -------------------------------
-    // Les ANCIENNES DETTES sont des ardoises reprises du passe : elles pesent
-    // sur la dette des tiers mais n'ont JAMAIS touche la caisse. Les EXCEDENTS
-    // rendus, eux, sont de vrais mouvements d'argent (sortie pour un client,
-    // entree pour un fournisseur) et figurent donc dans les transactions.
-    const rOldDebts = [...clientOldDebts, ...supplierOldDebts]
-      .filter((d) => inRange(d.date))
-      .sort((a, b) => b.date.localeCompare(a.date));
-    const rRefunds = [...clientRefunds, ...supplierRefunds]
-      .filter((r) => inRange(r.refundedAt))
-      .sort((a, b) => b.refundedAt.localeCompare(a.refundedAt));
-
-    const oldDebtsTotal = rOldDebts.reduce((s, x) => s + x.amount, 0);
-    const oldDebtsRest = rOldDebts.reduce((s, x) => s + x.restAmount, 0);
-    const clientRefundsTotal = rRefunds
-      .filter((r) => r.partyType === 'client').reduce((s, x) => s + x.amount, 0);
-    const supplierRefundsTotal = rRefunds
-      .filter((r) => r.partyType === 'supplier').reduce((s, x) => s + x.amount, 0);
-
-    // Avances en cours, toutes periodes confondues : ce que l'entreprise doit
-    // encore rendre aux clients / recuperer aupres des fournisseurs.
-    const clientsCredit = clients.reduce((s, c) => s + Math.max(0, c.creditAmount ?? 0), 0);
-    const suppliersCredit = suppliers.reduce((s, x) => s + Math.max(0, x.creditAmount ?? 0), 0);
-
-    return {
-      rSales, rPurchases, rExpenses, rProductions, rDestructions, rTx,
-      totalSales, totalPurchases, totalExpenses, workerPayments, workerAcomptes,
-      workerSalaries, overtimePaid, overtimeUnpaid, overtimeHours, rOvertimes,
-      destroyedValue, netProfit, clientDebts, supplierDebts, totalClientDebt, totalSupplierDebt,
-      stockValue, lowStock, comptoirValue, deposits, withdrawals, depositsTotal, withdrawalsTotal,
-      reportCalcs, totalDecalage, soldRanked, productSalesRevenue, restItems,
-      purchasesByCategory,
-      historicalSales, historicalPurchases, historicalSalesTotal, historicalPurchasesTotal,
-      currentSalesTotal, currentPurchasesTotal,
-      tvaSales, tvaCollected, salesHT,
-      lossProductions, totalLossQty, totalLossValue,
-      expensesByCategory, depositsByCategory, withdrawalsByCategory,
-      rOldDebts, rRefunds, oldDebtsTotal, oldDebtsRest,
-      clientRefundsTotal, supplierRefundsTotal, clientsCredit, suppliersCredit,
-      rCommands, rDeliveries, commandsTotal, commandsPaid, commandsRest, commandsNet,
-      posSalesTotal, deliverySalesTotal, deliverySalesPaid, deliverySalesRest,
-      deliveriesInvoiced, deliveriesPaid, deliveriesRest, deliveriesTva, salesDebt,
-      commandsOrderedQty, commandsDeliveredQty, commandsPendingQty, undeliveredCommands,
-      deliveredQty, deliveredValue, deliveryMaterialsList, deliveryMaterialsCost,
-    };
-  }, [generated, from, to, sales, purchases, expenses, productions, destructions, comptoirItems, products, units, clients, suppliers, workers, transactions, commands, deliveries, caisseReports, clientOldDebts, supplierOldDebts, clientRefunds, supplierRefunds, t]);
-
-  /** Période du rapport, sous la forme attendue par l'historique partagé. */
-  const inPeriodPredicate = useCallback(
-    (date: string) => !!date && isWithinRange(date, from, to),
-    [from, to]
-  );
-
-  const clientName = (id: string | null) => (id ? clients.find((c) => c.id === id)?.name || '—' : t('walkIn'));
-  const supplierName = (id: string) => suppliers.find((s) => s.id === id)?.name || '—';
-  /** Products are now described by their unit, not by a marque/category. */
-  const unitLabel = (unit?: string) => unit || '—';
-
-  const handlePrint = () => {
-    if (!report) return;
-    const money = formatCurrency;
-    const subtitle = `${formatDate(from, language)} → ${formatDate(to, language)}`;
-    const totalRow = (label: string, value: string, tone: PrintRow['tone'] = 'accent'): PrintRow =>
-      ({ cells: [label, value], span: true, variant: 'total', tone });
-    const sections: PrintTableSection[] = [];
-
-    // ---- 1. Synthèse générale ----
-    sections.push({
-      title: t('generalSummary'), icon: '📊',
-      cols: [{ label: t('amount') }, { label: t('total'), align: 'right' }],
-      rows: [
-        { cells: [t('totalSales'), money(report.totalSales)], tone: 'pos' },
-        { cells: ['dont ventes courantes (stock déduit)', money(report.currentSalesTotal)], tone: 'muted' },
-        { cells: ['dont anciennes ventes (saisie rétroactive)', money(report.historicalSalesTotal)], tone: 'muted' },
-        { cells: ['Ventes hors taxes (base imposable)', money(report.salesHT)], tone: 'muted' },
-        { cells: ['TVA collectée sur les ventes', money(report.tvaCollected)], tone: 'accent' },
-        { cells: [t('totalPurchasesAmount'), money(report.totalPurchases)], tone: 'neg' },
-        { cells: ['dont achats courants (stock alimenté)', money(report.currentPurchasesTotal)], tone: 'muted' },
-        { cells: ['dont anciens achats (saisie rétroactive)', money(report.historicalPurchasesTotal)], tone: 'muted' },
-        { cells: [t('totalExpenses'), money(report.totalExpenses)], tone: 'neg' },
-        { cells: [t('workerSalaries'), money(report.workerPayments)], tone: 'neg' },
-        { cells: [t('acomptes'), money(report.workerAcomptes)], tone: 'neg' },
-        { cells: [t('moneyWasted'), money(report.destroyedValue)], tone: 'neg' },
-        { cells: [t('totalLossValue'), money(report.totalLossValue)], tone: 'neg' },
-        { cells: [t('stockValue'), money(report.stockValue)], tone: 'accent' },
-        { cells: [t('comptoirValue'), money(report.comptoirValue)], tone: 'accent' },
-        { cells: [t('clientDebts'), money(report.totalClientDebt)], tone: 'neg' },
-        { cells: [t('supplierDebts'), money(report.totalSupplierDebt)], tone: 'neg' },
-        { cells: [t('totalDeposits'), money(report.depositsTotal)], tone: 'pos' },
-        { cells: [t('totalWithdrawals'), money(report.withdrawalsTotal)], tone: 'neg' },
-        { cells: [t('reportsDecalage'), money(report.totalDecalage)], tone: 'muted' },
-        totalRow(t('netProfit'), money(report.netProfit), report.netProfit >= 0 ? 'pos' : 'neg'),
+    const depositsTotal = sum(deposits.map((x) => x.amount));
+    const withdrawalsTotal = sum(withdrawals.map((x) => x.amount));
+    // Solde theorique de la caisse a la fin de la periode
+    const theoretical = initialBalance
+      + sum(transactions.filter((x) => x.date <= t2).map((x) => (x.type === 'deposit' ? x.amount : -x.amount)));
+    list.push({
+      key: 'caisse', group: 'company', label: 'Caisse', icon: <Wallet size={15} />,
+      note: 'Toutes les entrées et sorties de caisse de la période, dans l’ordre chronologique.',
+      count: rTx.length,
+      total: money(depositsTotal - withdrawalsTotal),
+      stats: [
+        { label: 'Mouvements', value: String(rTx.length) },
+        { label: 'Entrées', value: money(depositsTotal), tone: 'pos' },
+        { label: 'Sorties', value: money(withdrawalsTotal), tone: 'neg' },
+        { label: 'Solde de la période', value: money(depositsTotal - withdrawalsTotal), tone: depositsTotal >= withdrawalsTotal ? 'pos' : 'neg' },
+        { label: 'Solde théorique au ' + formatDate(t2, language), value: money(theoretical), tone: 'accent' },
       ],
-    });
-
-    // ---- 2. État du stock ----
-    const stockSorted = [...products]
-      .map((p) => ({ p, value: p.currentQuantity * p.purchasePrice }))
-      .sort((a, b) => b.value - a.value);
-    sections.push({
-      title: t('stockState'), icon: '📦', headerTotal: money(report.stockValue),
-      cols: [
-        { label: t('productName') }, { label: t('marque') }, { label: t('category') },
-        { label: t('currentStock'), align: 'right' }, { label: t('minAlert'), align: 'right' },
-        { label: t('purchasePrice'), align: 'right' }, { label: t('stockValue'), align: 'right' },
+      columns: [
+        { label: 'Date' }, { label: 'Type', align: 'center' }, { label: 'Catégorie' },
+        { label: 'Description' }, { label: 'Montant', align: 'right' },
       ],
-      rows: [
-        ...stockSorted.map(({ p, value }): PrintRow => ({
-          cells: [
-            p.name, unitLabel(p.unit),
-            `${p.currentQuantity}${p.unit ? ' ' + p.unit : ''}`,
-            `${p.minAlertQuantity}${p.unit ? ' ' + p.unit : ''}`,
-            money(p.purchasePrice), money(value),
-          ],
-          tone: p.currentQuantity <= p.minAlertQuantity ? 'neg' : 'accent',
-        })),
-        totalRow(t('stockValue'), money(report.stockValue)),
-      ],
-      emptyLabel: t('noData'),
-    });
-
-    // ---- 3. Alertes de stock ----
-    sections.push({
-      title: t('stockAlertsCount'), icon: '⚠️', headerTotal: String(report.lowStock.length),
-      cols: [
-        { label: t('productName') }, { label: t('category') },
-        { label: t('currentStock'), align: 'right' }, { label: t('minAlert'), align: 'right' },
-      ],
-      rows: report.lowStock.map((p): PrintRow => ({
-        cells: [p.name, unitLabel(p.unit), `${p.currentQuantity}${p.unit ? ' ' + p.unit : ''}`, `${p.minAlertQuantity}${p.unit ? ' ' + p.unit : ''}`],
-        tone: 'neg',
-      })),
-      emptyLabel: t('noData'),
-    });
-
-    // ---- 4. Détail des achats par catégorie ----
-    const purchaseRows: PrintRow[] = [];
-    report.purchasesByCategory.forEach((cat) => {
-      purchaseRows.push({ cells: [`📁 ${cat.categoryName}`, money(cat.totalAmount)], span: true, variant: 'category', tone: 'accent' });
-      cat.productsList.forEach((p) => {
-        const avg = p.quantity > 0 ? p.totalCost / p.quantity : 0;
-        purchaseRows.push({ cells: [p.name, `${p.quantity}${p.unit ? ' ' + p.unit : ''}`, money(avg), money(p.totalCost)], variant: 'detail', tone: 'accent' });
-      });
-    });
-    if (purchaseRows.length) purchaseRows.push(totalRow(t('grandTotal'), money(report.totalPurchases)));
-    sections.push({
-      title: t('purchasesDetail'), icon: '🛒', headerTotal: money(report.totalPurchases),
-      cols: [{ label: t('productName') }, { label: t('quantity'), align: 'right' }, { label: t('purchasePrice'), align: 'right' }, { label: t('lineTotal'), align: 'right' }],
-      rows: purchaseRows, emptyLabel: t('noData'),
-    });
-
-    // ---- 5. Détail des ventes ----
-    const salesTotFinal = report.rSales.reduce((s, x) => s + x.finalAmount, 0);
-    const salesTotPaid = report.rSales.reduce((s, x) => s + x.paidAmount, 0);
-    const salesTotRest = report.rSales.reduce((s, x) => s + x.restAmount, 0);
-    sections.push({
-      title: t('salesDetail'), icon: '💳', headerTotal: money(salesTotFinal),
-      cols: [
-        { label: t('reference') }, { label: t('client') }, { label: t('date') },
-        { label: t('total'), align: 'right' }, { label: t('paid'), align: 'right' }, { label: t('rest'), align: 'right' },
-      ],
-      rows: [
-        ...report.rSales
-          .slice()
-          .sort((a, b) => (a.date < b.date ? 1 : -1))
-          .map((s): PrintRow => ({
-            cells: [s.reference, clientName(s.clientId), formatDateTime(s.date, language), money(s.finalAmount), money(s.paidAmount), money(s.restAmount)],
-            tone: s.restAmount > 0 ? 'neg' : 'default',
-          })),
-        { cells: [t('total'), '', '', money(salesTotFinal), money(salesTotPaid), money(salesTotRest)], variant: 'total', tone: 'neg' },
-      ],
-      emptyLabel: t('noData'),
-    });
-
-    // ---- 5 bis. TVA collectée ----
-    sections.push({
-      title: 'TVA collectée sur les ventes', icon: '🧮', headerTotal: money(report.tvaCollected),
-      cols: [
-        { label: t('reference') }, { label: t('client') }, { label: t('date') },
-        { label: 'Base HT', align: 'right' }, { label: 'Taux', align: 'right' },
-        { label: 'TVA', align: 'right' }, { label: 'Net TTC', align: 'right' },
-      ],
-      rows: [
-        ...report.tvaSales
-          .slice()
-          .sort((a, b) => (a.date < b.date ? 1 : -1))
-          .map((x): PrintRow => ({
-            cells: [
-              x.reference, clientName(x.clientId), formatDate(x.date, language),
-              money(Math.max(0, x.totalAmount - x.reduction)), `${x.tvaRate ?? 0} %`,
-              money(x.tvaAmount || 0), money(x.finalAmount),
-            ],
-            tone: 'accent',
-          })),
-        ...(report.tvaSales.length
-          ? [{
-              cells: ['TOTAL TVA', '', '', money(report.salesHT), '', money(report.tvaCollected), money(salesTotFinal)],
-              variant: 'total' as const, tone: 'accent' as const,
-            }]
-          : []),
-      ],
-      emptyLabel: 'Aucune vente soumise à la TVA sur la période',
-    });
-
-    // ---- 5 quater. Commandes clients de la période ----
-    sections.push({
-      title: 'Commandes clients', icon: '📋', headerTotal: money(report.commandsTotal),
-      note: "Une commande n'entame pas le stock : les matières ne partent qu'à la livraison.",
-      cols: [
-        { label: 'N° commande' }, { label: t('client') }, { label: 'Créée le' },
-        { label: 'Livraison prévue' }, { label: 'Avancement', align: 'right' },
-        { label: t('total'), align: 'right' }, { label: t('paid'), align: 'right' },
-        { label: t('rest'), align: 'right' },
-      ],
-      rows: [
-        ...report.rCommands
-          .slice()
-          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-          .map((c): PrintRow => {
-            const d = deliveryStatus(c);
-            return {
-              cells: [
-                `${c.reference}${c.bonNumber ? ` (bon ${c.bonNumber})` : ''}`,
-                c.clientName,
-                formatDate(c.createdAt, language),
-                c.receiveDate ? formatDate(c.receiveDate, language) : '—',
-                d.isFull ? 'Livrée' : d.isPartial ? `${d.percent.toFixed(0)} %` : 'Non livrée',
-                money(c.totalAmount), money(c.paidAmount), money(c.restAmount),
-              ],
-              tone: c.restAmount > 0 ? 'neg' : 'pos',
-            };
-          }),
-        ...(report.rCommands.length
-          ? [{
-              cells: [
-                'TOTAL COMMANDES', '', '', '',
-                `${report.commandsDeliveredQty} / ${report.commandsOrderedQty}`,
-                money(report.commandsTotal), money(report.commandsPaid), money(report.commandsRest),
-              ],
-              variant: 'total' as const,
-            }]
-          : []),
-      ],
-      emptyLabel: 'Aucune commande sur la période',
-    });
-
-    // ---- 5 quinquies. Détail des produits commandés ----
-    sections.push({
-      title: 'Détail des produits commandés', icon: '🧱',
-      cols: [
-        { label: 'Commande / Produit' }, { label: 'Commandé', align: 'right' },
-        { label: 'Livré', align: 'right' }, { label: 'Reste à livrer', align: 'right' },
-        { label: 'P.U.', align: 'right' }, { label: 'Montant', align: 'right' },
-      ],
-      rows: report.rCommands.flatMap((c): PrintRow[] => [
-        {
-          cells: [`${c.reference} — ${c.clientName}`, money(c.totalAmount)],
-          span: true, variant: 'category', tone: 'accent',
-        },
-        ...c.items.map((it): PrintRow => {
-          const u = it.sellByUnit && it.sellUnit ? ` ${it.sellUnit}` : '';
-          const done = it.deliveredQuantity ?? 0;
-          return {
-            cells: [
-              it.productName || '—', `${it.quantity}${u}`, `${done}${u}`,
-              `${Math.max(0, it.quantity - done)}${u}`,
-              money(it.unitPrice), money(it.totalPrice),
-            ],
-            variant: 'detail',
-          };
-        }),
+      rows: rTx.map((x) => [
+        formatDate(x.date, language),
+        <Badge key="t" variant={x.type === 'deposit' ? 'success' : 'danger'} className="text-[10px]">
+          {x.type === 'deposit' ? 'Entrée' : 'Sortie'}
+        </Badge>,
+        x.categoryName || '—',
+        x.description || '—',
+        <span key="a" className={x.type === 'deposit' ? 'font-bold text-pistachio' : 'font-bold text-rose-deep'}>
+          {x.type === 'deposit' ? '+ ' : '− '}{money(x.amount)}
+        </span>,
       ]),
-      emptyLabel: 'Aucun produit commandé sur la période',
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Type', align: 'center', width: '12%' },
+        { label: 'Montant', align: 'right', width: '20%' },
+      ],
+      printRows: rTx.map((x): DocRow => ({
+        cells: [
+          formatDate(x.date),
+          `${(x.categoryName || 'CAISSE').toUpperCase()} — ${(x.description || '').toUpperCase()}`,
+          x.type === 'deposit' ? 'ENTREE' : 'SORTIE',
+          `${x.type === 'deposit' ? '+' : '-'}${money(x.amount)}`,
+        ],
+      })),
+      printTotalLabel: 'Solde de la periode',
+      printTotalValue: money(depositsTotal - withdrawalsTotal),
     });
 
-    // ---- 5 sexies. Bons de livraison de la période (chaque bon vaut vente) ----
-    sections.push({
-      title: 'Bons de livraison (ventes)', icon: '🚚', headerTotal: money(report.deliveriesInvoiced),
-      note:
-        'Chaque bon de livraison est une VENTE : il facture la marchandise remise, encaisse ce que '
-        + 'le client paie et inscrit le reste en dette. Il retire aussi du stock les matières de la '
-        + 'production livrée.',
-      cols: [
-        { label: 'N° bon' }, { label: 'Commande / Vente' }, { label: t('client') },
-        { label: t('date') }, { label: 'Chauffeur' },
-        { label: 'Net T.T.C', align: 'right' }, { label: 'Versé / Reste', align: 'right' },
+    // ---- 19. PRODUCTIONS ----
+    const rProductions = [...productions.filter((p) => inP(p.date))].sort((a, b) => a.date.localeCompare(b.date));
+    const prodCost = sum(rProductions.map((p) =>
+      sum(p.usedProducts.map((u) => u.lineCost ?? u.quantityUsed * (u.unitCost ?? 0)))));
+    const rDestructions = destructions.filter((d) => inP(d.date));
+    list.push({
+      key: 'productions', group: 'company', label: 'Productions', icon: <Factory size={15} />,
+      note: 'Lots produits sur la période, avec leur coût matière et leur valeur potentielle.',
+      count: rProductions.length,
+      total: money(sum(rProductions.map((p) => p.totalValue))),
+      stats: [
+        { label: 'Lots', value: String(rProductions.length) },
+        { label: 'Quantité produite', value: String(Math.round(sum(rProductions.map((p) => p.outputQuantity)) * 1000) / 1000) },
+        { label: 'Coût matière', value: money(prodCost), tone: 'neg' },
+        { label: 'Valeur potentielle', value: money(sum(rProductions.map((p) => p.totalValue))), tone: 'accent' },
+        { label: 'Pertes', value: money(sum(rProductions.map((p) => p.lossValue ?? 0))), tone: 'neg' },
+        { label: 'Destructions', value: money(sum(rDestructions.map((d) => d.value))), tone: 'neg' },
       ],
-      rows: [
-        ...report.rDeliveries
-          .slice()
-          .sort((a, b) => b.deliveredAt.localeCompare(a.deliveredAt))
-          .flatMap((d): PrintRow[] => {
-            const cmd = commands.find((c) => c.id === d.commandId);
-            const qty = d.items.reduce((a, i) => a + i.quantity, 0);
-            const cost = (d.consumptions ?? []).reduce((a, x) => a + x.lineCost, 0);
-            return [
-              {
-                cells: [
-                  d.reference,
-                  `${cmd?.reference ?? '—'}${d.saleReference ? ` / ${d.saleReference}` : ''}`,
-                  cmd?.clientName ?? '—',
-                  formatDateTime(d.deliveredAt, language),
-                  d.driverName ? `${d.driverName}${d.driverPlate ? ` · ${d.driverPlate}` : ''}` : '—',
-                  money(d.totalTtc ?? 0),
-                  `${money(d.paidAmount ?? 0)} / ${money(d.restAmount ?? 0)}`,
-                ],
-                tone: (d.restAmount ?? 0) > 0 ? 'neg' : 'pos',
-              },
-              {
-                cells: [
-                  `↳ ${Math.round(qty * 1000) / 1000} unité(s) remises · H.T ${money(d.totalHt ?? 0)}`
-                  + `${d.tvaEnabled ? ` · TVA ${d.tvaRate} % ${money(d.tvaAmount ?? 0)}` : ' · sans TVA'}`
-                  + ` · coût matière ${money(cost)}`,
-                  '',
-                ],
-                span: true, variant: 'detail', tone: 'muted',
-              },
-              ...d.items.map((i): PrintRow => ({
-                cells: [`↳ ${i.productName}`, `${i.quantity}${i.sellUnit ? ` ${i.sellUnit}` : ''}`],
-                span: true, variant: 'detail', tone: 'muted',
-              })),
-              ...(d.consumptions ?? []).map((m): PrintRow => ({
-                cells: [
-                  `↳ matière : ${m.productName} − ${m.quantity}${m.unit ? ` ${m.unit}` : ''}`,
-                  money(m.lineCost),
-                ],
-                span: true, variant: 'detail', tone: 'neg',
-              })),
-            ];
-          }),
-        ...(report.rDeliveries.length
-          ? [{
-              cells: [
-                'TOTAL LIVRAISONS', '', '', '', '',
-                String(Math.round(report.deliveredQty * 1000) / 1000),
-                money(report.deliveryMaterialsCost),
-              ],
-              variant: 'total' as const,
-            }]
-          : []),
+      columns: [
+        { label: 'Production' }, { label: 'Date' }, { label: 'Catégorie' },
+        { label: 'Quantité', align: 'right' }, { label: 'Coût matière', align: 'right' },
+        { label: 'Valeur', align: 'right' }, { label: 'Perte', align: 'right' },
       ],
-      emptyLabel: 'Aucune livraison sur la période',
+      rows: rProductions.map((p) => {
+        const cost = sum(p.usedProducts.map((u) => u.lineCost ?? u.quantityUsed * (u.unitCost ?? 0)));
+        return [
+          <span key="n" className="font-semibold">{p.name}</span>,
+          `${formatDate(p.date, language)} ${p.hour ?? ''}`,
+          p.categoryName || '—',
+          `${p.outputQuantity}${p.sellByUnit && p.sellUnit ? ` ${p.sellUnit}` : ''}`,
+          <span key="c" className="text-rose-deep">{money(cost)}</span>,
+          money(p.totalValue),
+          <span key="l" className={(p.lossValue ?? 0) > 0 ? 'font-bold text-rose-deep' : 'text-text-muted'}>
+            {money(p.lossValue ?? 0)}
+          </span>,
+        ];
+      }),
+      printColumns: [
+        DATE_COL, DESIGNATION_COL,
+        { label: 'Quantite', align: 'center', width: '11%' },
+        { label: 'Cout matiere', align: 'right', width: '17%' },
+        { label: 'Valeur', align: 'right', width: '17%' },
+      ],
+      printRows: rProductions.map((p): DocRow => {
+        const cost = sum(p.usedProducts.map((u) => u.lineCost ?? u.quantityUsed * (u.unitCost ?? 0)));
+        return {
+          cells: [formatDate(p.date), p.name.toUpperCase(), p.outputQuantity, money(cost), money(p.totalValue)],
+        };
+      }),
+      printTotalLabel: 'Valeur produite',
+      printTotalValue: money(sum(rProductions.map((p) => p.totalValue))),
     });
 
-    // ---- 5 septies. Matières premières sorties par les livraisons ----
-    sections.push({
-      title: 'Matières premières déduites par les livraisons', icon: '📦',
-      headerTotal: money(report.deliveryMaterialsCost),
-      note: 'Sorties de « Gestion de stock » provoquées par les bons de livraison de la période.',
-      cols: [
-        { label: 'Matière première' }, { label: 'Quantité retirée', align: 'right' },
-        { label: 'Coût', align: 'right' },
+    // ---- 20. ETAT DU STOCK ----
+    const stockSorted = [...products].sort((a, b) =>
+      b.currentQuantity * b.purchasePrice - a.currentQuantity * a.purchasePrice);
+    const stockValue = sum(products.map((p) => p.currentQuantity * p.purchasePrice));
+    list.push({
+      key: 'stock', group: 'company', label: 'Stock', icon: <Package size={15} />,
+      note: "État du stock au moment où le rapport est généré.",
+      count: stockSorted.length,
+      total: money(stockValue),
+      stats: [
+        { label: 'Références', value: String(products.length) },
+        { label: 'Valeur du stock', value: money(stockValue), tone: 'accent' },
+        { label: 'En alerte', value: String(products.filter((p) => p.currentQuantity <= p.minAlertQuantity).length), tone: 'neg' },
       ],
-      rows: [
-        ...report.deliveryMaterialsList.map((m): PrintRow => ({
-          cells: [
-            m.name,
-            `${Math.round(m.quantity * 1000) / 1000}${m.unit ? ` ${m.unit}` : ''}`,
-            money(m.cost),
-          ],
-          tone: 'neg',
-        })),
-        ...(report.deliveryMaterialsList.length
-          ? [totalRow(t('total'), money(report.deliveryMaterialsCost), 'neg')]
-          : []),
+      columns: [
+        { label: 'Produit' }, { label: 'Unité' }, { label: 'Stock', align: 'right' },
+        { label: 'Alerte', align: 'right' }, { label: 'Prix d’achat', align: 'right' },
+        { label: 'Valeur', align: 'right' },
       ],
-      emptyLabel: 'Aucune matière retirée par une livraison sur la période',
+      rows: stockSorted.map((p) => [
+        <span key="n" className="font-semibold">{p.name}</span>,
+        p.unit || '—',
+        <span key="q" className={p.currentQuantity <= p.minAlertQuantity ? 'font-bold text-rose-deep' : ''}>
+          {p.currentQuantity}
+        </span>,
+        p.minAlertQuantity,
+        money(p.purchasePrice),
+        money(p.currentQuantity * p.purchasePrice),
+      ]),
+      printColumns: [
+        { label: 'Designation', align: 'left' },
+        { label: 'Stock', align: 'center', width: '13%' },
+        { label: 'Prix d’achat', align: 'right', width: '20%' },
+        { label: 'Valeur', align: 'right', width: '20%' },
+      ],
+      printRows: stockSorted.map((p): DocRow => ({
+        cells: [p.name.toUpperCase(), p.currentQuantity, money(p.purchasePrice), money(p.currentQuantity * p.purchasePrice)],
+      })),
+      printTotalLabel: 'Valeur totale du stock',
+      printTotalValue: money(stockValue),
     });
 
-    // ---- 5 ter. Saisies rétroactives (anciennes ventes / anciens achats) ----
-    sections.push({
-      title: 'Saisies rétroactives — historique repris', icon: '🕘',
-      headerTotal: money(report.historicalSalesTotal + report.historicalPurchasesTotal),
-      cols: [
-        { label: 'Type' }, { label: t('reference') }, { label: 'Tiers' }, { label: t('date') },
-        { label: t('total'), align: 'right' }, { label: t('rest'), align: 'right' },
-      ],
-      rows: [
-        ...report.historicalSales.map((x): PrintRow => ({
-          cells: [
-            'Ancienne vente', x.reference, clientName(x.clientId), formatDate(x.date, language),
-            money(x.finalAmount), money(x.restAmount),
-          ],
-          tone: 'pos',
-        })),
-        ...report.historicalPurchases.map((x): PrintRow => ({
-          cells: [
-            'Ancien achat', x.reference, supplierName(x.supplierId), formatDate(x.date, language),
-            money(x.totalAmount), money(x.restAmount),
-          ],
-          tone: 'neg',
-        })),
-        ...(report.historicalSales.length + report.historicalPurchases.length
-          ? [{
-              cells: [
-                'TOTAL', '', '', '',
-                money(report.historicalSalesTotal + report.historicalPurchasesTotal), '',
-              ],
-              variant: 'total' as const,
-            }]
-          : []),
-      ],
-      emptyLabel: 'Aucune saisie rétroactive sur la période',
-    });
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    period, sales, purchases, expenses, productions, destructions, products, clients,
+    clientPayments, clientOldDebts, clientRefunds, suppliers, supplierPayments,
+    supplierOldDebts, supplierRefunds, debts, workers, transactions, initialBalance,
+    commands, deliveries, adjustments, caisseReports, language,
+  ]);
 
-    // ---- 6. Ventes par produit ----
-    sections.push({
-      title: t('productSales'), icon: '🧾', headerTotal: money(report.productSalesRevenue),
-      cols: [{ label: t('productName') }, { label: t('soldQty'), align: 'right' }, { label: t('revenue'), align: 'right' }],
-      rows: [
-        ...report.soldRanked.map((p): PrintRow => ({ cells: [p.name, `${p.units}${p.sellByUnit && p.unit ? ' ' + p.unit : ''}`, money(p.revenue)], tone: 'pos' })),
-        totalRow(t('grandTotal'), money(report.productSalesRevenue), 'pos'),
-      ],
-      emptyLabel: t('noData'),
-    });
+  // À la génération, toutes les parties qui ont du contenu sont cochées.
+  useEffect(() => {
+    if (!parts.length) return;
+    setChecked(parts.filter((p) => p.count > 0).map((p) => p.key));
+    const first = parts.find((p) => p.group === group && p.count > 0) ?? parts.find((p) => p.group === group);
+    if (first) setActive(first.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parts.length, period]);
 
-    // ---- 7. Production — ingrédients consommés ----
-    const prodRows: PrintRow[] = [];
-    let prodCostTotal = 0;
-    report.rProductions.forEach((p) => {
-      const cost = p.usedProducts.reduce((sum, u) => sum + (u.lineCost ?? u.quantityUsed * (u.unitCost ?? 0)), 0);
-      prodCostTotal += cost;
-      const gains = p.totalValue - cost;
-      prodRows.push({
-        cells: [`🧪 ${p.name} — ${formatDate(p.date, language)} ${p.hour} · ${t('qtyReceived')}: ${p.outputQuantity} · ${t('expectedRevenue')}: ${money(p.totalValue)} · ${t('totalGains')}: ${money(gains)}`, money(cost)],
-        span: true, variant: 'subheader', tone: gains >= 0 ? 'pos' : 'neg',
-      });
-      p.usedProducts.forEach((u) => {
-        prodRows.push({
-          cells: [u.productName, `${u.quantityUsed}${u.unit ? ' ' + u.unit : ''}`, money(u.unitCost ?? 0), money(u.lineCost ?? u.quantityUsed * (u.unitCost ?? 0))],
-          variant: 'detail', tone: 'neg',
-        });
-      });
-    });
-    if (prodRows.length) prodRows.push(totalRow(t('productionCost'), money(prodCostTotal), 'neg'));
-    sections.push({
-      title: t('productionByCategory'), icon: '⚗️',
-      cols: [{ label: t('ingredient') }, { label: t('quantity'), align: 'right' }, { label: t('unitCost'), align: 'right' }, { label: t('lineCost'), align: 'right' }],
-      rows: prodRows, emptyLabel: t('noData'),
-    });
+  const visibleParts = parts.filter((p) => p.group === group);
+  const current = parts.find((p) => p.key === active) ?? visibleParts[0];
 
-    // ---- 7b. Productions avec perte ----
-    const lossPrintRows: PrintRow[] = [];
-    report.lossProductions.forEach((p) => {
-      const su = p.sellByUnit && p.sellUnit ? ` ${p.sellUnit}` : '';
-      lossPrintRows.push({
-        cells: [p.name, formatDate(p.date, language), `${p.expectedQuantity ?? 0}${su}`, `${p.outputQuantity}${su}`, `${p.lossQuantity ?? 0}${su}`, money(p.lossValue ?? 0)],
-        tone: 'neg',
-      });
-      if (p.lossDescription) lossPrintRows.push({ cells: [`📝 ${p.lossDescription}`, ''], span: true, variant: 'detail', tone: 'muted' });
-    });
-    if (lossPrintRows.length) lossPrintRows.push(totalRow(`${t('totalLoss')}: ${report.totalLossQty} · ${t('totalLossValue')}`, money(report.totalLossValue), 'neg'));
-    sections.push({
-      title: t('lossProductions'), icon: '📉', headerTotal: money(report.totalLossValue),
-      cols: [
-        { label: t('production') }, { label: t('date') },
-        { label: t('expectedQty'), align: 'right' }, { label: t('realProducedQty'), align: 'right' },
-        { label: t('lossQty'), align: 'right' }, { label: t('lossValueLabel'), align: 'right' },
-      ],
-      rows: lossPrintRows, emptyLabel: t('noLoss'),
-    });
+  /* ---------------------------------------------------------- impression */
+  const metaLines = period
+    ? [`PERIODE DU ${formatDate(period.from)} AU ${formatDate(period.to)}`]
+    : [];
 
-    // ---- 8. Dépenses par catégorie ----
-    const expenseRows: PrintRow[] = [];
-    report.expensesByCategory.forEach((cat) => {
-      expenseRows.push({ cells: [`📁 ${cat.name} — ${cat.items.length}`, money(cat.total)], span: true, variant: 'category', tone: 'neg' });
-      cat.items.forEach((e) => {
-        expenseRows.push({ cells: [e.name, e.description || '—', formatDate(e.date, language), money(e.amount)], variant: 'detail', tone: 'neg' });
-      });
-    });
-    if (expenseRows.length) expenseRows.push(totalRow(t('total'), money(report.totalExpenses), 'neg'));
-    sections.push({
-      title: t('expensesByCategory'), icon: '💸', headerTotal: money(report.totalExpenses),
-      cols: [{ label: t('name') }, { label: t('description') }, { label: t('date') }, { label: t('amount'), align: 'right' }],
-      rows: expenseRows, emptyLabel: t('noData'),
-    });
-
-    // ---- 9. Dettes clients ----
-    sections.push({
-      title: t('clientDebts'), icon: '🧍', headerTotal: money(report.totalClientDebt),
-      cols: [
-        { label: t('client') }, { label: t('reference') }, { label: t('date') },
-        { label: t('total'), align: 'right' }, { label: t('paid'), align: 'right' }, { label: t('rest'), align: 'right' },
-      ],
-      rows: [
-        ...report.clientDebts.map((s): PrintRow => ({ cells: [clientName(s.clientId), s.reference, formatDate(s.date, language), money(s.finalAmount), money(s.paidAmount), money(s.restAmount)], tone: 'neg' })),
-        totalRow(t('total'), money(report.totalClientDebt), 'neg'),
-      ],
-      emptyLabel: t('noData'),
-    });
-
-    // ---- 10. Dettes fournisseurs ----
-    sections.push({
-      title: t('supplierDebts'), icon: '🚚', headerTotal: money(report.totalSupplierDebt),
-      cols: [
-        { label: t('supplier') }, { label: t('reference') }, { label: t('date') },
-        { label: t('total'), align: 'right' }, { label: t('paid'), align: 'right' }, { label: t('rest'), align: 'right' },
-      ],
-      rows: [
-        ...report.supplierDebts.map((p): PrintRow => ({ cells: [supplierName(p.supplierId), p.reference, formatDate(p.date, language), money(p.totalAmount), money(p.paidAmount), money(p.restAmount)], tone: 'neg' })),
-        totalRow(t('total'), money(report.totalSupplierDebt), 'neg'),
-      ],
-      emptyLabel: t('noData'),
-    });
-
-    // ---- 10 bis. Anciennes dettes (clients ET fournisseurs) ----
-    //  Ardoises reprises du passé : elles alimentent la dette des tiers et les
-    //  rapports mais n'ont généré AUCUNE écriture de caisse à leur saisie.
-    sections.push({
-      title: 'Anciennes dettes (reprises du passé)', icon: '🗂️',
-      headerTotal: money(report.oldDebtsTotal),
-      note: 'Ardoises antérieures au logiciel. Aucune écriture de caisse à leur saisie : '
-        + 'seul leur règlement alimente le tiroir.',
-      cols: [
-        { label: t('date') }, { label: 'Tiers' }, { label: 'Type' }, { label: t('description') },
-        { label: t('total'), align: 'right' }, { label: t('paid'), align: 'right' },
-        { label: t('rest'), align: 'right' },
-      ],
-      rows: [
-        ...report.rOldDebts.map((d): PrintRow => ({
-          cells: [
-            formatDate(d.date, language), d.partyName || '—',
-            d.partyType === 'client' ? 'Client' : 'Fournisseur',
-            d.description || '—',
-            money(d.amount), money(d.paidAmount), money(d.restAmount),
-          ],
-          tone: d.restAmount > 0 ? 'neg' : 'pos',
-        })),
-        ...(report.rOldDebts.length
-          ? [{
-              cells: ['TOTAL', '', '', '', money(report.oldDebtsTotal), '', money(report.oldDebtsRest)],
-              variant: 'total' as const,
-            }]
-          : []),
-      ],
-      emptyLabel: t('noData'),
-    });
-
-    // ---- 10 ter. Excédents rendus / récupérés ----
-    //  Vrais mouvements d'argent : sortie de caisse quand on rend son excédent
-    //  à un client, entrée quand un fournisseur nous rembourse un trop-versé.
-    sections.push({
-      title: 'Excédents rendus et récupérés', icon: '↩️',
-      headerTotal: money(report.clientRefundsTotal + report.supplierRefundsTotal),
-      note: 'Client = SORTIE de caisse (on lui rend son trop-perçu). '
-        + 'Fournisseur = ENTRÉE de caisse (il nous rend le trop-versé).',
-      cols: [
-        { label: t('date') }, { label: 'Tiers' }, { label: 'Sens' },
-        { label: 'Mode de règlement' }, { label: t('amount'), align: 'right' },
-      ],
-      rows: [
-        ...report.rRefunds.map((r): PrintRow => ({
-          cells: [
-            formatDate(r.date, language), r.partyName || '—',
-            r.partyType === 'client' ? 'Sortie de caisse' : 'Entrée de caisse',
-            paymentMethodLabel(r),
-            money(r.amount),
-          ],
-          tone: r.partyType === 'client' ? 'neg' : 'pos',
-        })),
-        ...(report.rRefunds.length
-          ? [{
-              cells: [
-                'TOTAL', '',
-                `Sortie ${money(report.clientRefundsTotal)} · Entrée ${money(report.supplierRefundsTotal)}`,
-                '', money(report.clientRefundsTotal + report.supplierRefundsTotal),
-              ],
-              variant: 'total' as const,
-            }]
-          : []),
-      ],
-      emptyLabel: t('noData'),
-    });
-
-    // ---- 10 quater. Avances en cours (soldes en faveur des tiers) ----
-    const creditRows: PrintRow[] = [
-      ...clients
-        .filter((c) => (c.creditAmount ?? 0) > 0)
-        .map((c): PrintRow => ({
-          cells: [c.name, 'Client', 'À rendre au client', money(c.creditAmount ?? 0)],
-          tone: 'neg',
-        })),
-      ...suppliers
-        .filter((x) => (x.creditAmount ?? 0) > 0)
-        .map((x): PrintRow => ({
-          cells: [x.name, 'Fournisseur', 'À récupérer', money(x.creditAmount ?? 0)],
-          tone: 'pos',
-        })),
-    ];
-    if (creditRows.length) {
-      creditRows.push(totalRow(t('total'), money(report.clientsCredit + report.suppliersCredit), 'accent'));
-    }
-    sections.push({
-      title: 'Avances en cours (soldes en faveur des tiers)', icon: '🐖',
-      headerTotal: money(report.clientsCredit + report.suppliersCredit),
-      note: 'Montants versés EN PLUS de la dette et pas encore restitués. '
-        + 'Situation actuelle, indépendante de la période.',
-      cols: [{ label: 'Tiers' }, { label: 'Type' }, { label: 'Sens' }, { label: t('amount'), align: 'right' }],
-      rows: creditRows,
-      emptyLabel: t('noData'),
-    });
-
-    // ---- 11. Paiements employés (salaires + acomptes) ----
-    const workerRows: PrintRow[] = [];
-    workers.forEach((w) => {
-      w.payments.filter((p) => isWithinRange(p.date, from, to)).forEach((p) => {
-        workerRows.push({ cells: [w.fullName, t('workerSalaries'), p.period || p.description || '—', formatDate(p.date, language), money(p.amount)], tone: 'neg' });
-      });
-      w.acomptes.filter((a) => isWithinRange(a.date, from, to)).forEach((a) => {
-        workerRows.push({ cells: [w.fullName, t('acomptes'), a.description || '—', formatDate(a.date, language), money(a.amount)], tone: 'neg' });
-      });
-    });
-    if (workerRows.length) workerRows.push(totalRow(t('total'), money(report.workerPayments + report.workerAcomptes), 'neg'));
-
-    // ---- 11 bis. Heures supplémentaires détaillées ----
-    const overtimeRows: PrintRow[] = report.rOvertimes.map((o): PrintRow => ({
-      cells: [
-        o.workerName,
-        formatDate(o.date, language),
-        `${String(o.workEndHour).padStart(2, '0')}:${String(o.workEndMinute).padStart(2, '0')} → ${String(o.overtimeEndHour).padStart(2, '0')}:${String(o.overtimeEndMinute).padStart(2, '0')}`,
-        `${o.hours.toFixed(2)} h`,
-        money(o.hourlyRate),
-        money(o.amount),
-        o.isPaid ? 'Payée' : 'Non payée',
-      ],
-      tone: o.isPaid ? 'accent' : 'neg',
-    }));
-    if (overtimeRows.length) overtimeRows.push(totalRow(t('total'), money(report.rOvertimes.reduce((s, o) => s + o.amount, 0)), 'neg'));
-    sections.push({
-      title: t('workerPaymentsDetail'), icon: '👷', headerTotal: money(report.workerPayments + report.workerAcomptes),
-      cols: [{ label: t('workers') }, { label: t('operationType') }, { label: t('description') }, { label: t('date') }, { label: t('amount'), align: 'right' }],
-      rows: workerRows, emptyLabel: t('noData'),
-    });
-
-    sections.push({
-      title: 'Heures supplémentaires', icon: '⏱️',
-      headerTotal: `${report.overtimeHours.toFixed(2)} h · ${money(report.rOvertimes.reduce((s, o) => s + o.amount, 0))}`,
-      cols: [
-        { label: t('workers') }, { label: t('date') }, { label: 'Horaire' },
-        { label: 'Durée', align: 'right' }, { label: 'Taux horaire', align: 'right' },
-        { label: t('amount'), align: 'right' }, { label: t('status') },
-      ],
-      rows: overtimeRows, emptyLabel: t('noData'),
-    });
-
-    // ---- 12. Dépôts de caisse (par catégorie) ----
-    const depositRows: PrintRow[] = [];
-    report.depositsByCategory.forEach((cat) => {
-      depositRows.push({ cells: [`📁 ${cat.name} — ${cat.items.length}`, money(cat.total)], span: true, variant: 'category', tone: 'pos' });
-      cat.items.forEach((d) => depositRows.push({ cells: [formatDate(d.date, language), d.description || t('deposit'), d.createdBy || '—', money(d.amount)], variant: 'detail', tone: 'pos' }));
-    });
-    if (depositRows.length) depositRows.push(totalRow(t('total'), money(report.depositsTotal), 'pos'));
-    sections.push({
-      title: t('depositsByCategory'), icon: '⬇️', headerTotal: money(report.depositsTotal),
-      cols: [{ label: t('date') }, { label: t('description') }, { label: t('createdBy') }, { label: t('amount'), align: 'right' }],
-      rows: depositRows, emptyLabel: t('noData'),
-    });
-
-    // ---- 13. Retraits de caisse (par catégorie) ----
-    const withdrawalRows: PrintRow[] = [];
-    report.withdrawalsByCategory.forEach((cat) => {
-      withdrawalRows.push({ cells: [`📁 ${cat.name} — ${cat.items.length}`, money(cat.total)], span: true, variant: 'category', tone: 'neg' });
-      cat.items.forEach((d) => withdrawalRows.push({ cells: [formatDate(d.date, language), d.description || t('withdrawal'), d.createdBy || '—', money(d.amount)], variant: 'detail', tone: 'neg' }));
-    });
-    if (withdrawalRows.length) withdrawalRows.push(totalRow(t('total'), money(report.withdrawalsTotal), 'neg'));
-    sections.push({
-      title: t('withdrawalsByCategory'), icon: '⬆️', headerTotal: money(report.withdrawalsTotal),
-      cols: [{ label: t('date') }, { label: t('description') }, { label: t('createdBy') }, { label: t('amount'), align: 'right' }],
-      rows: withdrawalRows, emptyLabel: t('noData'),
-    });
-
-    // ---- 14. Destructions ----
-    sections.push({
-      title: t('dayDestructions'), icon: '🔥', headerTotal: money(report.destroyedValue),
-      cols: [{ label: t('productName') }, { label: t('reason') }, { label: t('date') }, { label: t('quantity'), align: 'right' }, { label: t('moneyWasted'), align: 'right' }],
-      rows: [
-        ...report.rDestructions.map((d): PrintRow => ({ cells: [d.productName, d.reason, formatDate(d.date, language), `${d.quantity}${d.unit ? ' ' + d.unit : ''}`, money(d.value)], tone: 'neg' })),
-        totalRow(t('total'), money(report.destroyedValue), 'neg'),
-      ],
-      emptyLabel: t('noData'),
-    });
-
-    // ---- 15. Reste au comptoir ----
-    sections.push({
-      title: t('restAtComptoir'), icon: '🧴', headerTotal: money(report.comptoirValue),
-      cols: [{ label: t('productName') }, { label: t('available'), align: 'right' }, { label: t('restValue'), align: 'right' }],
-      rows: [
-        ...report.restItems.map((p): PrintRow => ({ cells: [p.name, `${p.quantity}${p.unit ? ' ' + p.unit : ''}`, money(p.value)], tone: 'accent' })),
-        totalRow(t('grandTotal'), money(report.comptoirValue)),
-      ],
-      emptyLabel: t('noData'),
-    });
-
-    // ---- 16. Rapports de caisse & décalages ----
-    sections.push({
-      title: t('caisseReports'), icon: '⚖️', headerTotal: money(report.totalDecalage),
-      cols: [
-        { label: t('date') }, { label: t('hour') },
-        { label: t('declaredAmount'), align: 'right' }, { label: t('theoreticalBalance'), align: 'right' }, { label: t('decalage'), align: 'right' },
-      ],
-      rows: [
-        ...report.reportCalcs.map(({ report: r, calc }): PrintRow => ({
-          cells: [formatDate(r.date, language), r.hour, money(r.declaredAmount), money(calc.theoretical), money(calc.decalage)],
-          tone: Math.abs(calc.decalage) < 0.01 ? 'pos' : 'neg',
-        })),
-        { cells: [t('total'), '', '', '', money(report.totalDecalage)], variant: 'total', tone: 'neg' },
-      ],
-      emptyLabel: t('noData'),
-    });
-
-    const doc: ReportDoc = {
-      docTitle: `${t('generalReport')} — ${subtitle}`,
-      headTitle: t('generalReport'),
-      subtitle,
-      kpis: [
-        { label: t('totalSales'), value: money(report.totalSales), tone: 'pos' },
-        { label: 'Ventes HT (base imposable)', value: money(report.salesHT), tone: 'muted' },
-        { label: 'TVA collectée', value: money(report.tvaCollected), tone: 'accent' },
-        { label: t('totalPurchasesAmount'), value: money(report.totalPurchases), tone: 'neg' },
-        { label: t('totalExpenses'), value: money(report.totalExpenses), tone: 'neg' },
-        { label: t('totalLossValue'), value: money(report.totalLossValue), tone: 'neg' },
-        { label: t('netProfit'), value: money(report.netProfit), tone: report.netProfit >= 0 ? 'pos' : 'neg' },
-        { label: t('stockValue'), value: money(report.stockValue), tone: 'accent' },
-        { label: 'Ventes caisse', value: money(report.posSalesTotal), tone: 'pos' },
-        { label: 'Livraisons facturées', value: money(report.deliverySalesTotal), tone: 'pos' },
-        { label: t('clientDebts'), value: money(report.totalClientDebt), tone: 'neg' },
-        { label: t('supplierDebts'), value: money(report.totalSupplierDebt), tone: 'neg' },
-        { label: t('comptoirValue'), value: money(report.comptoirValue), tone: 'accent' },
-      ],
-      sections,
-    };
-    printDetailedReport(doc, settings, language);
+  const printPart = (part: ReportPart) => {
+    printListDocument(
+      {
+        title: part.label,
+        docDate: period?.to || todayISO(),
+        metaLines,
+        tables: [
+          {
+            columns: part.printColumns,
+            rows: part.printRows,
+            totals: part.printTotalLabel
+              ? [{ label: part.printTotalLabel, value: part.printTotalValue ?? '', strong: true }]
+              : undefined,
+            emptyLabel: 'Aucune ligne sur la période',
+          },
+        ],
+        signatures: ['Le responsable', 'Signature'],
+        fileName: `Rapport_${part.label.replace(/\s+/g, '_')}`,
+      },
+      settings
+    );
   };
 
-  return (
-    <div>
-      <PageHeader title={t('reports')} icon={<TrendingUp size={24} />}
-        actions={report && <Button variant="gold" onClick={handlePrint}><Printer size={18} /> {t('printReport')}</Button>} />
+  /**
+   * RAPPORT GENERAL IMPRIME.
+   * Un tableau par partie cochée, chacun avec sa colonne DATE, sa colonne
+   * DESIGNATION et son total — le tableau de résumé qui ouvrait l'ancien
+   * document a été SUPPRIMÉ, comme demandé.
+   */
+  const printGeneral = () => {
+    setPrintOpen(false);
+    const picked = parts.filter((p) => checked.includes(p.key));
+    printListDocument(
+      {
+        title: 'Rapport general',
+        docDate: period?.to || todayISO(),
+        metaLines,
+        tables: picked.map((p) => ({
+          title: p.label.toUpperCase(),
+          columns: p.printColumns,
+          rows: p.printRows,
+          totals: p.printTotalLabel
+            ? [{ label: p.printTotalLabel, value: p.printTotalValue ?? '', strong: true }]
+            : undefined,
+          emptyLabel: 'Aucune ligne sur la période',
+        })),
+        signatures: ['Le responsable', 'Signature'],
+        fileName: `Rapport_General_${(period?.from ?? '').replace(/-/g, '')}_${(period?.to ?? '').replace(/-/g, '')}`,
+      },
+      settings
+    );
+  };
 
-      <Card index={0} className="mb-6">
+  const toggle = (key: string) =>
+    setChecked((c) => (c.includes(key) ? c.filter((k) => k !== key) : [...c, key]));
+
+  /* --------------------------------------------------------------- rendu */
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title={t('reports')}
+        icon={<TrendingUp size={24} />}
+        subtitle={
+          period
+            ? `Du ${formatDate(period.from, language)} au ${formatDate(period.to, language)}`
+            : 'Choisissez une période puis générez le rapport'
+        }
+        actions={
+          parts.length > 0 && (
+            <Button variant="gold" onClick={() => setPrintOpen(true)}>
+              <Printer size={18} /> Imprimer le rapport général
+            </Button>
+          )
+        }
+      />
+
+      <Card index={0}>
         <div className="flex flex-wrap items-end gap-3">
-          <Input label={t('from')} type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="max-w-[180px]" />
-          <Input label={t('to')} type="date" value={to} onChange={(e) => setTo(e.target.value)} className="max-w-[180px]" />
-          <Button variant="gold" onClick={() => setGenerated(true)}><FileText size={18} /> {t('generateReport')}</Button>
+          <Input label="Date de début" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="max-w-[200px]" />
+          <Input label="Date de fin" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="max-w-[200px]" />
+          <Button variant="gold" disabled={!from || !to || from > to} onClick={() => setPeriod({ from, to })}>
+            <FileText size={18} /> Générer le rapport
+          </Button>
+          {period && (
+            <Button variant="secondary" onClick={() => setPeriod(null)}>
+              Changer la période
+            </Button>
+          )}
         </div>
       </Card>
 
-      {!report ? (
-        <Card index={1} className="text-center py-12 text-text-muted">Sélectionnez une période et générez le rapport</Card>
+      {!period || !current ? (
+        <Card index={1} className="py-12 text-center text-text-muted">
+          <Layers size={34} className="mx-auto mb-3 text-gold opacity-60" />
+          Sélectionnez une date de début et une date de fin, puis générez le rapport.
+        </Card>
       ) : (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-          {/* Financial overview */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <OverviewTile icon={<Wallet size={20} />} label={t('totalSales')} value={report.totalSales} accent="pistachio" />
-            <OverviewTile icon={<ShoppingCart size={20} />} label={t('totalPurchasesAmount')} value={report.totalPurchases} accent="caramel" />
-            <OverviewTile icon={<Banknote size={20} />} label={t('totalExpenses')} value={report.totalExpenses} accent="rose" />
-            <OverviewTile icon={<TrendingUp size={20} />} label={t('netProfit')} value={report.netProfit} accent={report.netProfit >= 0 ? 'pistachio' : 'rose'} />
+        <div className="space-y-4">
+          {/* -------------------------------------------------- familles -- */}
+          <div className="flex gap-1.5 overflow-x-auto rounded-2xl border border-gold/20 bg-vanilla/40 p-1.5">
+            {GROUPS.map((g) => {
+              const on = g.key === group;
+              const count = parts.filter((p) => p.group === g.key).reduce((s, p) => s + p.count, 0);
+              return (
+                <button
+                  key={g.key}
+                  onClick={() => {
+                    setGroup(g.key);
+                    const first = parts.find((p) => p.group === g.key && p.count > 0)
+                      ?? parts.find((p) => p.group === g.key);
+                    if (first) setActive(first.key);
+                  }}
+                  className={cn(
+                    'relative flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold transition-colors',
+                    on ? 'text-white' : 'text-text-secondary hover:bg-gold/10 hover:text-text-primary'
+                  )}
+                >
+                  {on && (
+                    <motion.span
+                      layoutId="report-group"
+                      transition={{ duration: 0.18, ease: EASE }}
+                      className="absolute inset-0 rounded-xl bg-gradient-button shadow-gold"
+                    />
+                  )}
+                  <span className="relative z-10 flex items-center gap-2">
+                    {g.icon}{g.label}
+                    <span className={cn(
+                      'rounded-full px-1.5 text-[10px] font-bold tabular',
+                      on ? 'bg-white/25 text-white' : 'bg-gold/15 text-gold-dark'
+                    )}>
+                      {count}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
-          {/* ===== Historique détaillé des opérations ===== */}
-          <SectionTitle icon={<History size={18} />} title="Historique détaillé des opérations" />
-          <OperationsTotals inPeriod={inPeriodPredicate} />
-          <OperationsHistory
-            inPeriod={inPeriodPredicate}
-            periodLabel={`${formatDate(from, language)} → ${formatDate(to, language)}`}
-          />
-
-          {/* ===== Sales & client debts ===== */}
-          <SectionTitle icon={<Receipt size={18} />} title={t('salesReport')} />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard icon={<Receipt size={20} />} accent="pistachio" label={t('sales')} value={report.totalSales} count={report.rSales.length}
-              onClick={() => setDrill({ title: t('sales'), rows: report.rSales.map((s) => ({ title: `${s.reference} — ${clientName(s.clientId)}`, sub: `${s.products.length} article(s) · ${formatDate(s.date, language)}`, value: s.finalAmount })) })} />
-            <DrillCard icon={<AlertTriangle size={20} />} accent="rose" label={t('clientDebts')} value={report.totalClientDebt} count={report.clientDebts.length}
-              onClick={() => setDrill({ title: t('clientDebts'), rows: report.clientDebts.map((s) => ({ title: `${clientName(s.clientId)} (${s.reference})`, sub: formatDate(s.date, language), value: s.restAmount, danger: true })) })} />
-            <DrillCard icon={<Coins size={20} />} accent="caramel" label={t('totalPaid')} value={report.rSales.reduce((a, s) => a + s.paidAmount, 0)} count={report.rSales.length}
-              onClick={() => setDrill({ title: t('totalPaid'), rows: report.rSales.map((s) => ({ title: `${s.reference} — ${clientName(s.clientId)}`, sub: formatDate(s.date, language), value: s.paidAmount })) })} />
-            <DrillCard icon={<Users size={20} />} accent="lavender" label={t('clients')} value={clients.length} count={clients.length} isCount
-              onClick={() => setDrill({ title: t('clients'), rows: clients.map((c) => ({ title: c.name, sub: c.phone, value: report.rSales.filter((s) => s.clientId === c.id).reduce((a, s) => a + s.finalAmount, 0) })) })} />
+          {/* --------------------------------------------------- parties -- */}
+          <div className="flex gap-1 overflow-x-auto rounded-2xl border border-gold/15 bg-vanilla/30 p-1.5">
+            {visibleParts.map((p) => {
+              const on = p.key === current.key;
+              return (
+                <button
+                  key={p.key}
+                  onClick={() => setActive(p.key)}
+                  className={cn(
+                    'flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-semibold transition-colors',
+                    on ? 'bg-gradient-button text-white shadow-gold' : 'text-text-secondary hover:bg-gold/10 hover:text-text-primary'
+                  )}
+                >
+                  {p.icon}{p.label}
+                  <span className={cn(
+                    'rounded-full px-1.5 text-[10px] font-bold tabular',
+                    on ? 'bg-white/25 text-white' : 'bg-gold/15 text-gold-dark'
+                  )}>
+                    {p.count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
 
-          {/* ===== Purchases & supplier debts ===== */}
-          <SectionTitle icon={<ShoppingCart size={18} />} title={t('purchaseReport')} />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard icon={<ShoppingCart size={20} />} accent="caramel" label={t('purchase')} value={report.totalPurchases} count={report.rPurchases.length}
-              onClick={() => setDrill({ title: t('purchase'), rows: report.rPurchases.map((p) => ({ title: `${p.reference} — ${supplierName(p.supplierId)}`, sub: `${p.products.length} article(s) · ${formatDate(p.date, language)}`, value: p.totalAmount })) })} />
-            <DrillCard icon={<AlertTriangle size={20} />} accent="rose" label={t('supplierDebts')} value={report.totalSupplierDebt} count={report.supplierDebts.length}
-              onClick={() => setDrill({ title: t('supplierDebts'), rows: report.supplierDebts.map((p) => ({ title: `${supplierName(p.supplierId)} (${p.reference})`, sub: formatDate(p.date, language), value: p.restAmount, danger: true })) })} />
-            <DrillCard icon={<Coins size={20} />} accent="pistachio" label={t('totalPaid')} value={report.rPurchases.reduce((a, p) => a + p.paidAmount, 0)} count={report.rPurchases.length}
-              onClick={() => setDrill({ title: t('totalPaid'), rows: report.rPurchases.map((p) => ({ title: `${p.reference} — ${supplierName(p.supplierId)}`, sub: formatDate(p.date, language), value: p.paidAmount })) })} />
-            <DrillCard icon={<Truck size={20} />} accent="lavender" label={t('suppliers')} value={suppliers.length} count={suppliers.length} isCount
-              onClick={() => setDrill({ title: t('suppliers'), rows: suppliers.map((s) => ({ title: s.name, sub: s.phone, value: report.rPurchases.filter((p) => p.supplierId === s.id).reduce((a, p) => a + p.totalAmount, 0) })) })} />
-          </div>
-
-          {/* ===== Anciennes dettes, excédents rendus et avances en cours ===== */}
-          <SectionTitle icon={<History size={18} />} title="Anciennes dettes & avances des tiers" />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard
-              icon={<History size={20} />} accent="caramel"
-              label="Anciennes dettes saisies" value={report.oldDebtsTotal} count={report.rOldDebts.length}
-              onClick={() => setDrill({
-                title: 'Anciennes dettes de la période',
-                rows: report.rOldDebts.map((d) => ({
-                  title: `${d.partyName ?? '—'} (${d.partyType === 'client' ? 'client' : 'fournisseur'})`,
-                  sub: `${formatDate(d.date, language)} · ${d.description || 'sans description'} · reste ${formatCurrency(d.restAmount)}`,
-                  value: d.amount,
-                })),
-              })}
-            />
-            <DrillCard
-              icon={<AlertTriangle size={20} />} accent="rose"
-              label="Anciennes dettes non soldées" value={report.oldDebtsRest}
-              count={report.rOldDebts.filter((d) => d.restAmount > 0).length}
-              onClick={() => setDrill({
-                title: 'Anciennes dettes non soldées',
-                rows: report.rOldDebts.filter((d) => d.restAmount > 0).map((d) => ({
-                  title: `${d.partyName ?? '—'} (${d.partyType === 'client' ? 'client' : 'fournisseur'})`,
-                  sub: `${formatDate(d.date, language)} · réglé ${formatCurrency(d.paidAmount)}`,
-                  value: d.restAmount,
-                  danger: true,
-                })),
-              })}
-            />
-            <DrillCard
-              icon={<Coins size={20} />} accent="lavender"
-              label="Excédents rendus / récupérés"
-              value={report.clientRefundsTotal + report.supplierRefundsTotal}
-              count={report.rRefunds.length}
-              onClick={() => setDrill({
-                title: 'Excédents rendus et récupérés',
-                rows: report.rRefunds.map((r) => ({
-                  title: `${r.partyName ?? '—'} — ${r.partyType === 'client' ? 'sortie de caisse' : 'entrée de caisse'}`,
-                  sub: `${formatDateTime(r.refundedAt, language)} · ${paymentMethodLabel(r)}`,
-                  value: r.amount,
-                  danger: r.partyType === 'client',
-                })),
-              })}
-            />
-            <DrillCard
-              icon={<Wallet size={20} />} accent="pistachio"
-              label="Avances en cours (à rendre)"
-              value={report.clientsCredit + report.suppliersCredit}
-              count={
-                clients.filter((c) => (c.creditAmount ?? 0) > 0).length
-                + suppliers.filter((x) => (x.creditAmount ?? 0) > 0).length
-              }
-              onClick={() => setDrill({
-                title: 'Avances en cours (soldes en faveur des tiers)',
-                rows: [
-                  ...clients.filter((c) => (c.creditAmount ?? 0) > 0).map((c) => ({
-                    title: c.name,
-                    sub: 'Client — excédent à lui rendre',
-                    value: c.creditAmount ?? 0,
-                    danger: true,
-                  })),
-                  ...suppliers.filter((x) => (x.creditAmount ?? 0) > 0).map((x) => ({
-                    title: x.name,
-                    sub: 'Fournisseur — trop-versé à récupérer',
-                    value: x.creditAmount ?? 0,
-                  })),
-                ],
-              })}
-            />
-          </div>
-          <p className="-mt-2 rounded-xl border border-caramel/30 bg-caramel/10 px-3.5 py-2 text-xs font-medium text-caramel">
-            <History size={12} className="inline mr-1" />
-            Une ancienne dette est une ardoise reprise du passé : elle pèse sur la dette du tiers
-            mais n&rsquo;écrit RIEN en caisse le jour de sa saisie. Seuls son règlement et la
-            restitution d&rsquo;un excédent sont de vrais mouvements de caisse.
-          </p>
-
-          {/* ===== Commandes & livraisons ===== */}
-          <SectionTitle icon={<ClipboardList size={18} />} title="Commandes & livraisons" />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard icon={<ClipboardList size={20} />} accent="gold" label="Commandes" value={report.commandsTotal} count={report.rCommands.length}
-              onClick={() => setDrill({ title: 'Commandes de la période', rows: report.rCommands.map((c) => { const d = deliveryStatus(c); return { title: `${c.reference} — ${c.clientName}`, sub: `${formatDate(c.createdAt, language)} · ${c.items.length} produit(s) · ${d.isFull ? 'livrée' : d.isPartial ? `livrée à ${d.percent.toFixed(0)} %` : 'non livrée'}`, value: c.totalAmount }; }) })} />
-            <DrillCard icon={<AlertTriangle size={20} />} accent="rose" label="Reste à encaisser (commandes)" value={report.commandsRest} count={report.rCommands.filter((c) => c.restAmount > 0).length}
-              onClick={() => setDrill({ title: 'Commandes non soldées', rows: report.rCommands.filter((c) => c.restAmount > 0).map((c) => ({ title: `${c.reference} — ${c.clientName}`, sub: `Payé ${formatCurrency(c.paidAmount)} · ${formatDate(c.createdAt, language)}`, value: c.restAmount, danger: true })) })} />
-            <DrillCard icon={<Truck size={20} />} accent="lavender" label="Livraisons facturées (T.T.C)" value={report.deliveriesInvoiced} count={report.rDeliveries.length}
-              onClick={() => setDrill({ title: 'Bons de livraison', rows: report.rDeliveries.map((d) => { const cmd = commands.find((c) => c.id === d.commandId); const qty = d.items.reduce((a, i) => a + i.quantity, 0); return { title: `${d.reference} — ${cmd?.clientName ?? '—'}`, sub: `${formatDateTime(d.deliveredAt, language)} · ${Math.round(qty * 1000) / 1000} livré(s)${d.saleReference ? ` · vente ${d.saleReference}` : ''}${(d.restAmount ?? 0) > 0 ? ` · reste ${formatCurrency(d.restAmount ?? 0)}` : ' · réglée'}`, value: d.totalTtc ?? 0, danger: (d.restAmount ?? 0) > 0 }; }) })} />
-            <DrillCard icon={<Package size={20} />} accent="caramel" label="Matières sorties par les livraisons" value={report.deliveryMaterialsCost} count={report.deliveryMaterialsList.length}
-              onClick={() => setDrill({ title: 'Matières premières déduites par les livraisons', rows: report.deliveryMaterialsList.map((m) => ({ title: m.name, sub: `${Math.round(m.quantity * 1000) / 1000}${m.unit ? ` ${m.unit}` : ''} retirés du stock`, value: m.cost, danger: true })) })} />
-          </div>
-          {/* Les livraisons sont des ventes : rappel du chiffre et des dettes */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard icon={<Receipt size={20} />} accent="pistachio" label="Ventes caisse" value={report.posSalesTotal} count={report.rSales.filter((x) => !x.deliveryId).length}
-              onClick={() => setDrill({ title: 'Ventes encaissées à la caisse', rows: report.rSales.filter((x) => !x.deliveryId).map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: formatDate(x.date, language), value: x.finalAmount })) })} />
-            <DrillCard icon={<Truck size={20} />} accent="lavender" label="Ventes issues des livraisons" value={report.deliverySalesTotal} count={report.rSales.filter((x) => !!x.deliveryId).length}
-              onClick={() => setDrill({ title: 'Ventes générées par les bons de livraison', rows: report.rSales.filter((x) => !!x.deliveryId).map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `${formatDate(x.date, language)}${x.restAmount > 0 ? ` · reste ${formatCurrency(x.restAmount)}` : ' · réglée'}`, value: x.finalAmount, danger: x.restAmount > 0 })) })} />
-            <DrillCard icon={<Coins size={20} />} accent="gold" label="Total ventes + livraisons" value={report.totalSales} count={report.rSales.length}
-              onClick={() => setDrill({ title: 'Toutes les ventes de la période', rows: report.rSales.map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `${formatDate(x.date, language)}${x.deliveryId ? ' · bon de livraison' : ' · caisse'}`, value: x.finalAmount })) })} />
-            <DrillCard icon={<AlertTriangle size={20} />} accent="rose" label="TOTAL DETTES CLIENTS" value={report.totalClientDebt} count={report.clientDebts.length}
-              onClick={() => setDrill({ title: 'Dettes clients — factures et commandes', rows: [...report.clientDebts.map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `${formatDate(x.date, language)}${x.deliveryId ? ' · bon de livraison' : ' · caisse'}`, value: x.restAmount, danger: true })), ...(report.commandsNet.rest > 0 ? [{ title: 'Commandes pas encore livrées', sub: 'part non encore facturée par un bon de livraison', value: report.commandsNet.rest, danger: true }] : [])] })} />
-          </div>
-
-          <p className="-mt-2 rounded-xl border border-gold/25 bg-gold/8 px-3.5 py-2 text-xs font-medium text-gold-dark">
-            <Truck size={12} className="inline mr-1" />
-            Quantités commandées <b>{Math.round(report.commandsOrderedQty * 1000) / 1000}</b> · livrées{' '}
-            <b>{Math.round(report.commandsDeliveredQty * 1000) / 1000}</b> · restant à livrer{' '}
-            <b>{Math.round(report.commandsPendingQty * 1000) / 1000}</b> sur{' '}
-            <b>{report.undeliveredCommands.length}</b> commande(s) encore ouverte(s). Une commande
-            n'entame pas le stock : chaque bon de livraison déduit les matières premières de la
-            production livrée.
-          </p>
-
-          {/* ===== TVA & saisies rétroactives ===== */}
-          <SectionTitle icon={<Percent size={18} />} title="TVA & saisies rétroactives" />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard icon={<Percent size={20} />} accent="gold" label="TVA collectée" value={report.tvaCollected} count={report.tvaSales.length}
-              onClick={() => setDrill({ title: 'TVA collectée', rows: report.tvaSales.map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `Base HT ${formatCurrency(Math.max(0, x.totalAmount - x.reduction))} · taux ${x.tvaRate ?? 0}% · ${formatDate(x.date, language)}`, value: x.tvaAmount || 0 })) })} />
-            <DrillCard icon={<Receipt size={20} />} accent="pistachio" label="Ventes HT (base imposable)" value={report.salesHT} count={report.rSales.length}
-              onClick={() => setDrill({ title: 'Ventes hors taxes', rows: report.rSales.map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `${x.tvaEnabled ? `TVA ${x.tvaRate}%` : 'Sans TVA'} · ${formatDate(x.date, language)}`, value: Math.max(0, x.totalAmount - x.reduction) })) })} />
-            <DrillCard icon={<History size={20} />} accent="lavender" label="Anciennes ventes" value={report.historicalSalesTotal} count={report.historicalSales.length}
-              onClick={() => setDrill({ title: 'Anciennes ventes (saisie rétroactive)', rows: report.historicalSales.map((x) => ({ title: `${x.reference} — ${clientName(x.clientId)}`, sub: `${x.products.length} article(s) · ${formatDate(x.date, language)} · stock non modifié`, value: x.finalAmount })) })} />
-            <DrillCard icon={<History size={20} />} accent="caramel" label="Anciens achats" value={report.historicalPurchasesTotal} count={report.historicalPurchases.length}
-              onClick={() => setDrill({ title: 'Anciens achats (saisie rétroactive)', rows: report.historicalPurchases.map((x) => ({ title: `${x.reference} — ${supplierName(x.supplierId)}`, sub: `${x.products.length} article(s) · ${formatDate(x.date, language)} · stock non modifié`, value: x.totalAmount })) })} />
-          </div>
-          {(report.historicalSales.length > 0 || report.historicalPurchases.length > 0) && (
-            <p className="-mt-2 rounded-xl border border-caramel/30 bg-caramel/10 px-3.5 py-2 text-xs font-medium text-gold-dark">
-              <History size={12} className="inline mr-1" />
-              Les saisies rétroactives sont comptées dans le chiffre d'affaires, les dettes et les
-              comptes rendus de la période, mais elles n'ont jamais modifié le stock actuel ni la caisse.
-              Ventes courantes : <b>{formatCurrency(report.currentSalesTotal)}</b> · achats courants :{' '}
-              <b>{formatCurrency(report.currentPurchasesTotal)}</b>.
-            </p>
-          )}
-
-          {/* ===== Stock & alerts ===== */}
-          <SectionTitle icon={<Package size={18} />} title={t('stockReport')} />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard icon={<Package size={20} />} accent="gold" label={t('stockValue')} value={report.stockValue} count={products.length}
-              onClick={() => setDrill({ title: t('stock'), rows: products.map((p) => ({ title: p.name, sub: `${unitLabel(p.unit)} · Stock: ${p.currentQuantity}`, value: p.currentQuantity * p.purchasePrice })) })} />
-            <DrillCard icon={<AlertTriangle size={20} />} accent="rose" label={t('stockAlertsCount')} value={report.lowStock.length} isCount count={report.lowStock.length}
-              onClick={() => setDrill({ title: t('stockAlertsCount'), rows: report.lowStock.map((p) => ({ title: p.name, sub: `Stock: ${p.currentQuantity} / Min: ${p.minAlertQuantity}`, value: p.currentQuantity, danger: true })) })} />
-            <DrillCard icon={<Beaker size={20} />} accent="pistachio" label={t('comptoirValue')} value={report.comptoirValue} count={comptoirItems.length}
-              onClick={() => setDrill({ title: t('comptoir'), rows: comptoirItems.map((i) => ({ title: i.productName, sub: `${i.quantity} × ${formatCurrency(i.unitPrice)}`, value: i.quantity * i.unitPrice })) })} />
-            <DrillCard icon={<FlaskConical size={20} />} accent="caramel" label={t('production')} value={report.rProductions.reduce((a, p) => a + p.totalValue, 0)} count={report.rProductions.length}
-              onClick={() => setDrill({ title: t('production'), rows: report.rProductions.map((p) => ({ title: p.name, sub: `${p.outputQuantity} unités · ${formatDate(p.date, language)}`, value: p.totalValue })) })} />
-          </div>
-
-          {/* ===== Detailed Ingrédients par Production + Achats par Catégorie ===== */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
-            {/* Ingredients per Production Accordion */}
-            <Card index={0} className="border border-gold/15">
-              <h3 className="font-display font-semibold text-text-primary mb-4 flex items-center gap-2">
-                <FlaskConical size={18} className="text-gold-dark" /> Détails des Ingrédients par Production
-              </h3>
-              <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
-                {report.rProductions.map((p) => {
-                  const isOpen = expandedProdId === p.id;
-                  const prodCost = p.usedProducts.reduce((sum, u) => sum + (u.lineCost ?? (u.quantityUsed * (u.unitCost ?? 0))), 0);
-                  return (
-                    <div key={p.id} className="border border-gold/10 rounded-xl overflow-hidden bg-vanilla/10">
-                      <button
-                        onClick={() => setExpandedProdId(isOpen ? null : p.id)}
-                        className="w-full flex items-center justify-between p-3 text-left hover:bg-gold/5 transition-colors"
-                      >
-                        <div className="min-w-0 flex-1 pr-2">
-                          <p className="font-semibold text-sm text-text-primary truncate">{p.name}</p>
-                          <p className="text-xs text-text-muted">{formatDate(p.date, language)} · {p.outputQuantity} unités</p>
-                        </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                          <span className="text-xs font-bold text-rose-deep">{formatCurrency(prodCost)}</span>
-                          {isOpen ? <ChevronUp size={16} className="text-text-muted" /> : <ChevronDown size={16} className="text-text-muted" />}
-                        </div>
-                      </button>
-                      <AnimatePresence>
-                        {isOpen && (
-                          <motion.div
-                            initial={{ height: 0 }}
-                            animate={{ height: 'auto' }}
-                            exit={{ height: 0 }}
-                            className="overflow-hidden border-t border-gold/10 bg-vanilla/50"
-                          >
-                            <div className="p-3">
-                              <table className="w-full text-xs">
-                                <thead className="bg-vanilla/60 text-text-secondary">
-                                  <tr>
-                                    <th className="text-left px-2 py-1.5 font-medium">{t('ingredient')}</th>
-                                    <th className="text-right px-2 py-1.5 font-medium">Quantité</th>
-                                    <th className="text-right px-2 py-1.5 font-medium">P.U Achat</th>
-                                    <th className="text-right px-2 py-1.5 font-medium">Total</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {p.usedProducts.map((u, ui) => (
-                                    <tr key={ui} className="border-t border-gold/5">
-                                      <td className="px-2 py-1.5 font-medium text-text-primary">{u.productName}</td>
-                                      <td className="px-2 py-1.5 text-right tabular">{u.quantityUsed}{u.unit ? ` ${u.unit}` : ''}</td>
-                                      <td className="px-2 py-1.5 text-right tabular">{formatCurrency(u.unitCost ?? 0)}</td>
-                                      <td className="px-2 py-1.5 text-right tabular text-rose-deep font-semibold">{formatCurrency(u.lineCost ?? (u.quantityUsed * (u.unitCost ?? 0)))}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  );
-                })}
-                {report.rProductions.length === 0 && <EmptyState message={t('noData')} />}
+          {/* ----------------------------------------------- la partie ---- */}
+          <AnimatePresence mode="wait">
+            <motion.div key={current.key} variants={panelVariants} initial="hidden" animate="visible" exit="exit" className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border-l-4 border-gold bg-gold/8 px-3 py-2">
+                <h3 className="flex items-center gap-2 text-sm font-bold text-gold-dark">
+                  <LayoutGrid size={15} /> {current.label}
+                  <span className="text-xs font-normal text-text-muted">({current.count} ligne(s))</span>
+                </h3>
+                <Button size="sm" variant="gold" onClick={() => printPart(current)}>
+                  <Printer size={14} /> Imprimer cette partie
+                </Button>
               </div>
-            </Card>
 
-            {/* Purchases by Category Accordion */}
-            <Card index={1} className="border border-gold/15">
-              <h3 className="font-display font-semibold text-text-primary mb-4 flex items-center gap-2">
-                <ShoppingCart size={18} className="text-gold-dark" /> Achats groupés par Catégorie
-              </h3>
-              <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
-                {report.purchasesByCategory.map((cat) => {
-                  const isOpen = expandedCatName === cat.categoryName;
-                  return (
-                    <div key={cat.categoryName} className="border border-gold/10 rounded-xl overflow-hidden bg-vanilla/10">
-                      <button
-                        onClick={() => setExpandedCatName(isOpen ? null : cat.categoryName)}
-                        className="w-full flex items-center justify-between p-3 text-left hover:bg-gold/5 transition-colors"
-                      >
-                        <div className="min-w-0 flex-1 pr-2">
-                          <p className="font-semibold text-sm text-text-primary truncate">{cat.categoryName}</p>
-                          <p className="text-xs text-text-muted">{cat.productsList.length} articles achetés</p>
-                        </div>
-                        <div className="flex items-center gap-3 shrink-0">
-                          <span className="text-xs font-bold text-gold-dark">{formatCurrency(cat.totalAmount)}</span>
-                          {isOpen ? <ChevronUp size={16} className="text-text-muted" /> : <ChevronDown size={16} className="text-text-muted" />}
-                        </div>
-                      </button>
-                      <AnimatePresence>
-                        {isOpen && (
-                          <motion.div
-                            initial={{ height: 0 }}
-                            animate={{ height: 'auto' }}
-                            exit={{ height: 0 }}
-                            className="overflow-hidden border-t border-gold/10 bg-vanilla/50"
-                          >
-                            <div className="p-3">
-                              <table className="w-full text-xs">
-                                <thead className="bg-vanilla/60 text-text-secondary">
-                                  <tr>
-                                    <th className="text-left px-2 py-1.5 font-medium">Produit</th>
-                                    <th className="text-right px-2 py-1.5 font-medium">Quantité</th>
-                                    <th className="text-right px-2 py-1.5 font-medium">P.U Moyen</th>
-                                    <th className="text-right px-2 py-1.5 font-medium">Total</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {cat.productsList.map((p, pi) => {
-                                    const avgPrice = p.quantity > 0 ? p.totalCost / p.quantity : 0;
-                                    return (
-                                      <tr key={pi} className="border-t border-gold/5">
-                                        <td className="px-2 py-1.5 font-medium text-text-primary">{p.name}</td>
-                                        <td className="px-2 py-1.5 text-right tabular">{p.quantity}{p.unit ? ` ${p.unit}` : ''}</td>
-                                        <td className="px-2 py-1.5 text-right tabular">{formatCurrency(avgPrice)}</td>
-                                        <td className="px-2 py-1.5 text-right tabular text-gold-dark font-semibold">{formatCurrency(p.totalCost)}</td>
-                                      </tr>
-                                    );
-                                  })}
-                                </tbody>
-                              </table>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  );
-                })}
-                {report.purchasesByCategory.length === 0 && <EmptyState message={t('noData')} />}
-              </div>
-            </Card>
-          </div>
+              {current.note && <p className="px-1 text-[11px] italic text-text-muted">{current.note}</p>}
 
-          {/* ===== Productions avec perte (loss) ===== */}
-          <SectionTitle icon={<AlertTriangle size={18} />} title={t('lossProductions')} />
-          <Card index={0} className="border border-gold/15">
-            {report.lossProductions.length === 0 ? (
-              <EmptyState message={t('noLoss')} icon={<AlertTriangle size={28} />} />
-            ) : (
-              <>
-                <div className="grid grid-cols-3 gap-3 mb-4">
-                  <div className="bg-rose-deep/5 border border-rose-deep/20 rounded-xl p-3 text-center">
-                    <p className="text-xs text-text-muted">{t('lossProductions')}</p>
-                    <p className="text-xl font-bold text-rose-deep tabular">{report.lossProductions.length}</p>
-                  </div>
-                  <div className="bg-rose-deep/5 border border-rose-deep/20 rounded-xl p-3 text-center">
-                    <p className="text-xs text-text-muted">{t('totalLoss')}</p>
-                    <p className="text-xl font-bold text-rose-deep tabular">{report.totalLossQty}</p>
-                  </div>
-                  <div className="bg-rose-deep/5 border border-rose-deep/20 rounded-xl p-3 text-center">
-                    <p className="text-xs text-text-muted">{t('totalLossValue')}</p>
-                    <p className="text-xl font-bold text-rose-deep tabular">{formatCurrency(report.totalLossValue)}</p>
-                  </div>
+              {current.stats.length > 0 && (
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+                  {current.stats.map((k) => <Stat key={k.label} {...k} />)}
                 </div>
-                <div className="overflow-x-auto">
+              )}
+
+              {current.rows.length === 0 ? (
+                <p className="rounded-2xl border border-dashed border-gold/25 bg-vanilla/20 py-10 text-center text-sm italic text-text-muted">
+                  Aucune ligne sur cette période
+                </p>
+              ) : (
+                <div className="overflow-x-auto rounded-2xl border border-gold/15 bg-gradient-card shadow-card">
                   <table className="w-full text-sm">
-                    <thead className="bg-vanilla/60 text-text-secondary"><tr>
-                      <th className="text-left px-3 py-2">{t('production')}</th>
-                      <th className="text-left px-3 py-2">{t('date')}</th>
-                      <th className="text-right px-3 py-2">{t('expectedQty')}</th>
-                      <th className="text-right px-3 py-2">{t('realProducedQty')}</th>
-                      <th className="text-right px-3 py-2">{t('lossQty')}</th>
-                      <th className="text-right px-3 py-2">{t('lossValueLabel')}</th>
-                    </tr></thead>
-                    <tbody>
-                      {report.lossProductions.map((p) => {
-                        const su = p.sellByUnit && p.sellUnit ? ` ${p.sellUnit}` : '';
-                        return (
-                          <tr key={p.id} className="border-t border-gold/10">
-                            <td className="px-3 py-2 font-medium text-text-primary">
-                              {p.name}
-                              {p.categoryName && <span className="block text-xs text-text-muted font-normal">{p.categoryName}</span>}
-                              {p.lossDescription && <span className="block text-xs text-text-muted italic font-normal">📝 {p.lossDescription}</span>}
-                            </td>
-                            <td className="px-3 py-2 text-text-muted whitespace-nowrap">{formatDate(p.date, language)} — {p.hour}</td>
-                            <td className="px-3 py-2 text-right tabular">{p.expectedQuantity}{su}</td>
-                            <td className="px-3 py-2 text-right tabular text-gold-dark font-semibold">{p.outputQuantity}{su}</td>
-                            <td className="px-3 py-2 text-right tabular text-rose-deep font-bold">− {p.lossQuantity}{su}</td>
-                            <td className="px-3 py-2 text-right tabular text-rose-deep font-bold">{formatCurrency(p.lossValue ?? 0)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr className="border-t border-gold/15 bg-vanilla/40 font-bold">
-                        <td className="px-3 py-2" colSpan={4}>{t('total')}</td>
-                        <td className="px-3 py-2 text-right tabular text-rose-deep">{report.totalLossQty}</td>
-                        <td className="px-3 py-2 text-right tabular text-rose-deep">{formatCurrency(report.totalLossValue)}</td>
+                    <thead className="bg-vanilla/60 text-text-secondary">
+                      <tr>
+                        {current.columns.map((c) => (
+                          <th
+                            key={c.label}
+                            className={cn(
+                              'whitespace-nowrap px-3 py-2.5 text-[11px] font-bold uppercase tracking-wide',
+                              c.align === 'right' ? 'text-right' : c.align === 'center' ? 'text-center' : 'text-left'
+                            )}
+                          >
+                            {c.label}
+                          </th>
+                        ))}
                       </tr>
-                    </tfoot>
+                    </thead>
+                    <tbody>
+                      {current.rows.map((r, i) => (
+                        <tr key={i} className="border-t border-gold/10 hover:bg-gold/5">
+                          {r.map((cell, j) => (
+                            <td
+                              key={j}
+                              className={cn(
+                                'px-3 py-2 text-xs',
+                                current.columns[j]?.align === 'right' ? 'text-right tabular'
+                                  : current.columns[j]?.align === 'center' ? 'text-center' : 'text-left'
+                              )}
+                            >
+                              {cell}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
                   </table>
                 </div>
-              </>
-            )}
-          </Card>
-
-          {/* ===== Category breakdown: expenses / deposits / withdrawals ===== */}
-          <SectionTitle icon={<Tag size={18} />} title={t('categoryBreakdown')} />
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <CategorySummaryCard title={t('expensesByCategory')} icon={<Banknote size={16} />} cats={report.expensesByCategory} total={report.totalExpenses} tone="rose" emptyLabel={t('noData')} />
-            <CategorySummaryCard title={t('depositsByCategory')} icon={<ArrowDownLeft size={16} />} cats={report.depositsByCategory} total={report.depositsTotal} tone="pistachio" emptyLabel={t('noData')} />
-            <CategorySummaryCard title={t('withdrawalsByCategory')} icon={<ArrowUpRight size={16} />} cats={report.withdrawalsByCategory} total={report.withdrawalsTotal} tone="caramel" emptyLabel={t('noData')} />
-          </div>
-
-          {/* ===== Comptoir & destructions ===== */}
-          <SectionTitle icon={<Flame size={18} />} title={t('comptoirReport')} />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard icon={<Flame size={20} />} accent="rose" label={t('destruction')} value={report.destroyedValue} count={report.rDestructions.length}
-              onClick={() => setDrill({ title: t('destructionHistory'), rows: report.rDestructions.map((d) => ({ title: d.productName, sub: `${d.quantity} unités · ${d.reason} · ${formatDate(d.date, language)}`, value: d.value, danger: true })) })} />
-            <DrillCard icon={<Trophy size={20} />} accent="pistachio" label={t('bestSellers')} value={report.soldRanked[0]?.revenue || 0} count={Math.min(5, report.soldRanked.length)}
-              onClick={() => setDrill({ title: t('bestSellers'), rows: report.soldRanked.slice(0, 5).map((p) => ({ title: p.name, sub: `${p.units} ${t('unitsSold')}`, value: p.revenue })) })} />
-            <DrillCard icon={<TrendingDown size={20} />} accent="caramel" label={t('worstSellers')} value={0} count={Math.min(5, report.soldRanked.length)} hideValue
-              onClick={() => setDrill({ title: t('worstSellers'), rows: report.soldRanked.slice().reverse().slice(0, 5).map((p) => ({ title: p.name, sub: `${p.units} ${t('unitsSold')}`, value: p.revenue })) })} />
-            <DrillCard icon={<FlaskConical size={20} />} accent="lavender" label={t('productionProducts')} value={report.rProductions.reduce((a, p) => a + p.outputQuantity, 0)} isCount count={report.rProductions.length}
-              onClick={() => setDrill({ title: t('productionProducts'), rows: report.rProductions.map((p) => ({ title: p.name, sub: `${p.usedProducts.length} ingrédient(s) · ${formatDate(p.date, language)}`, value: p.outputQuantity })) })} />
-          </div>
-
-          {/* ===== Per-product sales & comptoir rest ===== */}
-          <SectionTitle icon={<Receipt size={18} />} title={t('productSales')} />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard icon={<Receipt size={20} />} accent="pistachio" label={t('productSales')} value={report.productSalesRevenue} count={report.soldRanked.length}
-              onClick={() => setDrill({ title: t('productSales'), rows: report.soldRanked.map((p) => ({ title: p.name, sub: `${p.units}${p.sellByUnit && p.unit ? ' ' + p.unit : ''} ${t('unitsSold')}`, value: p.revenue })) })} />
-            <DrillCard icon={<Coins size={20} />} accent="caramel" label={t('soldQty')} value={report.soldRanked.reduce((a, p) => a + p.units, 0)} isCount count={report.soldRanked.length}
-              onClick={() => setDrill({ title: t('soldQty'), rows: report.soldRanked.map((p) => ({ title: p.name, sub: `${formatCurrency(p.revenue)}`, value: p.units })) })} />
-            <DrillCard icon={<Beaker size={20} />} accent="gold" label={t('restAtComptoir')} value={report.comptoirValue} count={report.restItems.length}
-              onClick={() => setDrill({ title: t('restAtComptoir'), rows: report.restItems.map((p) => ({ title: p.name, sub: `${p.quantity}${p.unit ? ' ' + p.unit : ' unités'}`, value: p.value })) })} />
-            <DrillCard icon={<Package size={20} />} accent="lavender" label={t('restValue')} value={report.comptoirValue} count={report.restItems.length}
-              onClick={() => setDrill({ title: t('restValue'), rows: report.restItems.map((p) => ({ title: p.name, sub: `${p.quantity}${p.unit ? ' ' + p.unit : ' unités'}`, value: p.value })) })} />
-          </div>
-
-          {/* ===== Expenses & workers ===== */}
-          <SectionTitle icon={<Banknote size={18} />} title={`${t('expensesReport')} & ${t('workers')}`} />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard icon={<Banknote size={20} />} accent="rose" label={t('expenses')} value={report.totalExpenses} count={report.rExpenses.length}
-              onClick={() => setDrill({ title: t('expenses'), rows: report.rExpenses.map((e) => ({ title: e.name, sub: `${e.description} · ${formatDate(e.date, language)}`, value: e.amount })) })} />
-            <DrillCard icon={<HardHat size={20} />} accent="lavender" label={t('workerSalaries')} value={report.workerPayments} count={workers.length}
-              onClick={() => setDrill({ title: t('workerSalaries'), rows: workers.flatMap((w) => w.payments.filter((p) => isWithinRange(p.date, from, to)).map((p) => ({ title: w.fullName, sub: `${p.period || ''} · ${formatDate(p.date, language)}`, value: p.amount }))) })} />
-            <DrillCard icon={<Clock size={20} />} accent="caramel" label="Heures sup. payées" value={report.overtimePaid} count={report.rOvertimes.length}
-              onClick={() => setDrill({ title: 'Heures supplémentaires payées', rows: report.rOvertimes.filter((o) => o.isPaid).map((o) => ({ title: o.workerName, sub: `${formatDate(o.date, language)} · ${o.hours.toFixed(2)} h`, value: o.amount })) })} />
-            <DrillCard icon={<Clock size={20} />} accent="rose" label="Heures sup. à payer" value={report.overtimeUnpaid} count={report.rOvertimes.filter((o) => !o.isPaid).length}
-              onClick={() => setDrill({ title: 'Heures supplémentaires non payées', rows: report.rOvertimes.filter((o) => !o.isPaid).map((o) => ({ title: o.workerName, sub: `${formatDate(o.date, language)} · ${o.hours.toFixed(2)} h`, value: o.amount, danger: true })) })} />
-            <DrillCard icon={<Coins size={20} />} accent="caramel" label={t('acomptes')} value={report.workerAcomptes} count={workers.length}
-              onClick={() => setDrill({ title: t('acomptes'), rows: workers.flatMap((w) => w.acomptes.filter((a) => isWithinRange(a.date, from, to)).map((a) => ({ title: w.fullName, sub: `${a.description || ''} · ${formatDate(a.date, language)}`, value: a.amount }))) })} />
-            <DrillCard icon={<Users size={20} />} accent="pistachio" label={t('activeWorkers')} value={workers.length} isCount count={workers.length}
-              onClick={() => setDrill({ title: t('workers'), rows: workers.map((w) => ({ title: w.fullName, sub: w.phone, value: w.paymentAmount })) })} />
-          </div>
-
-          {/* ===== Caisse operations & decalages ===== */}
-          <SectionTitle icon={<Wallet size={18} />} title={t('caisseReport')} />
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <DrillCard icon={<ArrowDownLeft size={20} />} accent="pistachio" label={t('totalDeposits')} value={report.depositsTotal} count={report.deposits.length}
-              onClick={() => setDrill({ title: t('totalDeposits'), rows: report.deposits.map((d) => ({ title: d.description || t('deposit'), sub: formatDate(d.date, language), value: d.amount })) })} />
-            <DrillCard icon={<ArrowUpRight size={20} />} accent="rose" label={t('totalWithdrawals')} value={report.withdrawalsTotal} count={report.withdrawals.length}
-              onClick={() => setDrill({ title: t('totalWithdrawals'), rows: report.withdrawals.map((d) => ({ title: d.description || t('withdrawal'), sub: formatDate(d.date, language), value: d.amount, danger: true })) })} />
-            <DrillCard icon={<Scale size={20} />} accent={Math.abs(report.totalDecalage) < 0.01 ? 'pistachio' : 'rose'} label={t('reportsDecalage')} value={report.totalDecalage} count={report.reportCalcs.length} signed
-              onClick={() => setDrill({ title: t('reportsDecalage'), rows: report.reportCalcs.map(({ report: r, calc }) => ({ title: `${formatDate(r.date, language)} — ${r.hour}`, sub: `${t('declaredAmount')}: ${formatCurrency(r.declaredAmount)} · ${t('theoreticalBalance')}: ${formatCurrency(calc.theoretical)}`, value: calc.decalage, danger: Math.abs(calc.decalage) >= 0.01 })) })} />
-            <DrillCard icon={<FileText size={20} />} accent="lavender" label={t('caisseReports')} value={report.reportCalcs.length} isCount count={report.reportCalcs.length}
-              onClick={() => setDrill({ title: t('caisseReports'), rows: report.reportCalcs.map(({ report: r }) => ({ title: `${formatDate(r.date, language)} — ${r.hour}`, sub: r.description, value: r.declaredAmount })) })} />
-          </div>
-        </motion.div>
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </div>
       )}
 
-      {/* Drill-down modal */}
-      <Modal open={!!drill} onClose={() => setDrill(null)} title={drill?.title} size="md">
-        {drill && <DrillList rows={drill.rows} emptyLabel={t('noData')} />}
+      {/* ------------------- liste à cocher du rapport général ------------- */}
+      <Modal open={printOpen} onClose={() => setPrintOpen(false)} title="Imprimer le rapport général" size="lg">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="flex items-center gap-2 text-sm font-bold text-gold-dark">
+              <ListChecks size={16} /> Parties incluses dans le rapport
+            </p>
+            <div className="flex gap-1.5">
+              <Button size="sm" variant="ghost" className="text-[11px]" onClick={() => setChecked(parts.map((p) => p.key))}>
+                Tout cocher
+              </Button>
+              <Button size="sm" variant="ghost" className="text-[11px]" onClick={() => setChecked([])}>
+                Tout décocher
+              </Button>
+            </div>
+          </div>
+
+          {GROUPS.map((g) => {
+            const group2 = parts.filter((p) => p.group === g.key);
+            if (!group2.length) return null;
+            return (
+              <div key={g.key} className="space-y-1.5">
+                <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-text-muted">
+                  {g.icon} {g.label}
+                </p>
+                <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                  {group2.map((p) => {
+                    const on = checked.includes(p.key);
+                    return (
+                      <button
+                        key={p.key}
+                        type="button"
+                        onClick={() => toggle(p.key)}
+                        className={cn(
+                          'flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left transition-colors',
+                          on ? 'border-gold/50 bg-gold/10' : 'border-gold/15 bg-vanilla/30 hover:bg-gold/5'
+                        )}
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          {on ? <CheckSquare size={16} className="shrink-0 text-gold-dark" />
+                              : <Square size={16} className="shrink-0 text-text-muted" />}
+                          <span className="truncate text-[13px] font-semibold text-text-primary">
+                            {p.label}
+                            <span className="ml-1 text-[11px] font-normal text-text-muted">({p.count})</span>
+                          </span>
+                        </span>
+                        {p.total && <span className="shrink-0 text-[11px] font-bold tabular text-gold-dark">{p.total}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+
+          <p className="rounded-xl border border-gold/20 bg-vanilla/40 px-3 py-2 text-[11px] text-text-muted">
+            Le document sort sur le <b>modèle du bon de livraison</b> : un tableau par partie, avec sa
+            colonne <b>DATE</b>, sa colonne <b>DÉSIGNATION</b> et ses totaux accrochés à droite.
+            Aucun tableau de résumé n&rsquo;est imprimé en tête.
+          </p>
+
+          <div className="flex gap-2 border-t border-gold/15 pt-4">
+            <Button variant="secondary" className="flex-1" onClick={() => setPrintOpen(false)}>Annuler</Button>
+            <Button variant="gold" className="flex-1 font-bold" disabled={checked.length === 0} onClick={printGeneral}>
+              <Printer size={16} /> Imprimer ({checked.length} partie(s))
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );
 }
 
-function CategorySummaryCard({ title, icon, cats, total, tone, emptyLabel }: {
-  title: string; icon: React.ReactNode;
-  cats: { id: string; name: string; total: number; items: unknown[] }[];
-  total: number; tone: string; emptyLabel: string;
-}) {
-  const text = ACCENT_TEXT[tone] || 'text-gold-dark';
-  const grad = ACCENTS[tone] || ACCENTS.gold;
-  const max = Math.max(1, ...cats.map((c) => c.total));
+function Stat({ label, value, tone }: ReportStat) {
+  const color = tone === 'pos' ? 'text-pistachio' : tone === 'neg' ? 'text-rose-deep'
+    : tone === 'accent' ? 'text-gold-dark' : 'text-text-primary';
   return (
-    <Card index={0} className="border border-gold/15">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-display font-semibold text-text-primary flex items-center gap-2">
-          <span className={`h-8 w-8 rounded-lg bg-gradient-to-br flex items-center justify-center text-white ${grad}`}>{icon}</span> {title}
-        </h3>
-        <span className={`text-sm font-bold tabular ${text}`}>{formatCurrency(total)}</span>
-      </div>
-      {cats.length === 0 ? (
-        <EmptyState message={emptyLabel} icon={<Tag size={26} />} />
-      ) : (
-        <div className="space-y-2 max-h-[320px] overflow-y-auto pr-1">
-          {cats.map((cat) => (
-            <div key={cat.id} className="rounded-xl border border-gold/10 bg-vanilla/40 px-3 py-2.5">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium text-text-primary truncate flex items-center gap-1.5"><Tag size={12} className="text-gold-dark" /> {cat.name}</span>
-                <span className={`text-sm font-bold tabular shrink-0 ${text}`}>{formatCurrency(cat.total)}</span>
-              </div>
-              <div className="flex items-center gap-2 mt-1.5">
-                <div className="h-1.5 flex-1 rounded-full bg-vanilla/50 overflow-hidden">
-                  <div className={`h-full rounded-full bg-gradient-to-r ${grad}`} style={{ width: `${(cat.total / max) * 100}%` }} />
-                </div>
-                <span className="text-[10px] text-text-muted shrink-0">{cat.items.length}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-function OverviewTile({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: number; accent: string }) {
-  return (
-    <Card index={0}>
-      <div className={`${ACCENT_TEXT[accent]} mb-2`}>{icon}</div>
-      <p className="text-xs text-text-muted">{label}</p>
-      <p className={`text-xl font-bold tabular ${ACCENT_TEXT[accent]}`}>{formatCurrency(value)}</p>
-    </Card>
-  );
-}
-
-function SectionTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
-  return (
-    <h3 className="font-display font-semibold text-text-primary flex items-center gap-2 pt-2">
-      <span className="text-gold-dark">{icon}</span> {title}
-    </h3>
-  );
-}
-
-function DrillCard({ icon, label, value, accent, count, onClick, isCount, signed, hideValue }: {
-  icon: React.ReactNode; label: string; value: number; accent: string; count: number;
-  onClick: () => void; isCount?: boolean; signed?: boolean; hideValue?: boolean;
-}) {
-  const sign = signed && value > 0 ? '+ ' : signed && value < 0 ? '− ' : '';
-  return (
-    <motion.button whileHover={{ y: -3 }} whileTap={{ scale: 0.97 }} onClick={onClick}
-      className="relative overflow-hidden rounded-2xl bg-gradient-card border border-gold/15 shadow-card p-5 text-left">
-      <div className={`absolute -top-6 -right-6 h-20 w-20 rounded-full bg-gradient-to-br opacity-10 ${ACCENTS[accent]}`} />
-      <div className="flex items-start justify-between mb-3">
-        <div className={`h-11 w-11 rounded-xl bg-gradient-to-br flex items-center justify-center text-white shadow-sm ${ACCENTS[accent]}`}>{icon}</div>
-        <ChevronRight size={18} className="text-text-muted" />
-      </div>
-      <p className="text-sm text-text-muted mb-1">{label}</p>
-      {!hideValue && (
-        <p className={`text-xl font-bold tabular ${ACCENT_TEXT[accent]}`}>
-          {isCount ? Math.round(value) : `${sign}${formatCurrency(Math.abs(value))}`}
-        </p>
-      )}
-      <p className="text-xs text-text-muted mt-1">{count} {count > 1 ? 'éléments' : 'élément'} · 👆</p>
-    </motion.button>
-  );
-}
-
-function DrillList({ rows, emptyLabel }: { rows: Row[]; emptyLabel: string }) {
-  if (rows.length === 0) return <EmptyState message={emptyLabel} />;
-  const total = rows.reduce((s, r) => s + r.value, 0);
-  return (
-    <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
-      <AnimatePresence initial={false}>
-        {rows.map((r, i) => (
-          <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-            className="flex items-center gap-3 p-3 rounded-xl bg-vanilla/40 border border-gold/10">
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-text-primary truncate">{r.title}</p>
-              {r.sub && <p className="text-xs text-text-muted truncate">{r.sub}</p>}
-            </div>
-            <p className={`text-sm font-bold tabular shrink-0 ${r.danger ? 'text-rose-deep' : 'text-gold-dark'}`}>{formatCurrency(r.value)}</p>
-          </motion.div>
-        ))}
-      </AnimatePresence>
-      <div className="flex justify-between border-t border-gold/15 pt-3 px-1 font-bold sticky bottom-0 bg-cream">
-        <span className="text-text-primary">Total</span>
-        <span className="tabular text-gold-dark">{formatCurrency(total)}</span>
-      </div>
+    <div className="rounded-2xl border border-gold/15 bg-gradient-card px-3.5 py-3 shadow-card">
+      <p className="text-[10px] font-bold uppercase leading-tight tracking-wide text-text-muted">{label}</p>
+      <p className={`mt-1 text-base font-bold tabular ${color}`}>{value}</p>
     </div>
   );
 }

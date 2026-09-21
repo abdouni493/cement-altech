@@ -7,6 +7,7 @@ import { SearchBar } from '@/components/ui/SearchBar';
 import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
 import { ViewToggle } from '@/components/ui/ViewToggle';
+import { useViewMode } from '@/components/ui/DataTable';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -39,7 +40,9 @@ export default function Stock() {
   const [search, setSearch] = useState('');
   const [unitFilter, setUnitFilter] = useState('');
   const [stockFilter, setStockFilter] = useState<StockFilter>('all');
-  const [view, setView] = useState<'cards' | 'table'>('cards');
+  // L'affichage en TABLEAU est le mode par defaut de tous les ecrans ;
+  // le choix de l'operateur est memorise pour cet ecran.
+  const [view, setView] = useViewMode('stock');
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [viewing, setViewing] = useState<Product | null>(null);

@@ -248,3 +248,62 @@ html.light ::-webkit-scrollbar-track {
     display: none !important;
   }
 }
+
+/* ============================================================================
+ *  FLUIDITE DE L'INTERFACE
+ * ----------------------------------------------------------------------------
+ *  Trois reglages qui changent tout sur les postes de l'entreprise :
+ *   · les listes et les fenetres defilent de maniere fluide et sans a-coups ;
+ *   · les tableaux longs ne sont peints que lorsqu'ils entrent a l'ecran ;
+ *   · un utilisateur qui a demande « moins d'animations » dans son systeme
+ *     n'en recoit plus aucune.
+ * ========================================================================== */
+
+/* `animate-fadeIn` etait utilise dans l'application sans jamais avoir ete
+   defini : la classe ne faisait donc rien. La voici. */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-fadeIn { animation: fadeIn 0.16s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* Defilement doux et inertiel, sans barre qui saute d'une fenetre a l'autre. */
+html { scroll-behavior: smooth; }
+* { scrollbar-width: thin; }
+
+.overflow-y-auto,
+.overflow-x-auto,
+main {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* Barres de defilement discretes, aux couleurs de l'application. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(180, 136, 27, 0.28);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(180, 136, 27, 0.5); background-clip: content-box; }
+
+/* Un tableau de 500 lignes n'est peint que pour la partie visible. */
+table tbody tr {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 42px;
+}
+
+/* Les cartes et les fenetres sont promues sur leur propre couche : le
+   navigateur les anime sans repeindre le reste de la page. */
+.shadow-card, .shadow-hover { will-change: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

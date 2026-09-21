@@ -4,11 +4,15 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { Select } from '@/components/ui/Select';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { ViewToggle } from '@/components/ui/ViewToggle';
+import { DataTable, useViewMode, type DataColumn } from '@/components/ui/DataTable';
+import type { ActionItem } from '@/components/ui/ActionMenu';
 import { CreatePurchase } from './CreatePurchase';
 import { PayDebtModal } from '@/components/shared/PayDebtModal';
 import { usePurchaseStore } from '@/store/purchaseStore';
@@ -36,6 +40,9 @@ export default function PurchasePage() {
   const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
   const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 10));
   const [unitFilter, setUnitFilter] = useState('');
+  // Toutes les interfaces s'ouvrent en TABLEAU par defaut ; le choix de
+  // l'operateur est memorise pour cet ecran.
+  const [view, setView] = useViewMode('purchase');
 
   const [createOpen, setCreateOpen] = useState(false);
   /** Ouvre le même formulaire en mode « ancien achat » (saisie rétroactive). */
@@ -101,6 +108,49 @@ export default function PurchasePage() {
       total: p.totalAmount, paid: p.paidAmount, rest: p.restAmount,
     }, settings);
   };
+
+  /* ------------------------------------------------------------ tableau --
+   * Les actions ne sont plus alignees sur chaque ligne : elles sont
+   * regroupees dans le menu « trois points » de la derniere colonne.
+   * -------------------------------------------------------------------- */
+  const purchaseColumns: DataColumn<Purchase>[] = [
+    {
+      key: 'ref', label: t('reference'),
+      render: (p) => (
+        <span className="flex items-center gap-1.5 font-semibold">
+          {p.reference}
+          {p.isHistorical && (
+            <Badge variant="warning" className="px-1.5 py-0 text-[9px]"><History size={9} /> Ancien</Badge>
+          )}
+        </span>
+      ),
+    },
+    { key: 'supplier', label: t('supplier'), render: (p) => supplierName(p.supplierId) },
+    { key: 'date', label: t('date'), render: (p) => formatDate(p.date, language) },
+    { key: 'bon', label: 'N° BL / matricule', hideOnMobile: true,
+      render: (p) => [p.bonNumber, p.driverPlate].filter(Boolean).join(' · ') || '—' },
+    { key: 'items', label: 'Articles', align: 'right', render: (p) => p.products.length },
+    { key: 'total', label: t('total'), align: 'right', render: (p) => formatCurrency(p.totalAmount) },
+    { key: 'paid', label: t('paid'), align: 'right',
+      render: (p) => <span className="text-pistachio">{formatCurrency(p.paidAmount)}</span> },
+    { key: 'rest', label: t('rest'), align: 'right',
+      render: (p) => (
+        <span className={p.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>
+          {formatCurrency(p.restAmount)}
+        </span>
+      ) },
+  ];
+
+  const purchaseActions = (p: Purchase): ActionItem[] => [
+    { label: 'Voir le détail', icon: <Eye size={15} />, onClick: () => setViewing(p) },
+    { label: 'Modifier la facture', icon: <PencilLine size={15} />, hidden: !can('purchase', 'edit'),
+      onClick: () => setEditing(p) },
+    { label: 'Payer la dette', icon: <Wallet size={15} />,
+      hidden: !can('purchase', 'pay') || p.restAmount <= 0, onClick: () => setPaying(p) },
+    { label: t('print'), icon: <Printer size={15} />, onClick: () => handlePrint(p) },
+    { label: t('delete'), icon: <Trash2 size={15} />, danger: true, hidden: !can('purchase', 'delete'),
+      onClick: () => setDeleteId(p.id) },
+  ];
 
   return (
     <div>
@@ -187,27 +237,39 @@ export default function PurchasePage() {
           />
         </div>
 
+        <ViewToggle view={view} onChange={setView} />
+
         {/* Period inputs */}
+        {/* Champs de date de l'application : affiches en jj/mm/aaaa comme
+            partout ailleurs, et non au format de la langue du navigateur. */}
         {dateFilter === 'period' && (
-          <div className="flex items-center gap-2 animate-fadeIn bg-vanilla/40 px-3 py-1.5 rounded-xl border border-gold/10">
-            <input 
-              type="date" 
-              value={startDate} 
-              onChange={(e) => setStartDate(e.target.value)} 
-              className="text-xs bg-transparent border-0 focus:outline-none font-medium tabular text-text-primary"
+          <div className="flex items-end gap-2 animate-fadeIn">
+            <Input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="max-w-[170px]"
             />
-            <span className="text-xs text-text-muted">à</span>
-            <input 
-              type="date" 
-              value={endDate} 
-              onChange={(e) => setEndDate(e.target.value)} 
-              className="text-xs bg-transparent border-0 focus:outline-none font-medium tabular text-text-primary"
+            <span className="pb-2.5 text-xs text-text-muted">à</span>
+            <Input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="max-w-[170px]"
             />
           </div>
         )}
       </div>
 
-      {filtered.length === 0 ? <EmptyState message={t('noData')} /> : (
+      {filtered.length === 0 ? <EmptyState message={t('noData')} /> : view === 'table' ? (
+        <DataTable
+          rows={filtered}
+          columns={purchaseColumns}
+          rowKey={(p) => p.id}
+          actions={purchaseActions}
+          onRowClick={(p) => setViewing(p)}
+        />
+      ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 animate-fadeIn">
           {filtered.map((p, i) => {
             const cats = getPurchaseUnits(p);

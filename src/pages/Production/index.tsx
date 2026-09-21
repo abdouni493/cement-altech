@@ -15,6 +15,9 @@ import { Switch } from '@/components/ui/Switch';
 import { Input, Textarea } from '@/components/ui/Input';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { ViewToggle } from '@/components/ui/ViewToggle';
+import { DataTable, useViewMode, type DataColumn } from '@/components/ui/DataTable';
+import type { ActionItem } from '@/components/ui/ActionMenu';
 import { UnitSelect } from '@/components/shared/UnitSelect';
 import { StatCard } from '@/components/shared/StatCard';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -84,6 +87,8 @@ export default function ProductionPage() {
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
   // manuelle (écran Production) ou lancée depuis le point de vente
+  // Affichage en TABLEAU par defaut, comme sur tous les ecrans.
+  const [view, setView] = useViewMode('production');
   const [originFilter, setOriginFilter] = useState<'all' | 'manual' | 'pos'>('all');
   
   // Production Modals
@@ -121,6 +126,45 @@ export default function ProductionPage() {
     () => ficheTechnics.filter((ft) => ft.name.toLowerCase().includes(search.toLowerCase())),
     [ficheTechnics, search]
   );
+
+  /* ------------------------------------------------------------ tableau --
+   * Mode TABLEAU des lots de production : un lot par ligne, actions dans le
+   * menu « trois points ».
+   * -------------------------------------------------------------------- */
+  const productionColumns: DataColumn<Production>[] = [
+    { key: 'name', label: 'Production',
+      render: (p) => (
+        <span className="flex items-center gap-1.5 font-semibold">
+          {p.name}
+          {p.origin === 'pos' && <Badge variant="success" className="text-[9px]">Caisse</Badge>}
+          {p.hasLoss && <Badge variant="danger" className="text-[9px]">Perte</Badge>}
+        </span>
+      ) },
+    { key: 'date', label: 'Date', render: (p) => `${formatDate(p.date, language)} ${p.hour ?? ''}` },
+    { key: 'cat', label: 'Catégorie', hideOnMobile: true, render: (p) => p.categoryName || '—' },
+    { key: 'qty', label: 'Produit', align: 'right',
+      render: (p) => `${p.outputQuantity}${p.sellByUnit && p.sellUnit ? ` ${p.sellUnit}` : ''}` },
+    { key: 'sent', label: 'Au comptoir', align: 'right', hideOnMobile: true,
+      render: (p) => `${p.sentToComptoir ?? 0} / ${p.outputQuantity}` },
+    { key: 'cost', label: 'Coût matière', align: 'right',
+      render: (p) => <span className="text-rose-deep">{formatCurrency(p.totalCost ?? 0)}</span> },
+    { key: 'value', label: 'Valeur', align: 'right', render: (p) => formatCurrency(p.totalValue) },
+    { key: 'gain', label: 'Gain net', align: 'right',
+      render: (p) => {
+        const gain = p.totalValue - (p.totalCost ?? 0);
+        return <span className={gain >= 0 ? 'font-bold text-pistachio' : 'font-bold text-rose-deep'}>{formatCurrency(gain)}</span>;
+      } },
+  ];
+
+  const productionActions = (p: Production): ActionItem[] => [
+    { label: 'Détails', icon: <Eye size={15} />, onClick: () => setProdViewing(p) },
+    { label: 'Mettre au comptoir', icon: <Plus size={15} />,
+      hidden: !can('production', 'edit') || p.outputQuantity - (p.sentToComptoir ?? 0) <= 0,
+      onClick: () => setTransferProd(p) },
+    { label: 'Imprimer la fiche', icon: <Printer size={15} />, onClick: () => printProduction(p) },
+    { label: 'Supprimer', icon: <Trash2 size={15} />, danger: true, hidden: !can('production', 'delete'),
+      onClick: () => setProdDeleteId(p.id) },
+  ];
 
   return (
     <div className="space-y-6">
@@ -196,9 +240,18 @@ export default function ProductionPage() {
               ]}
               className="max-w-[240px]"
             />
+            <ViewToggle view={view} onChange={setView} />
           </div>
 
-          {filteredProductions.length === 0 ? <EmptyState message={t('noData')} /> : (
+          {filteredProductions.length === 0 ? <EmptyState message={t('noData')} /> : view === 'table' ? (
+            <DataTable
+              rows={filteredProductions}
+              columns={productionColumns}
+              rowKey={(p) => p.id}
+              actions={productionActions}
+              onRowClick={(p) => setProdViewing(p)}
+            />
+          ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
               {filteredProductions.map((p, i) => (
                 <Card

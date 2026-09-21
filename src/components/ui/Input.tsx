@@ -1,5 +1,6 @@
 import { forwardRef, type InputHTMLAttributes, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { DateField } from './DateField';
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -9,7 +10,34 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ className, label, error, icon, suffix, ...props }, ref) => (
+  ({ className, label, error, icon, suffix, ...props }, ref) => {
+    /* ------------------------------------------------------------------
+     *  TOUTES LES DATES DE L'APPLICATION S'AFFICHENT EN jj/mm/aaaa.
+     *  Le champ natif suivrait la langue du navigateur (mm/dd/yyyy en
+     *  anglais) : on le remplace ici, une fois pour toutes, par `DateField`.
+     *  La valeur echangee avec l'appelant reste `YYYY-MM-DD`
+     *  (`YYYY-MM-DDTHH:mm` avec l'heure) — aucun ecran n'a a changer.
+     * ---------------------------------------------------------------- */
+    if (props.type === 'date' || props.type === 'datetime-local') {
+      const { type, value, onChange, ...rest } = props;
+      return (
+        <DateField
+          ref={ref}
+          label={label}
+          error={error}
+          icon={icon}
+          className={className}
+          withTime={type === 'datetime-local'}
+          value={(value as string) ?? ''}
+          onChange={(e) =>
+            onChange?.(e as unknown as React.ChangeEvent<HTMLInputElement>)
+          }
+          {...rest}
+        />
+      );
+    }
+
+    return (
     <div className="w-full">
       {label && (
         <label className="block text-xs font-bold uppercase tracking-wider text-text-secondary mb-1.5">
@@ -39,7 +67,8 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
       </div>
       {error && <p className="text-xs text-rose-deep mt-1 font-medium">{error}</p>}
     </div>
-  )
+    );
+  }
 );
 Input.displayName = 'Input';
 

@@ -5,6 +5,7 @@ import {
   ShoppingCart, Plus, Search, Calendar, Clock, Eye, Pencil, Trash2, CheckCircle2,
   AlertTriangle, Printer, UserPlus, X, Coins, User, Phone, Receipt, Truck,
   PackageCheck, History, ClipboardList, MapPin, Hash, Package, Percent, Wallet,
+  ScissorsSquare, PlusCircle, Copy,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -18,9 +19,11 @@ import { SearchBar } from '@/components/ui/SearchBar';
 import { StatCard } from '@/components/shared/StatCard';
 import { toast } from '@/components/ui/Toast';
 import { DeliveryModal } from './DeliveryModal';
+import { CommandAdjustModal } from './CommandAdjustModal';
 import {
   useCommandStore, deliveryStatus,
   type Command, type CommandLine, type DeliveryDriver, type DeliveryPayment,
+  type AdjustmentInput,
 } from '@/store/commandStore';
 import { useSalesStore } from '@/store/salesStore';
 import { useClientStore } from '@/store/clientStore';
@@ -43,8 +46,9 @@ export default function CommandsPage() {
   const navigate = useNavigate();
 
   const {
-    commands, deliveries, addCommand, updateCommand, deleteCommand, payDebt,
+    commands, deliveries, adjustments, addCommand, updateCommand, deleteCommand, payDebt,
     addDelivery, updateDelivery, deleteDelivery,
+    cancelRemainder, increaseCommand: increaseCommandLines,
   } = useCommandStore();
   const { clients, addClient, updateClient } = useClientStore();
   const sales = useSalesStore((s) => s.sales);
@@ -105,6 +109,8 @@ export default function CommandsPage() {
   const [printPrompt, setPrintPrompt] = useState<
     { kind: 'command'; cmd: Command } | { kind: 'delivery'; cmd: Command; delivery: CommandDelivery } | null
   >(null);
+  /** Annuler le reste non livre / augmenter les quantites commandees. */
+  const [adjust, setAdjust] = useState<{ mode: 'cancel' | 'increase'; cmd: Command } | null>(null);
 
   const deliveriesOf = (commandId: string) =>
     deliveries.filter((d) => d.commandId === commandId).sort((a, b) => b.deliveredAt.localeCompare(a.deliveredAt));
@@ -235,14 +241,20 @@ export default function CommandsPage() {
     setClientSearch('');
   };
 
+  /**
+   * AJOUT D'UN PRODUIT A LA COMMANDE.
+   *
+   * Le MEME produit peut desormais figurer PLUSIEURS FOIS sur une commande,
+   * avec des quantites et des prix differents : c'est le cas courant d'un
+   * client qui prend 30 m3 a un prix negocie puis 20 m3 au tarif normal.
+   * Chaque ligne vit donc pour elle-meme — son rang (`position`) la distingue
+   * de sa jumelle dans la base, sur le bon de commande et dans les livraisons.
+   */
   const handleAddRecipeLine = (ft: (typeof ficheTechnics)[0]) => {
-    if (selectedItems.find((item) => item.ficheTechnicId === ft.id)) {
-      toast.error('Ce produit est déjà dans la commande');
-      return;
-    }
-    setSelectedItems([
-      ...selectedItems,
+    setSelectedItems((items) => [
+      ...items,
       {
+        position: items.length,
         ficheTechnicId: ft.id,
         productName: ft.name,
         quantity: 1,
@@ -255,11 +267,21 @@ export default function CommandsPage() {
     setRecipeSearch('');
   };
 
+  /** Duplique une ligne pour saisir le meme produit a un autre prix. */
+  const handleDuplicateItem = (index: number) =>
+    setSelectedItems((items) => {
+      const copy = [...items];
+      const src = copy[index];
+      copy.splice(index + 1, 0, { ...src, id: undefined, deliveredQuantity: 0, cancelledQuantity: 0 });
+      return copy.map((it, i) => ({ ...it, position: i }));
+    });
+
   const handleUpdateItemQty = (index: number, qty: number) =>
     setSelectedItems(selectedItems.map((it, i) => (i === index ? { ...it, quantity: qty, totalPrice: qty * it.unitPrice } : it)));
   const handleUpdateItemPrice = (index: number, price: number) =>
     setSelectedItems(selectedItems.map((it, i) => (i === index ? { ...it, unitPrice: price, totalPrice: it.quantity * price } : it)));
-  const handleRemoveItem = (index: number) => setSelectedItems(selectedItems.filter((_, i) => i !== index));
+  const handleRemoveItem = (index: number) =>
+    setSelectedItems(selectedItems.filter((_, i) => i !== index).map((it, i) => ({ ...it, position: i })));
 
   const computedTotalSum = selectedItems.reduce((sum, item) => sum + item.totalPrice, 0);
   const finalTotalAmount = customTotal !== null ? customTotal : computedTotalSum;
@@ -290,7 +312,7 @@ export default function CommandsPage() {
     setAddressError(false);
     setDriverName(cmd.driverName || '');
     setDriverPlate(cmd.driverPlate || '');
-    setSelectedItems(cmd.items);
+    setSelectedItems(cmd.items.map((it, i) => ({ ...it, position: it.position ?? i })));
     setReceiveDate(cmd.receiveDate); setReceiveHour(cmd.receiveHour); setReceiveMinute(cmd.receiveMinute);
     setCustomTotal(cmd.totalAmount); setVersement(cmd.paidAmount);
     setTvaEnabled(!!cmd.tvaEnabled); setTvaRate(cmd.tvaRate || DEFAULT_TVA_RATE);
@@ -326,6 +348,7 @@ export default function CommandsPage() {
       }
 
       const cmdData = {
+        // le rang fige l'ordre de saisie : il distingue deux lignes du meme produit
         clientId: selectedClient.id,
         clientName: selectedClient.name,
         clientPhone: selectedClient.phone,
@@ -333,7 +356,7 @@ export default function CommandsPage() {
         driverName: driverName.trim() || undefined,
         driverPlate: driverPlate.trim() || undefined,
         receiveDate, receiveHour, receiveMinute,
-        items: selectedItems,
+        items: selectedItems.map((it, i) => ({ ...it, position: i })),
         totalAmount: finalTotalAmount,
         tvaEnabled,
         tvaRate: tvaEnabled ? tvaRate : 0,
@@ -359,6 +382,21 @@ export default function CommandsPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  /* --------------------------------------------- annuler / augmenter ---- */
+  const handleAdjust = async (lines: AdjustmentInput[], reason: string, date: string) => {
+    if (!adjust) return;
+    if (adjust.mode === 'cancel') {
+      await cancelRemainder(adjust.cmd.id, lines, reason, date);
+      toast.success(
+        'Reste annulé — la quantité non livrée et la dette correspondante ont disparu de la fiche du client'
+      );
+    } else {
+      await increaseCommandLines(adjust.cmd.id, lines, reason, date);
+      toast.success('Commande augmentée — le total et le reste dû ont été recalculés');
+    }
+    setAdjust(null);
   };
 
   /* ---------------------------------------------------------- deliveries */
@@ -790,6 +828,53 @@ export default function CommandsPage() {
                         <Printer size={13} /> Bon commande
                       </Button>
                     </div>
+
+                    {/* ---- ANNULER LE RESTE / AUGMENTER LA COMMANDE ----
+                        Le client s'arrete avant la fin de sa commande, ou en
+                        redemande : deux boutons, aucune commande a recreer. */}
+                    {can('clients', 'edit') && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button
+                          size="sm" variant="rose" className="text-xs"
+                          disabled={d.remaining <= 0}
+                          onClick={() => setAdjust({ mode: 'cancel', cmd })}
+                          title={d.remaining > 0
+                            ? `Annuler les ${d.remaining} unité(s) non livrées — la dette correspondante disparaît`
+                            : 'Rien à annuler : tout a été livré'}
+                        >
+                          <ScissorsSquare size={13} /> Annuler le reste
+                        </Button>
+                        <Button
+                          size="sm" variant="mint" className="text-xs"
+                          onClick={() => setAdjust({ mode: 'increase', cmd })}
+                          title="Le client en redemande : augmenter les quantités de cette commande"
+                        >
+                          <PlusCircle size={13} /> Augmenter
+                        </Button>
+                      </div>
+                    )}
+
+                    {(() => {
+                      const adj = adjustments.filter((a) => a.commandId === cmd.id);
+                      if (adj.length === 0) return null;
+                      const cancelled = adj.filter((a) => a.type === 'cancel');
+                      const added = adj.filter((a) => a.type === 'increase');
+                      return (
+                        <div className="rounded-xl border border-gold/20 bg-vanilla/40 px-2.5 py-1.5 text-[10px] text-text-muted">
+                          {cancelled.length > 0 && (
+                            <span className="text-rose-deep font-semibold">
+                              −{cancelled.reduce((sm, a) => sm + a.totalQuantity, 0)} annulé(s)
+                            </span>
+                          )}
+                          {cancelled.length > 0 && added.length > 0 && ' · '}
+                          {added.length > 0 && (
+                            <span className="text-pistachio font-semibold">
+                              +{added.reduce((sm, a) => sm + a.totalQuantity, 0)} ajouté(s)
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="flex gap-1.5">
                       {cmd.restAmount > 0 && can('clients', 'pay') && (
                         <Button
@@ -817,6 +902,15 @@ export default function CommandsPage() {
           })}
         </div>
       )}
+
+      {/* ========= Annuler le reste / augmenter la commande ========= */}
+      <CommandAdjustModal
+        open={!!adjust}
+        mode={adjust?.mode ?? 'cancel'}
+        command={adjust?.cmd ?? null}
+        onClose={() => setAdjust(null)}
+        onSubmit={handleAdjust}
+      />
 
       {/* ================= Create / edit ================= */}
       <Modal
@@ -1035,6 +1129,10 @@ export default function CommandsPage() {
                 className="pl-10"
               />
             </div>
+            <p className="text-[11px] text-text-muted">
+              Le <b>même produit peut être ajouté plusieurs fois</b> avec des quantités et des prix
+              différents : sélectionnez-le à nouveau, ou dupliquez la ligne avec l&rsquo;icône de copie.
+            </p>
             {recipeSearch && recipeSearchResults.length > 0 && (
               <div className="border border-gold/30 rounded-xl bg-[--surface-dropdown] max-h-[160px] overflow-y-auto shadow-xl">
                 {recipeSearchResults.map((ft) => (
@@ -1057,17 +1155,28 @@ export default function CommandsPage() {
                 <table className="w-full text-xs">
                   <thead className="bg-vanilla/60 text-text-secondary">
                     <tr>
+                      <th className="text-left px-3 py-2">#</th>
                       <th className="text-left px-3 py-2">Produit</th>
                       <th className="text-right px-3 py-2">Quantité</th>
                       <th className="text-right px-3 py-2">P.U (DA)</th>
                       <th className="text-right px-3 py-2">Total</th>
-                      <th className="text-center px-3 py-2">Action</th>
+                      <th className="text-center px-3 py-2">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {selectedItems.map((item, idx) => (
                       <tr key={idx} className="border-t border-gold/10">
-                        <td className="px-3 py-2 font-semibold text-text-primary">{item.productName}</td>
+                        <td className="px-3 py-2 text-text-muted tabular">{idx + 1}</td>
+                        <td className="px-3 py-2 font-semibold text-text-primary">
+                          {item.productName}
+                          {/* deux lignes du MEME produit sont parfaitement
+                              legitimes : on le signale sans l'interdire */}
+                          {selectedItems.filter((x) => x.productName === item.productName).length > 1 && (
+                            <span className="ml-1.5 rounded bg-gold/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-gold-dark">
+                              ligne {selectedItems.filter((x, j) => x.productName === item.productName && j <= idx).length}
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-right">
                           <input
                             type="number" min={0.01} step="any" value={item.quantity}
@@ -1085,9 +1194,22 @@ export default function CommandsPage() {
                         </td>
                         <td className="px-3 py-2 text-right font-bold tabular text-gold">{formatCurrency(item.totalPrice)}</td>
                         <td className="px-3 py-2 text-center">
-                          <button onClick={() => handleRemoveItem(idx)} className="p-1 rounded-lg text-rose-deep hover:bg-rose-deep/10">
-                            <X size={14} />
-                          </button>
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => handleDuplicateItem(idx)}
+                              title="Ajouter une deuxième ligne du même produit (autre quantité / autre prix)"
+                              className="rounded-lg p-1 text-gold-dark hover:bg-gold/10"
+                            >
+                              <Copy size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleRemoveItem(idx)}
+                              title="Retirer cette ligne"
+                              className="rounded-lg p-1 text-rose-deep hover:bg-rose-deep/10"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

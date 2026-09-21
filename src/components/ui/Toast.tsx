@@ -68,7 +68,7 @@ export function ToastViewport() {
   const remove = useToastStore((s) => s.remove);
 
   return (
-    <div className="fixed top-5 right-5 z-[100] flex flex-col gap-3 max-w-sm pointer-events-none">
+    <div className="fixed top-5 right-5 z-[140] flex flex-col gap-3 max-w-sm pointer-events-none">
       <AnimatePresence>
         {toasts.map((t) => {
           const c = config[t.type];

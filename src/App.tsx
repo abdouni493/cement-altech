@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -7,23 +7,33 @@ import { ToastViewport } from '@/components/ui/Toast';
 import type { PermissionModule } from '@/types';
 
 import Login from '@/pages/Login';
-import Dashboard from '@/pages/Dashboard';
-import Stock from '@/pages/Stock';
-import Purchase from '@/pages/Purchase';
-import Production from '@/pages/Production';
-import Comptoir from '@/pages/Comptoir';
-import POS from '@/pages/POS';
-import Sales from '@/pages/Sales';
-import Clients from '@/pages/Clients';
-import Commands from '@/pages/Clients/Commands';
-import Suppliers from '@/pages/Suppliers';
-import Workers from '@/pages/Workers';
-import Expenses from '@/pages/Expenses';
-import Caisse from '@/pages/Caisse';
-import CaisseReports from '@/pages/Caisse/CaisseReports';
-import ComptoirStats from '@/pages/Caisse/ComptoirStats';
-import Reports from '@/pages/Reports';
-import SettingsPage from '@/pages/Settings';
+
+/* ============================================================================
+ *  CHARGEMENT A LA DEMANDE DES ECRANS
+ * ----------------------------------------------------------------------------
+ *  L'application chargeait TOUS ses ecrans d'un bloc : plus d'un megaoctet de
+ *  code avant d'afficher la premiere page, sur des postes qui ne sont pas des
+ *  stations de travail. Chaque ecran est desormais un morceau separe, telecharge
+ *  au moment ou l'operateur l'ouvre — le demarrage et la navigation deviennent
+ *  immediats, et le navigateur garde en cache ce qu'il a deja charge.
+ * ========================================================================== */
+const Dashboard     = lazy(() => import('@/pages/Dashboard'));
+const Stock         = lazy(() => import('@/pages/Stock'));
+const Purchase      = lazy(() => import('@/pages/Purchase'));
+const Production    = lazy(() => import('@/pages/Production'));
+const Comptoir      = lazy(() => import('@/pages/Comptoir'));
+const POS           = lazy(() => import('@/pages/POS'));
+const Sales         = lazy(() => import('@/pages/Sales'));
+const Clients       = lazy(() => import('@/pages/Clients'));
+const Commands      = lazy(() => import('@/pages/Clients/Commands'));
+const Suppliers     = lazy(() => import('@/pages/Suppliers'));
+const Workers       = lazy(() => import('@/pages/Workers'));
+const Expenses      = lazy(() => import('@/pages/Expenses'));
+const Caisse        = lazy(() => import('@/pages/Caisse'));
+const CaisseReports = lazy(() => import('@/pages/Caisse/CaisseReports'));
+const ComptoirStats = lazy(() => import('@/pages/Caisse/ComptoirStats'));
+const Reports       = lazy(() => import('@/pages/Reports'));
+const SettingsPage  = lazy(() => import('@/pages/Settings'));
 
 import { useThemeStore, applyTheme } from '@/store/themeStore';
 import { hydrateFromSupabase } from '@/lib/sync';
@@ -52,7 +62,18 @@ function PrivateRoute({ children }: { children: ReactNode }) {
 function Guarded({ module, children }: { module: PermissionModule; children: ReactNode }) {
   const { canView } = usePermissions();
   if (!canView(module)) return <Navigate to="/" replace />;
-  return <>{children}</>;
+  // Le morceau de code de l'ecran est telecharge ici, derriere un voyant
+  // discret : l'interface reste reactive pendant le chargement.
+  return <Suspense fallback={<ScreenLoader />}>{children}</Suspense>;
+}
+
+/** Voyant de chargement d'un ecran — volontairement leger et silencieux. */
+function ScreenLoader() {
+  return (
+    <div className="flex min-h-[40vh] items-center justify-center">
+      <span className="h-8 w-8 animate-spin rounded-full border-[3px] border-gold/25 border-t-gold" />
+    </div>
+  );
 }
 
 /** Sends the user to the first screen he is actually allowed to open. */

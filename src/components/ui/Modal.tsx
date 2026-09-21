@@ -56,7 +56,7 @@ export function Modal({ open, onClose, title, children, size = 'md', footer }: M
     <AnimatePresence>
       {open && (
         <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[90] flex items-center justify-center p-4"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -73,6 +73,10 @@ export function Modal({ open, onClose, title, children, size = 'md', footer }: M
             initial="hidden"
             animate="visible"
             exit="exit"
+            /* Marqueur lu par l'ecran « Historique » plein ecran : tant qu'une
+               fenetre est ouverte par-dessus lui, Echap la ferme ELLE, pas
+               l'historique. */
+            data-modal-open="true"
             className={cn(
               'relative z-10 w-full bg-cream rounded-2xl shadow-hover border border-gold/20 max-h-[92vh] flex flex-col',
               sizes[size]

@@ -12,6 +12,9 @@ import { Modal } from '@/components/ui/Modal';
 import { Input } from '@/components/ui/Input';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { ViewToggle } from '@/components/ui/ViewToggle';
+import { DataTable, useViewMode, type DataColumn } from '@/components/ui/DataTable';
+import type { ActionItem } from '@/components/ui/ActionMenu';
 import { Checkbox } from '@/components/ui/Switch';
 import { useComptoirStore } from '@/store/comptoirStore';
 import { useLanguage } from '@/hooks/useLanguage';
@@ -42,6 +45,8 @@ export default function ComptoirPage() {
   const [recoverId, setRecoverId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Affichage en TABLEAU par defaut, comme sur tous les ecrans.
+  const [view, setView] = useViewMode('comptoir');
   const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState(false);
   const [bulkRecoverConfirm, setBulkRecoverConfirm] = useState(false);
 
@@ -102,6 +107,30 @@ export default function ComptoirPage() {
     setSelectedIds([]);
   };
 
+  /* ------------------------------------------------------------ tableau --
+   * Mode TABLEAU du comptoir : une ligne par article disponible, action de
+   * destruction dans le menu « trois points ».
+   * -------------------------------------------------------------------- */
+  const comptoirColumns: DataColumn<(typeof filtered)[number]>[] = [
+    { key: 'name', label: t('productName'), render: (x) => <span className="font-semibold">{x.productName}</span> },
+    { key: 'cat', label: t('category'), hideOnMobile: true, render: (x) => x.categoryName || '—' },
+    { key: 'date', label: t('date'), render: (x) => formatDate(x.date, language) },
+    { key: 'qty', label: t('available'), align: 'right',
+      render: (x) => (
+        <span className="font-bold text-pistachio">
+          {x.quantity} {x.sellByUnit && x.unit ? x.unit : 'unités'}
+        </span>
+      ) },
+    { key: 'price', label: t('unitPrice'), align: 'right', render: (x) => formatCurrency(x.unitPrice) },
+    { key: 'value', label: t('totalValue'), align: 'right',
+      render: (x) => <span className="font-bold text-gold-dark">{formatCurrency(x.quantity * x.unitPrice)}</span> },
+  ];
+
+  const comptoirActions = (x: (typeof filtered)[number]): ActionItem[] => [
+    { label: t('destruction'), icon: <Flame size={15} />, danger: true, hidden: !can('comptoir', 'delete'),
+      onClick: () => { setDestroying(x); setDestroyQty(1); } },
+  ];
+
   return (
     <div>
       <PageHeader title={t('comptoir')} icon={<Beaker size={24} />} subtitle={`${filtered.length} produits disponibles`}
@@ -116,12 +145,20 @@ export default function ComptoirPage() {
             {categoryOptions.length > 0 && (
               <Select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} placeholder={t('allCategories')} options={categoryOptions} className="max-w-[200px]" />
             )}
+            <ViewToggle view={view} onChange={setView} />
           </div>
         )}
       </div>
 
       {tab === 'available' ? (
-        filtered.length === 0 ? <EmptyState message={t('noData')} /> : (
+        filtered.length === 0 ? <EmptyState message={t('noData')} /> : view === 'table' ? (
+          <DataTable
+            rows={filtered}
+            columns={comptoirColumns}
+            rowKey={(x) => x.id}
+            actions={comptoirActions}
+          />
+        ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {filtered.map((item, i) => (
               <Card key={item.id} index={i} hoverable className="flex flex-col">

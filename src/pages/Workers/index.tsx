@@ -14,6 +14,9 @@ import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { ViewToggle } from '@/components/ui/ViewToggle';
+import { DataTable, useViewMode, type DataColumn } from '@/components/ui/DataTable';
+import type { ActionItem } from '@/components/ui/ActionMenu';
 import { StatCard } from '@/components/shared/StatCard';
 import { CreateWorker } from './CreateWorker';
 import { WorkerPermissions } from './WorkerPermissions';
@@ -46,6 +49,8 @@ export default function WorkersPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [historyTab, setHistoryTab] = useState<WorkerHistoryTab>('payments');
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  // Affichage en TABLEAU par defaut, comme sur tous les ecrans.
+  const [view, setView] = useViewMode('workers');
 
   // always read the live row so a modal reflects what the database returned
   const active = workers.find((w) => w.id === activeId) || null;
@@ -86,6 +91,66 @@ export default function WorkersPage() {
   };
   const close = () => { setModal(null); setActiveId(null); };
 
+  /* ------------------------------------------------------------ tableau --
+   * Neuf boutons par carte : en mode tableau ils passent tous dans le menu
+   * « trois points », et l'ecran redevient lisible.
+   * -------------------------------------------------------------------- */
+  const workerColumns: DataColumn<Worker>[] = [
+    {
+      key: 'name', label: 'Employé',
+      render: (w) => (
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-button text-[11px] font-bold text-white">
+            {w.fullName.split(' ').map((n) => n[0]).slice(0, 2).join('').toUpperCase()}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate font-semibold text-text-primary">{w.fullName}</span>
+            <span className="block truncate text-[11px] text-text-muted">{w.phone || '—'}</span>
+          </span>
+        </div>
+      ),
+    },
+    { key: 'role', label: 'Poste', render: (w) => roleName(w.roleId) },
+    { key: 'start', label: 'Depuis le', hideOnMobile: true, render: (w) => formatDate(w.startDate, language) },
+    { key: 'salary', label: 'Salaire', align: 'right',
+      render: (w) => (w.paymentEnabled
+        ? `${formatCurrency(w.paymentAmount)} / ${w.paymentType === 'monthly' ? 'mois' : 'jour'}`
+        : '—') },
+    { key: 'counters', label: 'Acomptes / absences / paies', align: 'center', hideOnMobile: true,
+      render: (w) => `${w.acomptes.length} · ${w.absences.length} · ${w.payments.length}` },
+    {
+      key: 'ot', label: 'H. sup. à payer', align: 'right',
+      render: (w) => {
+        const ot = unpaidOvertimeOf(w);
+        return ot.count > 0
+          ? <span className="font-bold text-caramel">{ot.hours.toFixed(2)} h · {formatCurrency(ot.amount)}</span>
+          : <span className="text-text-muted">—</span>;
+      },
+    },
+    {
+      key: 'account', label: 'Compte', align: 'center',
+      render: (w) => (w.hasAccount
+        ? <Badge variant="success" className="text-[10px]"><KeyRound size={10} /> {w.username || 'Oui'}</Badge>
+        : <span className="text-text-muted">—</span>),
+    },
+  ];
+
+  const workerActions = (w: Worker): ActionItem[] => [
+    { label: 'Fiche', icon: <Eye size={15} />, onClick: () => open('view', w) },
+    { label: 'Historique', icon: <History size={15} />, onClick: () => open('history', w) },
+    { label: 'Rapport', icon: <FileBarChart size={15} />, onClick: () => open('history', w, 'report') },
+    { label: 'Heures supplémentaires', icon: <Clock size={15} />, onClick: () => open('overtime', w) },
+    { label: 'Acomptes', icon: <Wallet size={15} />, onClick: () => open('acompte', w) },
+    { label: 'Absences', icon: <CalendarX size={15} />, onClick: () => open('absence', w) },
+    { label: 'Paie', icon: <Banknote size={15} />, onClick: () => open('payment', w) },
+    { label: 'Modifier', icon: <Pencil size={15} />, hidden: !can('workers', 'edit'),
+      onClick: () => open('edit', w) },
+    { label: 'Permissions', icon: <Shield size={15} />, hidden: !can('workers', 'edit'),
+      onClick: () => open('permissions', w) },
+    { label: 'Supprimer', icon: <Trash2 size={15} />, danger: true, hidden: !can('workers', 'delete'),
+      onClick: () => setDeleteId(w.id) },
+  ];
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -123,10 +188,19 @@ export default function WorkersPage() {
           ]}
           className="max-w-[230px]"
         />
+        <ViewToggle view={view} onChange={setView} />
       </div>
 
       {filtered.length === 0 ? (
         <EmptyState message="Aucun employé ne correspond à ces filtres" icon={<HardHat size={32} />} />
+      ) : view === 'table' ? (
+        <DataTable
+          rows={filtered}
+          columns={workerColumns}
+          rowKey={(w) => w.id}
+          actions={workerActions}
+          onRowClick={(w) => open('view', w)}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {filtered.map((w, i) => {

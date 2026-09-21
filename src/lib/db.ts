@@ -5,6 +5,7 @@ import type {
   Production, ComptoirItem, Destruction, Worker, Role, Expense, CaisseTransaction,
   CaisseReport, StoreSettings, PartyPayment, CommandDelivery, WorkerOvertime,
   PurchaseOrder, PaymentMethodDetails, PartyOldDebt, PartyCreditRefund, PartyType,
+  CommandAdjustment,
 } from '@/types';
 import type { Command } from '@/store/commandStore';
 import type { FicheTechnic } from '@/store/ficheTechnicStore';
@@ -392,6 +393,7 @@ const toSale = (r: any): Sale => ({
   })),
   payments: (r.sale_payments ?? []).map((p: any) => ({
     id: p.id, date: p.date, amount: num(p.amount), description: p.description ?? '',
+    origin: p.origin ?? undefined,
   })),
 });
 
@@ -479,6 +481,30 @@ const toClientDebt = (r: any): ClientDebt => ({
     createdAt: v.created_at,
     createdBy: v.created_by ?? undefined,
     notes: v.notes ?? undefined,
+  })),
+});
+
+/** Annulation du reste / augmentation d'une commande. */
+const toCommandAdjustment = (r: any): CommandAdjustment => ({
+  id: r.id,
+  commandId: r.command_id,
+  commandReference: r.command_reference ?? undefined,
+  clientId: r.client_id ?? undefined,
+  clientName: r.client_name ?? undefined,
+  type: r.type,
+  date: r.date,
+  createdAt: r.created_at,
+  reason: r.reason ?? undefined,
+  totalQuantity: num(r.total_quantity),
+  totalAmount: num(r.total_amount),
+  createdBy: r.created_by ?? undefined,
+  lines: (r.command_adjustment_lines ?? []).map((l: any) => ({
+    commandItemId: l.command_item_id ?? undefined,
+    productName: l.product_name,
+    quantity: num(l.quantity),
+    unitPrice: num(l.unit_price),
+    amount: num(l.amount),
+    unit: l.unit ?? undefined,
   })),
 });
 
@@ -670,17 +696,36 @@ export const db = {
 
   // /clients/commands
   commands: {
-    list: async (): Promise<Command[]> =>
-      (await select<any>('commands', '*, command_items(*)', 'created_at')).map(toCommand),
+    // `command_items(*)` est trie par `position` : une commande peut porter
+    // PLUSIEURS FOIS le meme produit (quantites et prix differents), l'ordre de
+    // saisie est donc la seule chose qui distingue ces lignes entre elles.
+    list: async (): Promise<Command[]> => {
+      try {
+        return (await select<any>('commands', '*, command_items(*)', 'created_at'))
+          .map((r: any) => toCommand({
+            ...r,
+            command_items: [...(r.command_items ?? [])].sort(
+              (a: any, b: any) => (a.position ?? 0) - (b.position ?? 0)
+            ),
+          }));
+      } catch (e) {
+        if (!isMissingSchema((e as Error).message)) throw e;
+        return (await select<any>('commands', '*, command_items(*)', 'created_at')).map(toCommand);
+      }
+    },
     update: (id: string, row: Record<string, any>) => update('commands', id, row),
-    /** Replaces every line of a command (edit screen). */
+    /**
+     * Remplace toutes les lignes d'une commande — chemin de SECOURS utilisé
+     * uniquement quand `update_command()` n'existe pas encore côté base.
+     * L'identifiant porté par le payload sert à `update_command()` : ici il
+     * doit être retiré, sinon l'insertion tenterait d'écrire `id = null`.
+     */
     replaceItems: async (commandId: string, items: Record<string, any>[]) => {
       const { error: delErr } = await supabase.from('command_items').delete().eq('command_id', commandId);
       if (delErr) throw new Error(`[command_items] ${delErr.message}`);
       if (!items.length) return;
-      const { error } = await supabase
-        .from('command_items')
-        .insert(items.map((i) => ({ ...i, command_id: commandId })));
+      const rows = items.map(({ id: _id, ...rest }) => ({ ...rest, command_id: commandId }));
+      const { error } = await supabase.from('command_items').insert(rows);
       if (error) throw new Error(`[command_items] ${error.message}`);
     },
     remove: (id: string) => remove('commands', id),
@@ -754,6 +799,13 @@ export const db = {
         ).map(toCommandDelivery);
       }
     },
+  },
+
+  // /commands — annulations du reste et augmentations
+  commandAdjustments: {
+    list: async (): Promise<CommandAdjustment[]> =>
+      (await selectOptional<any>('command_adjustments', '*, command_adjustment_lines(*)', 'created_at'))
+        .map(toCommandAdjustment),
   },
 
   // /workers — heures supplémentaires
@@ -917,6 +969,22 @@ export const rpc = {
 
   // /clients/commands
   createCommand: (payload: Record<string, any>) => call<any>('create_command', { p_payload: payload }),
+  /**
+   * Modifier une commande EN ENTIER : en-tete, TVA, acompte et lignes.
+   * L'ancienne version n'ecrivait que l'en-tete — l'acompte, la TVA et les
+   * lignes dupliquees etaient silencieusement perdus.
+   */
+  updateCommand: (id: string, payload: Record<string, any>) =>
+    call<any>('update_command', { p_id: id, p_payload: payload }),
+  /** Annule le reste NON LIVRE d'une commande (le client renonce au solde). */
+  cancelCommandRemainder: (payload: Record<string, any>) =>
+    call<any>('cancel_command_remainder', { p_payload: payload }),
+  /** Augmente les quantites commandees (le client en redemande). */
+  increaseCommand: (payload: Record<string, any>) =>
+    call<any>('increase_command', { p_payload: payload }),
+  /** Annule un ajustement : la commande revient a ses quantites precedentes. */
+  deleteCommandAdjustment: (id: string) =>
+    call<void>('delete_command_adjustment', { p_id: id }),
   payCommand: (commandId: string, amount: number, date?: string) =>
     call<any>('pay_command', { p_command_id: commandId, p_amount: amount, p_date: date ?? null }),
   setCommandStatus: (commandId: string, status: 'pending' | 'finalised' | 'cancelled') =>
