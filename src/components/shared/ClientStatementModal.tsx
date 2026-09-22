@@ -634,10 +634,14 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   {part === 'sales' && (
                     <Section
                       title="Ventes de la période"
-                      head={['N° facture', 'Date', 'Désignation', 'Quantité', 'TVA', 'Total', 'Payé', 'Reste']}
+                      head={['N° facture', 'Date', 'N° bon', 'Matricule', 'Désignation', 'Quantité', 'TVA', 'Total', 'Payé', 'Reste']}
                       rows={data.salesList.map((s) => [
                         s.reference,
                         formatDate(s.date, language),
+                        s.bonNumber || '—',
+                        (s.deliveryId ? deliveries.find((d) => d.id === s.deliveryId)?.driverPlate : undefined)
+                          || (s.commandId ? commands.find((c) => c.id === s.commandId)?.driverPlate : undefined)
+                          || '—',
                         productNames(s.products),
                         productQty(s.products),
                         s.tvaEnabled ? formatCurrency(s.tvaAmount || 0) : '—',
