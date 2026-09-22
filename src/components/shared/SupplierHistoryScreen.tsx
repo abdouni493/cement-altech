@@ -299,8 +299,11 @@ export function SupplierHistoryScreen({
     { label: 'Articles', value: String(sum(list.map((p) => p.products.length))) },
   ];
 
-  const directTotal = sum(history.payments.filter((p) => p.source === 'direct').map((p) => p.amount));
-  const docTotal = sum(history.payments.filter((p) => p.source === 'document').map((p) => p.amount));
+  // L'onglet « Versements » ne montre QUE les reglements directs saisis sur la
+  // carte du fournisseur — les reglements portes par une facture d'achat en
+  // sont exclus, comme dans le compte rendu.
+  const directPayments = history.payments.filter((p) => p.source === 'direct');
+  const directTotal = sum(directPayments.map((p) => p.amount));
 
   const sections: HistorySection<never>[] = [
     {
@@ -337,24 +340,20 @@ export function SupplierHistoryScreen({
     },
     {
       key: 'payments', label: 'Versements', icon: <Coins size={14} />,
-      rows: history.payments as never[],
+      rows: directPayments as never[],
       columns: paymentColumns as DataColumn<never>[],
       actions: paymentActions as unknown as (row: never, i: number) => ActionItem[],
       stats: [
-        { label: 'Ecritures', value: String(history.payments.length), icon: <Coins size={12} /> },
-        { label: 'Reglements directs', value: money(directTotal), tone: 'pos' },
-        { label: 'Regle sur factures', value: money(docTotal), tone: 'pos' },
-        { label: 'Total regle', value: money(directTotal + docTotal), tone: 'accent' },
+        { label: 'Reglements directs', value: String(directPayments.length), icon: <Coins size={12} /> },
+        { label: 'Total regle', value: money(directTotal), tone: 'accent' },
       ],
       dateOf: (p: never) => (p as unknown as HistoryPayment).date,
       searchOf: (p: never) => {
         const x = p as unknown as HistoryPayment;
         return `${x.origin} ${x.notes ?? ''} ${x.documentRef ?? ''} ${x.amount}`;
       },
-      empty: 'Aucun reglement pour ce fournisseur',
-      note:
-        "Tout l'argent verse a ce fournisseur : reglement direct saisi sur sa carte ET reglement porte par une "
-        + "facture d'achat. C'est ce que le compte rendu additionne.",
+      empty: 'Aucun reglement direct pour ce fournisseur',
+      note: "Uniquement les reglements directs saisis sur la carte du fournisseur — c'est ce que le compte rendu additionne.",
       onPrintAll: (rows: never[]) => {
         const list = rows as unknown as HistoryPayment[];
         printList(

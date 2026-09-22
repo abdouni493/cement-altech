@@ -100,7 +100,12 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     const oldCommandsList = h.historicalCommands.filter((c) => inP(c.receiveDate) || inP(c.createdAt));
     const deliveriesList = h.deliveries.filter((d) => inP(d.delivery.deliveredAt));
     const oldDeliveriesList = h.historicalDeliveries.filter((d) => inP(d.delivery.deliveredAt));
-    const paymentsList = h.payments.filter((p) => inP(p.date)).sort((a, b) => a.date.localeCompare(b.date));
+    // Le compte rendu ne retient QUE les reglements directs saisis sur la
+    // carte du client — les encaissements portes par une vente, un bon de
+    // livraison, une dette ou un acompte n'y figurent plus.
+    const paymentsList = h.payments
+      .filter((p) => inP(p.date) && p.source === 'direct')
+      .sort((a, b) => a.date.localeCompare(b.date));
     const oldDebtsList = h.oldDebts.filter((d) => inP(d.date));
     const refundsList = h.refunds.filter((r) => inP(r.refundedAt));
     const adjustmentsList = h.adjustments.filter((a) => inP(a.date));
@@ -227,19 +232,26 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     const picked = new Set(choice.parts);
     const sections: StatementSection[] = [];
 
+    // La designation reprend le nom des produits de la facture (et non son
+    // numero), la colonne compte la quantite totale (et non le nombre d'articles).
+    const productNames = (products: { productName?: string }[]) =>
+      products.map((l) => (l.productName || '—').trim()).filter(Boolean).join(', ').toUpperCase() || '—';
+    const productQty = (products: { quantity?: number }[]) =>
+      Number(products.reduce((s, l) => s + (l.quantity || 0), 0).toFixed(3)).toLocaleString('fr-FR');
+
     if (picked.has('sales') && data.salesList.length) {
       sections.push({
         title: 'VENTES DE LA PERIODE',
         columns: [
           { label: 'Date', align: 'center', width: '13%' },
           { label: 'Designation', align: 'left' },
-          { label: 'Articles', align: 'center', width: '10%' },
+          { label: 'Quantite', align: 'center', width: '10%' },
           { label: 'Paye', align: 'right', width: '18%' },
           { label: 'Total', align: 'right', width: '18%' },
         ],
         rows: data.salesList.map((s) => ({
           cells: [
-            formatDate(s.date), `FACTURE ${s.reference}`, s.products.length,
+            formatDate(s.date), productNames(s.products), productQty(s.products),
             money(s.paidAmount), money(s.finalAmount),
           ],
         })),
@@ -319,7 +331,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       oldSalesAndCommands.push({
         title: 'ANCIENNES VENTES',
         rows: data.oldSalesList.map((s) => [
-          formatDate(s.date), `ANCIENNE VENTE ${s.reference}`, s.products.length,
+          formatDate(s.date), productNames(s.products), productQty(s.products),
           formatCurrency(s.paidAmount), formatCurrency(s.finalAmount),
         ]),
         total: data.oldSalesTotal,
@@ -685,25 +697,12 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   {part === 'payments' && (
                     <Section
                       title="Versements de la période"
-                      note={
-                        "Tout l'argent reçu du client : versement direct, versement sur une dette enregistrée, "
-                        + "encaissement porté par une vente ou un bon de livraison, acompte de commande. "
-                        + "C'est exactement cette liste qui est imprimée en bas du compte rendu."
-                      }
-                      head={['Date et heure', 'Origine', 'Type', 'Mode de règlement', 'Note', 'Montant']}
+                      note="Uniquement les versements directs saisis sur la carte du client. C'est exactement cette liste qui est imprimée en bas du compte rendu."
+                      head={['Date et heure', 'Origine', 'Mode de règlement', 'Note', 'Montant']}
                       rows={data.paymentsList.map((p: HistoryPayment) => [
                         formatDateTime(p.date, language),
                         p.origin,
-                        <Badge
-                          key="t"
-                          variant={p.source === 'direct' ? 'success' : p.source === 'debt' ? 'warning' : 'info'}
-                          className="text-[10px]"
-                        >
-                          {p.source === 'direct' ? 'Direct'
-                            : p.source === 'debt' ? 'Sur dette'
-                            : p.source === 'advance' ? 'Acompte' : 'Facture'}
-                        </Badge>,
-                        p.source === 'direct' ? paymentMethodLabel(p) : '—',
+                        paymentMethodLabel(p),
                         p.notes || '—',
                         <span key="a" className="font-bold text-pistachio">{formatCurrency(p.amount)}</span>,
                       ])}

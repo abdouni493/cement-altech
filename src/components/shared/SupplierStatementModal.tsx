@@ -6,7 +6,6 @@ import {
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
-import { Badge } from '@/components/ui/Badge';
 import { PeriodPicker, firstDayOfMonth } from './PeriodReport';
 import { StatementPrintDialog, type StatementPrintChoice } from './StatementPrintDialog';
 import { usePurchaseStore } from '@/store/purchaseStore';
@@ -67,7 +66,12 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
 
     const purchasesList = h.purchases.filter((p) => inP(p.date)).sort((a, b) => a.date.localeCompare(b.date));
     const oldPurchasesList = h.historicalPurchases.filter((p) => inP(p.date));
-    const paymentsList = h.payments.filter((p) => inP(p.date)).sort((a, b) => a.date.localeCompare(b.date));
+    // Le compte rendu ne retient QUE les reglements directs saisis sur la
+    // carte du fournisseur — les reglements portes par une facture d'achat
+    // n'y figurent plus, ni a l'ecran ni a l'impression.
+    const paymentsList = h.payments
+      .filter((p) => inP(p.date) && p.source === 'direct')
+      .sort((a, b) => a.date.localeCompare(b.date));
     const oldDebtsList = h.oldDebts.filter((d) => inP(d.date));
     const refundsList = h.refunds.filter((r) => inP(r.refundedAt));
 
@@ -135,19 +139,26 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
     const picked = new Set(choice.parts);
     const sections: StatementSection[] = [];
 
+    // La designation reprend le nom des produits de la facture (et non son
+    // numero), la colonne compte la quantite totale (et non le nombre d'articles).
+    const productNames = (products: { productName?: string }[]) =>
+      products.map((l) => (l.productName || '—').trim()).filter(Boolean).join(', ').toUpperCase() || '—';
+    const productQty = (products: { quantity?: number }[]) =>
+      qty(products.reduce((s, l) => s + (l.quantity || 0), 0));
+
     if (picked.has('purchases') && data.purchasesList.length) {
       sections.push({
         title: 'ACHATS DE LA PERIODE',
         columns: [
           { label: 'Date', align: 'center', width: '13%' },
           { label: 'Designation', align: 'left' },
-          { label: 'Articles', align: 'center', width: '10%' },
+          { label: 'Quantite', align: 'center', width: '10%' },
           { label: 'Regle', align: 'right', width: '18%' },
           { label: 'Total', align: 'right', width: '18%' },
         ],
         rows: data.purchasesList.map((p) => ({
           cells: [
-            formatDate(p.date), `FACTURE ${p.reference}`, p.products.length,
+            formatDate(p.date), productNames(p.products), productQty(p.products),
             money(p.paidAmount), money(p.totalAmount),
           ],
         })),
@@ -185,13 +196,13 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         columns: [
           { label: 'Date', align: 'center', width: '13%' },
           { label: 'Designation', align: 'left' },
-          { label: 'Articles', align: 'center', width: '10%' },
+          { label: 'Quantite', align: 'center', width: '10%' },
           { label: 'Regle', align: 'right', width: '18%' },
           { label: 'Total', align: 'right', width: '18%' },
         ],
         rows: data.oldPurchasesList.map((p) => ({
           cells: [
-            formatDate(p.date), `ANCIEN ACHAT ${p.reference}`, p.products.length,
+            formatDate(p.date), productNames(p.products), productQty(p.products),
             money(p.paidAmount), money(p.totalAmount),
           ],
         })),
@@ -394,15 +405,12 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                   {part === 'payments' && (
                     <Section
                       title="Versements de la période"
-                      note="Règlements saisis sur la carte du fournisseur ET règlements portés par une facture d'achat."
-                      head={['Date et heure', 'Origine', 'Type', 'Mode de règlement', 'Note', 'Montant']}
+                      note="Uniquement les règlements directs saisis sur la carte du fournisseur."
+                      head={['Date et heure', 'Origine', 'Mode de règlement', 'Note', 'Montant']}
                       rows={data.paymentsList.map((p: HistoryPayment) => [
                         formatDateTime(p.date, language),
                         p.origin,
-                        <Badge key="t" variant={p.source === 'direct' ? 'success' : 'info'} className="text-[10px]">
-                          {p.source === 'direct' ? 'Direct' : 'Facture'}
-                        </Badge>,
-                        p.source === 'direct' ? paymentMethodLabel(p) : '—',
+                        paymentMethodLabel(p),
                         p.notes || '—',
                         <span key="a" className="font-bold text-pistachio">{formatCurrency(p.amount)}</span>,
                       ])}

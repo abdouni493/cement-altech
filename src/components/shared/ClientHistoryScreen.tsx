@@ -589,9 +589,11 @@ export function ClientHistoryScreen({
     { label: 'Reste du', value: money(sum(list.map((h) => h.delivery.restAmount ?? 0))), tone: 'neg' },
   ];
 
-  const directTotal = sum(history.payments.filter((p) => p.source === 'direct').map((p) => p.amount));
-  const debtTotal = sum(history.payments.filter((p) => p.source === 'debt').map((p) => p.amount));
-  const docTotal = sum(history.payments.filter((p) => p.source === 'document').map((p) => p.amount));
+  // L'onglet « Versements » ne montre QUE les versements directs saisis sur la
+  // carte du client — encaissements sur vente/livraison, versements sur dette
+  // et acomptes de commande en sont exclus, comme dans le compte rendu.
+  const directPayments = history.payments.filter((p) => p.source === 'direct');
+  const directTotal = sum(directPayments.map((p) => p.amount));
 
   const sections: HistorySection<never>[] = [
     {
@@ -703,26 +705,22 @@ export function ClientHistoryScreen({
     },
     {
       key: 'payments', label: 'Versements', icon: <Coins size={14} />,
-      rows: history.payments as never[],
+      rows: directPayments as never[],
       columns: paymentColumns as DataColumn<never>[],
       actions: paymentActions as unknown as (row: never, i: number) => ActionItem[],
       stats: [
-        { label: 'Ecritures', value: String(history.payments.length), icon: <Coins size={12} /> },
-        { label: 'Versements directs', value: money(directTotal), tone: 'pos' },
-        { label: 'Sur dettes enregistrees', value: money(debtTotal), tone: 'pos' },
-        { label: 'Encaisse sur factures', value: money(docTotal), tone: 'pos' },
-        { label: 'Total encaisse', value: money(directTotal + debtTotal + docTotal), tone: 'accent' },
+        { label: 'Versements directs', value: String(directPayments.length), icon: <Coins size={12} /> },
+        { label: 'Total verse', value: money(directTotal), tone: 'accent' },
       ],
       dateOf: (p: never) => (p as unknown as HistoryPayment).date,
       searchOf: (p: never) => {
         const x = p as unknown as HistoryPayment;
         return `${x.origin} ${x.notes ?? ''} ${x.documentRef ?? ''} ${x.amount}`;
       },
-      empty: 'Aucun versement enregistre pour ce client',
+      empty: 'Aucun versement direct enregistre pour ce client',
       note:
-        "Tout l'argent recu de ce client, d'ou qu'il vienne : versement direct, versement sur une dette enregistree, "
-        + "encaissement porte par une vente ou un bon de livraison, acompte de commande. C'est EXACTEMENT ce que le "
-        + 'compte rendu additionne — supprimer une ligne ici la retire aussi du compte rendu.',
+        "Uniquement les versements directs saisis sur la carte du client — c'est EXACTEMENT ce que le compte rendu "
+        + 'additionne ; supprimer une ligne ici la retire aussi du compte rendu.',
       onPrintAll: (rows: never[]) => {
         const list = rows as unknown as HistoryPayment[];
         printList(
