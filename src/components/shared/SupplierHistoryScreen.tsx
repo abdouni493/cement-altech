@@ -175,8 +175,8 @@ export function SupplierHistoryScreen({
   const purchaseColumns: DataColumn<Purchase>[] = [
     { key: 'ref', label: 'N facture', render: (p) => <span className="font-semibold">{p.reference}</span> },
     { key: 'date', label: 'Date', render: (p) => formatDate(p.date, language) },
-    { key: 'bon', label: 'N BL / matricule', hideOnMobile: true,
-      render: (p) => [p.bonNumber, p.driverPlate].filter(Boolean).join(' · ') || '—' },
+    { key: 'bon', label: 'N bon', hideOnMobile: true, render: (p) => p.bonNumber || '—' },
+    { key: 'plate', label: 'Matricule', hideOnMobile: true, render: (p) => p.driverPlate || '—' },
     { key: 'art', label: 'Articles', align: 'right', render: (p) => p.products.length },
     { key: 'total', label: 'Total', align: 'right', render: (p) => money(p.totalAmount) },
     { key: 'paid', label: 'Regle', align: 'right', render: (p) => <span className="text-pistachio">{money(p.paidAmount)}</span> },

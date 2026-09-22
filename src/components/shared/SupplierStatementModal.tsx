@@ -388,9 +388,11 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                   {part === 'purchases' && (
                     <Section
                       title="Achats de la période"
-                      head={['N° facture', 'Date', 'Désignation', 'Quantité', 'Total', 'Réglé', 'Reste']}
+                      head={['N° facture', 'Date', 'N° bon', 'Matricule', 'Désignation', 'Quantité', 'Total', 'Réglé', 'Reste']}
                       rows={data.purchasesList.map((p) => [
-                        p.reference, formatDate(p.date, language), productNames(p.products), productQty(p.products),
+                        p.reference, formatDate(p.date, language),
+                        p.bonNumber || '—', p.driverPlate || '—',
+                        productNames(p.products), productQty(p.products),
                         formatCurrency(p.totalAmount),
                         <span key="p" className="text-pistachio">{formatCurrency(p.paidAmount)}</span>,
                         <span key="r" className={p.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>
@@ -423,9 +425,11 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                     <Section
                       title="Anciens achats"
                       note="Factures antérieures au logiciel — ni le stock ni la caisse ne les ont vues passer."
-                      head={['N° facture', 'Date', 'Articles', 'Total', 'Réglé', 'Reste']}
+                      head={['N° facture', 'Date', 'N° bon', 'Matricule', 'Désignation', 'Quantité', 'Total', 'Réglé', 'Reste']}
                       rows={data.oldPurchasesList.map((p) => [
-                        p.reference, formatDate(p.date, language), p.products.length,
+                        p.reference, formatDate(p.date, language),
+                        p.bonNumber || '—', p.driverPlate || '—',
+                        productNames(p.products), productQty(p.products),
                         formatCurrency(p.totalAmount),
                         <span key="p" className="text-pistachio">{formatCurrency(p.paidAmount)}</span>,
                         <span key="r" className="text-rose-deep">{formatCurrency(p.restAmount)}</span>,
