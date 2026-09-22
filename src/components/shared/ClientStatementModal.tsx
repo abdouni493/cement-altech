@@ -53,6 +53,13 @@ type PartKey =
   | 'sales' | 'commands' | 'deliveries' | 'payments' | 'oldSales' | 'oldCommands'
   | 'oldDeliveries' | 'oldDebts' | 'refunds' | 'adjustments' | 'products';
 
+/** Noms des produits d'une facture, repris en designation (comme a l'impression). */
+const productNames = (products: { productName?: string }[]) =>
+  products.map((l) => (l.productName || '—').trim()).filter(Boolean).join(', ') || '—';
+/** Quantite totale d'une facture (comme a l'impression). */
+const productQty = (products: { quantity?: number }[]) =>
+  Number(products.reduce((s, l) => s + (l.quantity || 0), 0).toFixed(3)).toLocaleString('fr-FR');
+
 export function ClientStatementModal({ client, onClose }: { client: Client | null; onClose: () => void }) {
   const { language } = useLanguage();
   const sales = useSalesStore((s) => s.sales);
@@ -232,13 +239,6 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     const picked = new Set(choice.parts);
     const sections: StatementSection[] = [];
 
-    // La designation reprend le nom des produits de la facture (et non son
-    // numero), la colonne compte la quantite totale (et non le nombre d'articles).
-    const productNames = (products: { productName?: string }[]) =>
-      products.map((l) => (l.productName || '—').trim()).filter(Boolean).join(', ').toUpperCase() || '—';
-    const productQty = (products: { quantity?: number }[]) =>
-      Number(products.reduce((s, l) => s + (l.quantity || 0), 0).toFixed(3)).toLocaleString('fr-FR');
-
     if (picked.has('sales') && data.salesList.length) {
       sections.push({
         title: 'VENTES DE LA PERIODE',
@@ -251,7 +251,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         ],
         rows: data.salesList.map((s) => ({
           cells: [
-            formatDate(s.date), productNames(s.products), productQty(s.products),
+            formatDate(s.date), productNames(s.products).toUpperCase(), productQty(s.products),
             money(s.paidAmount), money(s.finalAmount),
           ],
         })),
@@ -331,7 +331,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       oldSalesAndCommands.push({
         title: 'ANCIENNES VENTES',
         rows: data.oldSalesList.map((s) => [
-          formatDate(s.date), productNames(s.products), productQty(s.products),
+          formatDate(s.date), productNames(s.products).toUpperCase(), productQty(s.products),
           formatCurrency(s.paidAmount), formatCurrency(s.finalAmount),
         ]),
         total: data.oldSalesTotal,
@@ -634,14 +634,12 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   {part === 'sales' && (
                     <Section
                       title="Ventes de la période"
-                      head={['N° facture', 'Date', 'Origine', 'Articles', 'TVA', 'Total', 'Payé', 'Reste']}
+                      head={['N° facture', 'Date', 'Désignation', 'Quantité', 'TVA', 'Total', 'Payé', 'Reste']}
                       rows={data.salesList.map((s) => [
                         s.reference,
                         formatDate(s.date, language),
-                        <Badge key="o" variant={s.deliveryId ? 'info' : 'neutral'} className="text-[10px]">
-                          {s.deliveryId ? 'Livraison' : 'Caisse'}
-                        </Badge>,
-                        s.products.length,
+                        productNames(s.products),
+                        productQty(s.products),
                         s.tvaEnabled ? formatCurrency(s.tvaAmount || 0) : '—',
                         formatCurrency(s.finalAmount),
                         <span key="p" className="text-pistachio">{formatCurrency(s.paidAmount)}</span>,

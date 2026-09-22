@@ -34,6 +34,13 @@ type PartKey = 'purchases' | 'payments' | 'oldPurchases' | 'oldDebts' | 'refunds
 
 const qty = (n: number) => Number(n.toFixed(3)).toLocaleString('fr-FR');
 
+/** Noms des produits d'une facture, repris en designation (comme a l'impression). */
+const productNames = (products: { productName?: string }[]) =>
+  products.map((l) => (l.productName || '—').trim()).filter(Boolean).join(', ') || '—';
+/** Quantite totale d'une facture (comme a l'impression). */
+const productQty = (products: { quantity?: number }[]) =>
+  qty(products.reduce((s, l) => s + (l.quantity || 0), 0));
+
 export function SupplierStatementModal({ supplier, onClose }: { supplier: Supplier | null; onClose: () => void }) {
   const { language } = useLanguage();
   const purchases = usePurchaseStore((s) => s.purchases);
@@ -139,13 +146,6 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
     const picked = new Set(choice.parts);
     const sections: StatementSection[] = [];
 
-    // La designation reprend le nom des produits de la facture (et non son
-    // numero), la colonne compte la quantite totale (et non le nombre d'articles).
-    const productNames = (products: { productName?: string }[]) =>
-      products.map((l) => (l.productName || '—').trim()).filter(Boolean).join(', ').toUpperCase() || '—';
-    const productQty = (products: { quantity?: number }[]) =>
-      qty(products.reduce((s, l) => s + (l.quantity || 0), 0));
-
     if (picked.has('purchases') && data.purchasesList.length) {
       sections.push({
         title: 'ACHATS DE LA PERIODE',
@@ -158,7 +158,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         ],
         rows: data.purchasesList.map((p) => ({
           cells: [
-            formatDate(p.date), productNames(p.products), productQty(p.products),
+            formatDate(p.date), productNames(p.products).toUpperCase(), productQty(p.products),
             money(p.paidAmount), money(p.totalAmount),
           ],
         })),
@@ -202,7 +202,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         ],
         rows: data.oldPurchasesList.map((p) => ({
           cells: [
-            formatDate(p.date), productNames(p.products), productQty(p.products),
+            formatDate(p.date), productNames(p.products).toUpperCase(), productQty(p.products),
             money(p.paidAmount), money(p.totalAmount),
           ],
         })),
@@ -388,9 +388,9 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                   {part === 'purchases' && (
                     <Section
                       title="Achats de la période"
-                      head={['N° facture', 'Date', 'N° BL', 'Articles', 'Total', 'Réglé', 'Reste']}
+                      head={['N° facture', 'Date', 'Désignation', 'Quantité', 'Total', 'Réglé', 'Reste']}
                       rows={data.purchasesList.map((p) => [
-                        p.reference, formatDate(p.date, language), p.bonNumber || '—', p.products.length,
+                        p.reference, formatDate(p.date, language), productNames(p.products), productQty(p.products),
                         formatCurrency(p.totalAmount),
                         <span key="p" className="text-pistachio">{formatCurrency(p.paidAmount)}</span>,
                         <span key="r" className={p.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>
