@@ -635,13 +635,16 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                     <Section
                       title="Ventes de la période"
                       head={['N° facture', 'Date', 'N° bon', 'Matricule', 'Désignation', 'Quantité', 'TVA', 'Total', 'Payé', 'Reste']}
-                      rows={data.salesList.map((s) => [
+                      rows={data.salesList.map((s) => {
+                        const cmd = s.commandId ? commands.find((c) => c.id === s.commandId) : undefined;
+                        const del = s.deliveryId ? deliveries.find((d) => d.id === s.deliveryId) : undefined;
+                        const bon = s.bonNumber || cmd?.bonNumber || '—';
+                        const matricule = del?.driverPlate || cmd?.driverPlate || '—';
+                        return [
                         s.reference,
                         formatDate(s.date, language),
-                        s.bonNumber || '—',
-                        (s.deliveryId ? deliveries.find((d) => d.id === s.deliveryId)?.driverPlate : undefined)
-                          || (s.commandId ? commands.find((c) => c.id === s.commandId)?.driverPlate : undefined)
-                          || '—',
+                        bon,
+                        matricule,
                         productNames(s.products),
                         productQty(s.products),
                         s.tvaEnabled ? formatCurrency(s.tvaAmount || 0) : '—',
@@ -650,7 +653,8 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                         <span key="r" className={s.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>
                           {formatCurrency(s.restAmount)}
                         </span>,
-                      ])}
+                        ];
+                      })}
                       total={formatCurrency(data.salesTotal)}
                       empty="Aucune vente sur cette période"
                     />
