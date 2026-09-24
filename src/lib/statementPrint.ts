@@ -121,6 +121,11 @@ export function statementTotals(o: Pick<StatementPrintOptions,
   return { ht, tva, ttc, oldDebts, oldDebtsTotal, prior, total, versements, rest, rates };
 }
 
+/** Liste imprimee en fin de document : les versements directs uniquement. */
+export function versementsOnly(credits: LedgerCredit[]): LedgerCredit[] {
+  return credits.filter((c) => c.kind === 'payment');
+}
+
 /** « VERSEMENT DE 600 000,00 DA LE 09/06/2026 » et variantes. */
 export function creditLine(c: LedgerCredit): string {
   const when = formatDate(c.date);
@@ -312,9 +317,11 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
       metaLines: [`${prefix} ${periodSuffix(slice.from, slice.to)}`],
       tables,
       // Les versements ne forment plus un tableau : ils sont LISTES en fin de
-      // document, chacun avec sa date.
+      // document, chacun avec sa date. Seuls les VERSEMENTS du tiers y
+      // figurent — les reglements de commande / de facture n'y sont plus
+      // detailles (ils restent compris dans « Total versements »).
       footNotes: o.includeVersements
-        ? [...slice.credits]
+        ? versementsOnly(slice.credits)
             .sort((a, b) => a.date.localeCompare(b.date))
             .map(creditLine)
         : [],

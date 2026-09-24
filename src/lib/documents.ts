@@ -472,9 +472,10 @@ export function printClientStatement(data: ClientStatementReportData, store: Sto
           emptyLabel: 'Aucune marchandise sur la période',
         },
       ],
-      footNotes: (data.versements ?? []).map((v) =>
-        v.label ? `${v.label.toUpperCase()} : ${formatCurrency(v.amount)} LE ${formatDate(v.date)}` : versementLine(v.amount, v.date)
-      ),
+      // uniquement la liste des versements — pas le detail des reglements
+      footNotes: (data.versements ?? [])
+        .filter((v) => !v.label)
+        .map((v) => versementLine(v.amount, v.date)),
       signatures: ['Le client', 'Signature'],
       fileName: `Compte_Rendu_${data.client.name.replace(/\s+/g, '_')}`,
     },
@@ -614,9 +615,10 @@ export function printCommandOrder(data: CommandOrderData, store: StoreSettings) 
             : { label: 'Non livrée', tone: 'warn' as const },
         ...(data.historical ? [{ label: 'Ancienne commande', tone: 'warn' as const }] : []),
       ],
-      footNotes: (data.versements ?? []).map((v) =>
-        v.label ? `${v.label.toUpperCase()} : ${formatCurrency(v.amount)}` : versementLine(v.amount, v.date)
-      ),
+      // uniquement la liste des versements — pas le detail des reglements
+      footNotes: (data.versements ?? [])
+        .filter((v) => !v.label)
+        .map((v) => versementLine(v.amount, v.date)),
       signatures: ['Le client', 'Signature'],
       fileName: `Bon_de_Commande_${data.reference}`,
     },
