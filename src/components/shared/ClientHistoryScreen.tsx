@@ -16,6 +16,7 @@ import {
 import { EditSaleModal } from './EditSaleModal';
 import { EditPaymentModal } from './EditPaymentModal';
 import { PrintTitleDialog, type PrintTitleRequest } from './PrintTitleDialog';
+import { EntryEditor, type EntryRequest } from './entries/EntryEditor';
 import { useClientStore } from '@/store/clientStore';
 import { useSalesStore } from '@/store/salesStore';
 import { useCommandStore, deliveryStatus } from '@/store/commandStore';
@@ -118,6 +119,8 @@ export function ClientHistoryScreen({
   const [viewDelivery, setViewDelivery] = useState<HistoryDelivery | null>(null);
   const [editPayment, setEditPayment] = useState<PartyPayment | null>(null);
   const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
+  /** Modification complete d'une ligne (vente, bon, excedent, acompte). */
+  const [entry, setEntry] = useState<EntryRequest | null>(null);
   const [confirm, setConfirm] = useState<
     { title: string; message?: string; run: () => Promise<void> } | null
   >(null);
@@ -381,7 +384,10 @@ export function ClientHistoryScreen({
 
   const saleActions = (s: Sale): ActionItem[] => [
     { label: 'Voir le detail', icon: <Eye size={15} />, onClick: () => setViewSale(s) },
-    { label: 'Modifier', icon: <Pencil size={15} />, hidden: !can('clients', 'edit'), onClick: () => setEditSale(s) },
+    {
+      label: 'Modifier', icon: <Pencil size={15} />, hidden: !can('clients', 'edit'),
+      onClick: () => setEntry({ target: { kind: 'sale', id: s.id }, mode: 'edit' }),
+    },
     { label: 'Imprimer', icon: <Printer size={15} />, onClick: () => printInvoice(s) },
     {
       label: 'Supprimer', icon: <Trash2 size={15} />, danger: true, hidden: !can('clients', 'delete'),
@@ -427,6 +433,11 @@ export function ClientHistoryScreen({
     { label: 'Voir le detail', icon: <Eye size={15} />, onClick: () => setViewCommand(c) },
     { label: 'Imprimer le bon', icon: <Printer size={15} />, onClick: () => printCommand(c) },
     {
+      label: "Modifier l'acompte", icon: <Pencil size={15} />,
+      hidden: !can('clients', 'edit') || !(c.advancePaid > 0),
+      onClick: () => setEntry({ target: { kind: 'advance', commandId: c.id }, mode: 'edit' }),
+    },
+    {
       label: 'Supprimer', icon: <Trash2 size={15} />, danger: true, hidden: !can('clients', 'delete'),
       onClick: () =>
         ask(
@@ -457,6 +468,10 @@ export function ClientHistoryScreen({
   const deliveryActions = (h: HistoryDelivery): ActionItem[] => [
     { label: 'Voir le detail', icon: <Eye size={15} />, onClick: () => setViewDelivery(h) },
     { label: 'Imprimer le bon', icon: <Printer size={15} />, onClick: () => printDelivery(h) },
+    {
+      label: 'Modifier', icon: <Pencil size={15} />, hidden: !can('clients', 'edit'),
+      onClick: () => setEntry({ target: { kind: 'delivery', id: h.delivery.id }, mode: 'edit' }),
+    },
     {
       label: 'Supprimer', icon: <Trash2 size={15} />, danger: true, hidden: !can('clients', 'delete'),
       onClick: () =>
@@ -571,6 +586,10 @@ export function ClientHistoryScreen({
   ];
 
   const refundActions = (r: PartyCreditRefund): ActionItem[] => [
+    {
+      label: 'Modifier', icon: <Pencil size={15} />, hidden: !can('clients', 'edit'),
+      onClick: () => setEntry({ target: { kind: 'refund', id: r.id, party: 'client' }, mode: 'edit' }),
+    },
     {
       label: 'Annuler le remboursement', icon: <Trash2 size={15} />, danger: true,
       hidden: !can('clients', 'delete'),
@@ -1206,6 +1225,7 @@ export function ClientHistoryScreen({
       />
 
       <PrintTitleDialog request={titleRequest} onClose={() => setTitleRequest(null)} />
+      <EntryEditor request={entry} onClose={() => setEntry(null)} />
 
       <ConfirmDialog
         open={!!confirm}

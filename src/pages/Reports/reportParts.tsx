@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { DocColumn, DocRow } from '@/lib/officialDoc';
+import type { EntryTarget } from '@/components/shared/entries/EntryEditor';
 
 /* ============================================================================
  *  LES PARTIES DU RAPPORT GENERAL
@@ -35,6 +36,11 @@ export interface ReportPart {
   note?: string;
   columns: { label: string; align?: 'left' | 'right' | 'center' }[];
   rows: ReactNode[][];
+  /**
+   * Enregistrement de chaque ligne (meme ordre que `rows`) : boutons « Voir »
+   * et « Modifier ». Absent pour les parties purement informatives.
+   */
+  actions?: (EntryTarget | null)[];
   stats: ReportStat[];
   count: number;
   /** Total imprime dans la liste a cocher. */

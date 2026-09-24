@@ -24,6 +24,7 @@ import { printInvoice } from '@/lib/print';
 import { printPaymentReceipt } from '@/lib/documents';
 import { printListDocument } from '@/lib/statementPrint';
 import { PrintTitleDialog, type PrintTitleRequest } from './PrintTitleDialog';
+import { EntryEditor, type EntryRequest } from './entries/EntryEditor';
 import type {
   Supplier, PartyOldDebt, PartyPayment, Purchase, PartyCreditRefund,
 } from '@/types';
@@ -82,6 +83,7 @@ export function SupplierHistoryScreen({
   const [viewPurchase, setViewPurchase] = useState<Purchase | null>(null);
   const [editPayment, setEditPayment] = useState<PartyPayment | null>(null);
   const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
+  const [entry, setEntry] = useState<EntryRequest | null>(null);
   const [confirm, setConfirm] = useState<
     { title: string; message?: string; run: () => Promise<void> } | null
   >(null);
@@ -302,6 +304,10 @@ export function SupplierHistoryScreen({
   ];
 
   const refundActions = (r: PartyCreditRefund): ActionItem[] => [
+    {
+      label: 'Modifier', icon: <Pencil size={15} />, hidden: !can('suppliers', 'edit'),
+      onClick: () => setEntry({ target: { kind: 'refund', id: r.id, party: 'supplier' }, mode: 'edit' }),
+    },
     {
       label: 'Annuler la recuperation', icon: <Trash2 size={15} />, danger: true,
       hidden: !can('suppliers', 'delete'),
@@ -607,6 +613,7 @@ export function SupplierHistoryScreen({
       />
 
       <PrintTitleDialog request={titleRequest} onClose={() => setTitleRequest(null)} />
+      <EntryEditor request={entry} onClose={() => setEntry(null)} />
 
       <ConfirmDialog
         open={!!confirm}

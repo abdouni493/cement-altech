@@ -41,6 +41,10 @@ interface SupplierState {
     method?: PaymentMethodDetails,
   ) => Promise<PartyCreditRefund | undefined>;
   deleteRefund: (id: string) => Promise<void>;
+  /** Corrige un excedent deja rendu / recupere ; l'acompte suit l'ecart. */
+  updateRefund: (
+    id: string, amount: number, refundedAt: string, notes?: string, method?: PaymentMethodDetails,
+  ) => Promise<void>;
   /** Le trop-verse du fournisseur paie une facture d'achat (aucune ecriture de caisse). */
   applyCreditToPurchase: (purchaseId: string, amount?: number) => Promise<number>;
   /** Impute le trop-verse sur les factures restantes du fournisseur. */
@@ -166,6 +170,14 @@ export const useSupplierStore = create<SupplierState>()((set, get) => ({
     // le trop-verse rendu par le fournisseur ENTRE en caisse
     await refreshSupplierDebt();
     return ledger.refunds.find((r) => r.id === row?.id);
+  },
+
+  updateRefund: async (id, amount, refundedAt, notes = '', method) => {
+    await save('suppliers.refund.update', () =>
+      rpc.updatePartyRefund(id, amount, refundedAt, notes, method ?? { method: 'especes' })
+    );
+    set(await reloadLedger());
+    await refreshSupplierDebt();
   },
 
   deleteRefund: async (id) => {

@@ -35,6 +35,9 @@ import {
   DocTitlePicker, initialDocTitleChoice, resolvedDocTitle, resolvedPeriodPrefix, type DocTitleChoice,
 } from '@/components/shared/DocTitlePicker';
 import { PrintTitleDialog, type PrintTitleRequest } from '@/components/shared/PrintTitleDialog';
+import { EntryEditor, type EntryRequest, type EntryTarget } from '@/components/shared/entries/EntryEditor';
+import { EntryActions } from '@/components/shared/entries/EntryActions';
+import type { HistoryPayment } from '@/lib/partyHistory';
 import { panelVariants, EASE } from '@/lib/animations';
 import { cn } from '@/lib/utils';
 import { groupByParty, type ReportPart, type ReportStat } from './reportParts';
@@ -113,12 +116,33 @@ export default function ReportsPage() {
   const [generalTitle, setGeneralTitle] = useState<DocTitleChoice>(() =>
     initialDocTitleChoice('RAPPORT GENERAL', 'PERIODE'));
   const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
+  /** Ligne du rapport ouverte en consultation / modification. */
+  const [entry, setEntry] = useState<EntryRequest | null>(null);
   /** Anciennes dettes datees AVANT la periode : on demande avant d'imprimer. */
   const [oldDebtAsk, setOldDebtAsk] = useState<
     { clients: PartyOldDebt[]; suppliers: PartyOldDebt[]; run: (include: boolean) => void } | null
   >(null);
 
   const money = formatCurrency;
+
+  /** Versement d'une liste -> enregistrement a voir / modifier. */
+  const paymentTarget = (p: HistoryPayment, party: 'client' | 'supplier'): EntryTarget | null => {
+    if (p.source === 'direct') return { kind: 'payment', id: p.payment?.id ?? p.id, party };
+    if (p.source === 'document' && p.documentId) {
+      if (party === 'supplier') return { kind: 'purchase', id: p.documentId };
+      return sales.some((s) => s.id === p.documentId)
+        ? { kind: 'sale', id: p.documentId }
+        : { kind: 'delivery', id: p.documentId };
+    }
+    if (p.source === 'advance' && p.documentId) {
+      return p.id.endsWith('-advance')
+        ? { kind: 'advance', commandId: p.documentId }
+        : { kind: 'command', id: p.documentId };
+    }
+    return null;
+  };
+  const commandTarget = (c: { id: string; advancePaid?: number }): EntryTarget =>
+    (c.advancePaid ?? 0) > 0 ? { kind: 'advance', commandId: c.id } : { kind: 'command', id: c.id };
   const nameOfClient = (id: string | null) => (id ? clients.find((c) => c.id === id)?.name || 'Client inconnu' : 'Client passager');
   const addressOfClient = (id: string | null) => (id ? clients.find((c) => c.id === id)?.address || '—' : '—');
   const nameOfSupplier = (id: string) => suppliers.find((s) => s.id === id)?.name || 'Fournisseur inconnu';
@@ -169,6 +193,7 @@ export default function ReportsPage() {
         { label: 'Origine', align: 'center' }, { label: 'Articles', align: 'right' },
         { label: 'Total', align: 'right' }, { label: 'Payé', align: 'right' }, { label: 'Reste', align: 'right' },
       ],
+      actions: rSales.map((s): EntryTarget => ({ kind: 'sale', id: s.id })),
       rows: rSales.map((s) => [
         <span key="c" className="font-semibold">{nameOfClient(s.clientId)}</span>,
         addressOfClient(s.clientId),
@@ -228,6 +253,7 @@ export default function ReportsPage() {
         { label: 'Annulé', align: 'right' }, { label: 'Total TTC', align: 'right' },
         { label: 'Reste', align: 'right' },
       ],
+      actions: rCommands.map(commandTarget),
       rows: rCommands.map((c) => {
         const st = deliveryStatus(c);
         return [
@@ -275,6 +301,7 @@ export default function ReportsPage() {
           (x) => (it.commandItemId && x.id === it.commandItemId) || x.productName === it.productName
         );
         return {
+          deliveryId: d.id,
           date: d.deliveredAt.slice(0, 10),
           client: cmd?.clientName ?? '—',
           reference: d.reference,
@@ -306,6 +333,7 @@ export default function ReportsPage() {
         { label: 'Désignation' }, { label: 'Quantité', align: 'right' },
         { label: 'P.U', align: 'right' }, { label: 'Montant', align: 'right' },
       ],
+      actions: sortedDeliveryLines.map((l): EntryTarget => ({ kind: 'delivery', id: l.deliveryId })),
       rows: sortedDeliveryLines.map((l) => [
         <span key="c" className="font-semibold">{l.client}</span>,
         <span key="r">
@@ -377,6 +405,7 @@ export default function ReportsPage() {
         { label: 'Client' }, { label: 'Date' }, { label: 'Origine' },
         { label: 'Type', align: 'center' }, { label: 'Mode' }, { label: 'Montant', align: 'right' },
       ],
+      actions: clientPaymentRows.map((p) => paymentTarget(p, 'client')),
       rows: clientPaymentRows.map((p) => [
         <span key="c" className="font-semibold">{p.clientName}</span>,
         formatDateTime(p.date, language),
@@ -426,6 +455,7 @@ export default function ReportsPage() {
         { label: 'Articles', align: 'right' }, { label: 'Total', align: 'right' },
         { label: 'Payé', align: 'right' }, { label: 'Reste', align: 'right' },
       ],
+      actions: oldSales.map((s): EntryTarget => ({ kind: 'sale', id: s.id })),
       rows: oldSales.map((s) => [
         <span key="c" className="font-semibold">{nameOfClient(s.clientId)}</span>,
         s.reference, formatDate(s.date, language), s.products.length,
@@ -470,6 +500,7 @@ export default function ReportsPage() {
         { label: 'Commandé', align: 'right' }, { label: 'Livré', align: 'right' },
         { label: 'Total TTC', align: 'right' }, { label: 'Reste', align: 'right' },
       ],
+      actions: oldCommands.map(commandTarget),
       rows: oldCommands.map((c) => {
         const st = deliveryStatus(c);
         return [
@@ -516,6 +547,7 @@ export default function ReportsPage() {
         { label: 'Client' }, { label: 'Date' }, { label: 'Description' },
         { label: 'Montant', align: 'right' }, { label: 'Réglé', align: 'right' }, { label: 'Reste', align: 'right' },
       ],
+      actions: cOldDebts.map((d): EntryTarget => ({ kind: 'oldDebt', id: d.id, party: 'client' })),
       rows: cOldDebts.map((d) => [
         <span key="c" className="font-semibold">{d.partyName ?? '—'}</span>,
         formatDate(d.date, language), d.description || '—',
@@ -566,6 +598,7 @@ export default function ReportsPage() {
         { label: 'Opération', align: 'center' }, { label: 'Produits' },
         { label: 'Quantité', align: 'right' }, { label: 'Valeur H.T', align: 'right' }, { label: 'Motif' },
       ],
+      actions: rAdjust.map((a): EntryTarget => ({ kind: 'command', id: a.commandId })),
       rows: rAdjust.map((a) => [
         <span key="c" className="font-semibold">{a.clientName ?? '—'}</span>,
         formatDate(a.date, language),
@@ -620,6 +653,7 @@ export default function ReportsPage() {
         { label: 'Client' }, { label: 'Date' }, { label: 'Reçu n°' },
         { label: 'Mode' }, { label: 'Montant rendu', align: 'right' },
       ],
+      actions: cRefunds.map((r): EntryTarget => ({ kind: 'refund', id: r.id, party: 'client' })),
       rows: cRefunds.map((r) => [
         <span key="c" className="font-semibold">{r.partyName ?? '—'}</span>,
         formatDateTime(r.refundedAt, language),
@@ -676,6 +710,7 @@ export default function ReportsPage() {
         { label: 'Articles', align: 'right' }, { label: 'Total', align: 'right' },
         { label: 'Réglé', align: 'right' }, { label: 'Reste', align: 'right' },
       ],
+      actions: rPurchases.map((p): EntryTarget => ({ kind: 'purchase', id: p.id })),
       rows: rPurchases.map((p) => [
         <span key="s" className="font-semibold">{nameOfSupplier(p.supplierId)}</span>,
         p.reference, formatDate(p.date, language), p.bonNumber || '—', p.products.length,
@@ -721,6 +756,7 @@ export default function ReportsPage() {
         { label: 'Fournisseur' }, { label: 'Date' }, { label: 'Origine' },
         { label: 'Type', align: 'center' }, { label: 'Mode' }, { label: 'Montant', align: 'right' },
       ],
+      actions: supplierPaymentRows.map((p) => paymentTarget(p, 'supplier')),
       rows: supplierPaymentRows.map((p) => [
         <span key="s" className="font-semibold">{p.supplierName}</span>,
         formatDateTime(p.date, language), p.origin,
@@ -769,6 +805,7 @@ export default function ReportsPage() {
         { label: 'Articles', align: 'right' }, { label: 'Total', align: 'right' },
         { label: 'Réglé', align: 'right' }, { label: 'Reste', align: 'right' },
       ],
+      actions: oldPurchases.map((p): EntryTarget => ({ kind: 'purchase', id: p.id })),
       rows: oldPurchases.map((p) => [
         <span key="s" className="font-semibold">{nameOfSupplier(p.supplierId)}</span>,
         p.reference, formatDate(p.date, language), p.products.length,
@@ -813,6 +850,7 @@ export default function ReportsPage() {
         { label: 'Fournisseur' }, { label: 'Date' }, { label: 'Description' },
         { label: 'Montant', align: 'right' }, { label: 'Réglé', align: 'right' }, { label: 'Reste', align: 'right' },
       ],
+      actions: sOldDebts.map((d): EntryTarget => ({ kind: 'oldDebt', id: d.id, party: 'supplier' })),
       rows: sOldDebts.map((d) => [
         <span key="s" className="font-semibold">{d.partyName ?? '—'}</span>,
         formatDate(d.date, language), d.description || '—',
@@ -854,6 +892,7 @@ export default function ReportsPage() {
         { label: 'Fournisseur' }, { label: 'Date' }, { label: 'Reçu n°' },
         { label: 'Mode' }, { label: 'Montant', align: 'right' },
       ],
+      actions: sRefunds.map((r): EntryTarget => ({ kind: 'refund', id: r.id, party: 'supplier' })),
       rows: sRefunds.map((r) => [
         <span key="s" className="font-semibold">{r.partyName ?? '—'}</span>,
         formatDateTime(r.refundedAt, language),
@@ -1448,6 +1487,11 @@ export default function ReportsPage() {
                             {c.label}
                           </th>
                         ))}
+                        {current.actions && (
+                          <th className="whitespace-nowrap px-3 py-2.5 text-right text-[11px] font-bold uppercase tracking-wide">
+                            Actions
+                          </th>
+                        )}
                       </tr>
                     </thead>
                     <tbody>
@@ -1465,6 +1509,11 @@ export default function ReportsPage() {
                               {cell}
                             </td>
                           ))}
+                          {current.actions && (
+                            <td className="px-3 py-2 text-right text-xs">
+                              <EntryActions target={current.actions[i] ?? null} onOpen={setEntry} />
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
@@ -1602,6 +1651,7 @@ export default function ReportsPage() {
       </Modal>
 
       <PrintTitleDialog request={titleRequest} onClose={() => setTitleRequest(null)} />
+      <EntryEditor request={entry} onClose={() => setEntry(null)} />
     </div>
   );
 }

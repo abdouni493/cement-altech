@@ -410,7 +410,18 @@ export function sliceLedger(ledger: PartyLedger, from: string, to: string, filte
 }
 
 /** Une ligne du relevé chronologique (opération ou argent) avec le solde courant. */
+/** L'enregistrement d'origine d'une ligne du releve — pour la voir / la modifier. */
+export interface LedgerSource {
+  side: 'debit' | 'credit';
+  kind: DebitKind | CreditKind;
+  id: string;
+  /** Encaissement porte par une facture : la facture elle-meme. */
+  debitId?: string;
+  debitKind?: DebitKind;
+}
+
 export interface LedgerRow {
+  source: LedgerSource;
   date: string;
   type: 'debit' | 'credit';
   label: string;
@@ -424,6 +435,7 @@ export interface LedgerRow {
 export function ledgerRows(slice: LedgerSlice, startBalance = 0): LedgerRow[] {
   const events: Omit<LedgerRow, 'balance'>[] = [
     ...slice.debits.map((d) => ({
+      source: { side: 'debit' as const, kind: d.kind, id: d.id },
       date: d.date,
       type: 'debit' as const,
       label: d.kind === 'oldDebt'
@@ -436,6 +448,7 @@ export function ledgerRows(slice: LedgerSlice, startBalance = 0): LedgerRow[] {
       credit: 0,
     })),
     ...slice.credits.map((c) => ({
+      source: { side: 'credit' as const, kind: c.kind, id: c.id, debitId: c.debitId, debitKind: c.debitKind },
       date: c.date,
       type: 'credit' as const,
       label: c.label,

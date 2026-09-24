@@ -93,6 +93,16 @@ export interface UpdateSaleInput {
   reduction?: number;
   paidAmount?: number;
   note?: string;
+  tvaEnabled?: boolean;
+  tvaRate?: number;
+}
+
+/** Une ligne modifiee depuis le releve — quantite 0 = ligne retiree. */
+export interface SaleLineEdit {
+  lineId: string;
+  productName: string;
+  quantity: number;
+  sellingPrice: number;
 }
 
 interface SalesState {
@@ -102,6 +112,8 @@ interface SalesState {
   /** POS: launches the productions of the cart, then writes the sale. */
   addPosSale: (s: AddPosSaleInput) => Promise<Sale>;
   updateSale: (id: string, data: UpdateSaleInput) => Promise<void>;
+  /** Lignes ET en-tete d'une vente de caisse ; le stock suit l'ecart. */
+  updateSaleLines: (id: string, lines: SaleLineEdit[], data: UpdateSaleInput) => Promise<void>;
   payDebt: (saleId: string, amount: number, date?: string) => Promise<void>;
   deleteSale: (id: string) => Promise<void>;
 }
@@ -457,10 +469,43 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
         reduction: data.reduction ?? null,
         paid_amount: data.paidAmount ?? null,
         note: data.note ?? null,
+        ...(data.tvaEnabled !== undefined
+          ? { tva_enabled: data.tvaEnabled, tva_rate: data.tvaEnabled ? (data.tvaRate ?? DEFAULT_TVA_RATE) : 0 }
+          : {}),
       })
     );
     set({ sales: await db.sales.list() });
     if (wasDelivery) await refreshDeliveries();
+  },
+
+  updateSaleLines: async (id, lines, data) => {
+    await save('sales.updateLines', () =>
+      rpc.updateSaleLines(
+        id,
+        lines.map((l) => ({
+          id: l.lineId, product_name: l.productName, quantity: l.quantity, selling_price: l.sellingPrice,
+        })),
+        {
+          date: data.date ?? null,
+          reduction: data.reduction ?? null,
+          paid_amount: data.paidAmount ?? null,
+          note: data.note ?? null,
+          ...(data.tvaEnabled !== undefined
+            ? { tva_enabled: data.tvaEnabled, tva_rate: data.tvaEnabled ? (data.tvaRate ?? DEFAULT_TVA_RATE) : 0 }
+            : {}),
+        }
+      )
+    );
+    // le stock, le comptoir et la caisse ont bouge avec les quantites
+    const [{ useComptoirStore }, { useCaisseStore }] = await Promise.all([
+      import('./comptoirStore'), import('./caisseStore'),
+    ]);
+    await Promise.all([
+      db.sales.list().then((sales) => set({ sales })),
+      useStockStore.getState().load(),
+      useComptoirStore.getState().load(),
+      useCaisseStore.getState().load(),
+    ]).catch(() => undefined);
   },
 
   payDebt: async (saleId, amount, date) => {

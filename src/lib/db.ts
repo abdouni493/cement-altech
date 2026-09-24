@@ -383,6 +383,7 @@ const toSale = (r: any): Sale => ({
   status: r.status,
   createdBy: r.created_by ?? undefined,
   products: (r.sale_lines ?? []).map((l: any) => ({
+    lineId: l.id ?? undefined,
     productId: l.product_id ?? l.comptoir_id ?? '',
     productName: l.product_name,
     ficheTechnicId: l.fiche_technic_id ?? undefined,
@@ -1001,6 +1002,9 @@ export const rpc = {
   /** Modifier l'en-tête commercial d'une vente (date, réduction, montant payé). */
   updateSale: (id: string, payload: Record<string, any>) =>
     call<any>('update_sale', { p_id: id, p_payload: payload }),
+  /** Modifier les LIGNES d'une vente de caisse (stock corrige) puis son en-tete. */
+  updateSaleLines: (id: string, lines: Record<string, any>[], header: Record<string, any>) =>
+    call<any>('update_sale_lines', { p_sale_id: id, p_lines: lines, p_header: header }),
   paySaleDebt: (saleId: string, amount: number, date?: string) =>
     call<any>('pay_sale_debt', { p_sale_id: saleId, p_amount: amount, p_date: date ?? null }),
 
@@ -1022,6 +1026,11 @@ export const rpc = {
   /** Annule un ajustement : la commande revient a ses quantites precedentes. */
   deleteCommandAdjustment: (id: string) =>
     call<void>('delete_command_adjustment', { p_id: id }),
+  /** Modifier un reglement de commande (montant, date, note). */
+  updateCommandPayment: (id: string, amount: number, date?: string, notes?: string) =>
+    call<any>('update_command_payment', {
+      p_id: id, p_amount: amount, p_date: date ?? null, p_notes: notes ?? null,
+    }),
   payCommand: (commandId: string, amount: number, date?: string) =>
     call<any>('pay_command', { p_command_id: commandId, p_amount: amount, p_date: date ?? null }),
   setCommandStatus: (commandId: string, status: 'pending' | 'finalised' | 'cancelled') =>
@@ -1156,6 +1165,18 @@ export const rpc = {
       p_bank_name: method.bankName || null,
     }),
   deletePartyRefund: (id: string) => call<void>('delete_party_refund', { p_id: id }),
+  /** Modifier un excedent rendu / recupere (montant, date, mode). */
+  updatePartyRefund: (
+    id: string, amount: number, refundedAt: string, notes = '',
+    method: PaymentMethodDetails = { method: 'especes' },
+  ) =>
+    call<any>('update_party_refund', {
+      p_id: id, p_amount: amount, p_refunded_at: refundedAt, p_notes: notes,
+      p_method: method.method ?? 'especes',
+      p_cheque_number: method.chequeNumber || '',
+      p_virement_number: method.virementNumber || '',
+      p_bank_name: method.bankName || '',
+    }),
 
   // /clients & /suppliers — l'ACOMPTE du tiers utilise sur un nouveau document
   /** Impute l'acompte du client sur une vente (caisse ou bon de livraison). */

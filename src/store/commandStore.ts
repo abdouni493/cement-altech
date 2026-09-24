@@ -142,6 +142,8 @@ interface CommandState {
   /** Supprime un ajustement — la commande revient a l'etat precedent. */
   deleteAdjustment: (id: string) => Promise<void>;
   payDebt: (commandId: string, amount: number, date?: string) => Promise<void>;
+  /** Corrige un reglement de commande deja encaisse (montant, date). */
+  updateCommandPayment: (id: string, amount: number, date: string, notes?: string) => Promise<void>;
   updateStatus: (commandId: string, status: Command['status']) => Promise<void>;
   deleteCommand: (id: string) => Promise<void>;
   // ---- livraisons ----
@@ -353,6 +355,15 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
   payDebt: async (commandId, amount, date) => {
     await save('commands.pay', () => rpc.payCommand(commandId, amount, date));
     set({ commands: await db.commands.list() });
+  },
+
+  updateCommandPayment: async (id, amount, date, notes) => {
+    await save('commands.payment.update', () => rpc.updateCommandPayment(id, amount, date, notes));
+    const { useCaisseStore } = await import('./caisseStore');
+    const [commands] = await Promise.all([
+      db.commands.list(), useCaisseStore.getState().load().catch(() => undefined),
+    ]);
+    set({ commands });
   },
 
   updateStatus: async (commandId, status) => {

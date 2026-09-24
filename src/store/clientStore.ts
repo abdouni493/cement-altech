@@ -43,6 +43,10 @@ interface ClientState {
     method?: PaymentMethodDetails,
   ) => Promise<PartyCreditRefund | undefined>;
   deleteRefund: (id: string) => Promise<void>;
+  /** Corrige un excedent deja rendu / recupere ; l'acompte suit l'ecart. */
+  updateRefund: (
+    id: string, amount: number, refundedAt: string, notes?: string, method?: PaymentMethodDetails,
+  ) => Promise<void>;
   /**
    * ACOMPTE UTILISE SUR UN NOUVEAU DOCUMENT : l'avance du client paie une
    * vente (caisse ou bon de livraison). Aucune ecriture de caisse — l'argent y
@@ -189,6 +193,14 @@ export const useClientStore = create<ClientState>()((set, get) => ({
     // l'argent rendu au client SORT de la caisse
     await refreshClientDebt();
     return ledger.refunds.find((r) => r.id === row?.id);
+  },
+
+  updateRefund: async (id, amount, refundedAt, notes = '', method) => {
+    await save('clients.refund.update', () =>
+      rpc.updatePartyRefund(id, amount, refundedAt, notes, method ?? { method: 'especes' })
+    );
+    set(await reloadLedger());
+    await refreshClientDebt();
   },
 
   deleteRefund: async (id) => {

@@ -10,6 +10,8 @@ import { PeriodPicker, firstDayOfMonth } from './PeriodReport';
 import {
   StatementPrintDialog, type StatementPrintChoice, type StatementPrintPart,
 } from './StatementPrintDialog';
+import { EntryEditor, targetFromLedger, type EntryRequest } from './entries/EntryEditor';
+import { EntryActions } from './entries/EntryActions';
 import { PriorDebtDialog } from './PriorDebtDialog';
 import { Section } from './ClientStatementModal';
 import { usePurchaseStore } from '@/store/purchaseStore';
@@ -64,6 +66,8 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
   const [to, setTo] = useState(todayISO());
   const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
   const [part, setPart] = useState<PartKey>('releve');
+  /** Ligne du releve ouverte en consultation / modification. */
+  const [entry, setEntry] = useState<EntryRequest | null>(null);
   const [printOpen, setPrintOpen] = useState(false);
   const [priorAsk, setPriorAsk] = useState<{ choice: StatementPrintChoice; slice: LedgerSlice } | null>(null);
 
@@ -311,10 +315,10 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                     <Section
                       title="Relevé du compte (de la plus ancienne à la plus récente opération)"
                       note="Chaque facture d'achat et ancienne dette augmente ce que l'entreprise doit ; chaque versement le diminue."
-                      head={['Date', 'Opération', 'Détail', 'Débit', 'Crédit', 'Solde']}
+                      head={['Date', 'Opération', 'Détail', 'Débit', 'Crédit', 'Solde', 'Actions']}
                       lead={[
                         formatDate(data.all.from, language), 'Solde antérieur', '—', '', '',
-                        <span key="s" className="font-bold">{money(data.all.priorBalance)}</span>,
+                        <span key="s" className="font-bold">{money(data.all.priorBalance)}</span>, '',
                       ]}
                       rows={data.rows.map((r) => [
                         formatDate(r.date, language),
@@ -325,10 +329,11 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                         <span key="b" className={r.balance > 0 ? 'font-bold text-rose-deep' : 'font-bold text-pistachio'}>
                           {money(r.balance)}
                         </span>,
+                        <EntryActions key="act" target={targetFromLedger(r.source, 'supplier')} onOpen={setEntry} />,
                       ])}
                       foot={[
                         'Totaux de la période', '', '',
-                        money(data.all.totalDebits), money(data.all.totalCredits), money(data.all.closingBalance),
+                        money(data.all.totalDebits), money(data.all.totalCredits), money(data.all.closingBalance), '',
                       ]}
                       empty="Aucune opération sur cette période"
                     />
@@ -337,7 +342,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                   {part === 'purchases' && (
                     <Section
                       title="Achats de la période (nouveaux et anciens)"
-                      head={['Date', 'N° facture', 'N° bon', 'Matricule', 'Désignation', 'Quantité', 'Total', 'Reste aujourd’hui']}
+                      head={['Date', 'N° facture', 'N° bon', 'Matricule', 'Désignation', 'Quantité', 'Total', 'Reste aujourd’hui', 'Actions']}
                       rows={data.purchasesList.map((d) => [
                         formatDate(d.date, language),
                         <span key="r" className="font-semibold">
@@ -350,6 +355,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                         Math.round(d.lines.reduce((s, l) => s + l.quantity, 0) * 1000) / 1000,
                         money(d.amount),
                         <span key="x" className={d.restNow > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>{money(d.restNow)}</span>,
+                        <EntryActions key="act" target={{ kind: 'purchase', id: d.id }} onOpen={setEntry} />,
                       ])}
                       total={money(data.purchasesTotal)}
                       empty="Aucune facture sur cette période"
@@ -360,7 +366,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                     <Section
                       title="Argent versé sur la période"
                       note="Règlements saisis sur la carte du fournisseur et règlements portés par les factures — c'est exactement le « total versements » du compte rendu."
-                      head={['Date', 'Type', 'Libellé', 'Mode', 'Montant']}
+                      head={['Date', 'Type', 'Libellé', 'Mode', 'Montant', 'Actions']}
                       rows={data.all.credits.map((c) => [
                         formatDate(c.date, language),
                         <Badge key="t" variant={c.kind === 'payment' ? 'success' : c.kind === 'refund' ? 'danger' : 'info'} className="text-[10px]">
@@ -371,6 +377,11 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                         <span key="a" className={c.amount < 0 ? 'font-bold text-rose-deep' : 'font-bold text-pistachio'}>
                           {c.amount < 0 ? `− ${money(-c.amount)}` : money(c.amount)}
                         </span>,
+                        <EntryActions
+                          key="act"
+                          target={targetFromLedger({ side: 'credit', kind: c.kind, id: c.id, debitId: c.debitId, debitKind: c.debitKind }, 'supplier')}
+                          onOpen={setEntry}
+                        />,
                       ])}
                       total={money(data.all.totalCredits)}
                       empty="Aucun versement sur cette période"
@@ -381,11 +392,12 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                     <Section
                       title="Anciennes dettes de la période"
                       note="Imprimées au-dessus du total du compte rendu, chacune avec sa date."
-                      head={['Date', 'Description', 'Montant', 'Reste aujourd’hui']}
+                      head={['Date', 'Description', 'Montant', 'Reste aujourd’hui', 'Actions']}
                       rows={data.oldDebtsList.map((d) => [
                         formatDate(d.date, language), d.description || '—',
                         money(d.amount),
                         <span key="r" className={d.restNow > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>{money(d.restNow)}</span>,
+                        <EntryActions key="act" target={{ kind: 'oldDebt', id: d.id, party: 'supplier' }} onOpen={setEntry} />,
                       ])}
                       total={money(data.oldDebtsTotal)}
                       empty="Aucune ancienne dette sur cette période"
@@ -427,6 +439,8 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
               periodSuffix={period ? periodSuffix(period.from, period.to) : undefined}
             />
           )}
+
+          <EntryEditor request={entry} onClose={() => setEntry(null)} />
 
           <PriorDebtDialog
             open={!!priorAsk}

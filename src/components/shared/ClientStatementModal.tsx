@@ -11,6 +11,8 @@ import { PeriodPicker, firstDayOfMonth } from './PeriodReport';
 import {
   StatementPrintDialog, type StatementPrintChoice, type StatementPrintPart,
 } from './StatementPrintDialog';
+import { EntryEditor, targetFromLedger, type EntryRequest } from './entries/EntryEditor';
+import { EntryActions } from './entries/EntryActions';
 import { PriorDebtDialog } from './PriorDebtDialog';
 import { useSalesStore } from '@/store/salesStore';
 import { useClientStore } from '@/store/clientStore';
@@ -79,6 +81,8 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
   const [to, setTo] = useState(todayISO());
   const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
   const [part, setPart] = useState<PartKey>('releve');
+  /** Ligne du releve ouverte en consultation / modification. */
+  const [entry, setEntry] = useState<EntryRequest | null>(null);
   const [printMode, setPrintMode] = useState<PrintMode | null>(null);
   const [priorAsk, setPriorAsk] = useState<
     { mode: PrintMode; choice: StatementPrintChoice; slice: LedgerSlice } | null
@@ -454,10 +458,10 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                     <Section
                       title="Relevé du compte (de la plus ancienne à la plus récente opération)"
                       note="Chaque livraison, vente et ancienne dette augmente le solde ; chaque versement le diminue. Le dernier solde est celui du compte à la fin de la période."
-                      head={['Date', 'Opération', 'Détail', 'Débit', 'Crédit', 'Solde']}
+                      head={['Date', 'Opération', 'Détail', 'Débit', 'Crédit', 'Solde', 'Actions']}
                       lead={[
                         formatDate(data.all.from, language), 'Solde antérieur', '—', '', '',
-                        <span key="s" className="font-bold">{money(data.all.priorBalance)}</span>,
+                        <span key="s" className="font-bold">{money(data.all.priorBalance)}</span>, '',
                       ]}
                       rows={data.rows.map((r) => [
                         formatDate(r.date, language),
@@ -468,10 +472,11 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                         <span key="b" className={r.balance > 0 ? 'font-bold text-rose-deep' : 'font-bold text-pistachio'}>
                           {money(r.balance)}
                         </span>,
+                        <EntryActions key="act" target={targetFromLedger(r.source, 'client')} onOpen={setEntry} />,
                       ])}
                       foot={[
                         'Totaux de la période', '', '',
-                        money(data.all.totalDebits), money(data.all.totalCredits), money(data.all.closingBalance),
+                        money(data.all.totalDebits), money(data.all.totalCredits), money(data.all.closingBalance), '',
                       ]}
                       empty="Aucune opération sur cette période"
                     />
@@ -480,7 +485,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   {part === 'deliveries' && (
                     <Section
                       title="Bons de livraison de la période (nouveaux et anciens)"
-                      head={['Date', 'N° BL', 'Désignation', 'Adresse', 'Quantité', 'H.T', 'T.T.C', 'Reste aujourd’hui']}
+                      head={['Date', 'N° BL', 'Désignation', 'Adresse', 'Quantité', 'H.T', 'T.T.C', 'Reste aujourd’hui', 'Actions']}
                       rows={data.deliveriesList.map((d) => [
                         formatDate(d.date, language),
                         <span key="r" className="font-semibold">
@@ -493,6 +498,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                         money(d.ht),
                         money(d.amount),
                         <span key="x" className={d.restNow > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>{money(d.restNow)}</span>,
+                        <EntryActions key="act" target={targetFromLedger({ side: 'debit', kind: d.kind, id: d.id }, 'client')} onOpen={setEntry} />,
                       ])}
                       total={money(data.deliveriesTotal)}
                       empty="Aucune livraison sur cette période"
@@ -502,7 +508,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   {part === 'sales' && (
                     <Section
                       title="Ventes de caisse de la période"
-                      head={['Date', 'N° facture', 'Désignation', 'Quantité', 'TVA', 'Total', 'Reste aujourd’hui']}
+                      head={['Date', 'N° facture', 'Désignation', 'Quantité', 'TVA', 'Total', 'Reste aujourd’hui', 'Actions']}
                       rows={data.salesList.map((d) => [
                         formatDate(d.date, language),
                         <span key="r" className="font-semibold">
@@ -514,6 +520,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                         d.tva ? money(d.tva) : '—',
                         money(d.amount),
                         <span key="x" className={d.restNow > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>{money(d.restNow)}</span>,
+                        <EntryActions key="act" target={targetFromLedger({ side: 'debit', kind: d.kind, id: d.id }, 'client')} onOpen={setEntry} />,
                       ])}
                       total={money(data.salesTotal)}
                       empty="Aucune vente de caisse sur cette période"
@@ -524,7 +531,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                     <Section
                       title="Argent reçu sur la période"
                       note="Versements saisis sur la carte, argent encaissé à la remise d'un bon ou sur une facture, acomptes et règlements de commande — c'est exactement le « total versements » du compte rendu. L'imputation d'un acompte n'est pas comptée : l'argent l'a été à sa date."
-                      head={['Date', 'Type', 'Libellé', 'Mode', 'Montant']}
+                      head={['Date', 'Type', 'Libellé', 'Mode', 'Montant', 'Actions']}
                       rows={data.all.credits.map((c) => [
                         formatDate(c.date, language),
                         <Badge key="t" variant={c.kind === 'payment' ? 'success' : c.kind === 'refund' ? 'danger' : 'info'} className="text-[10px]">
@@ -535,6 +542,11 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                         <span key="a" className={c.amount < 0 ? 'font-bold text-rose-deep' : 'font-bold text-pistachio'}>
                           {c.amount < 0 ? `− ${money(-c.amount)}` : money(c.amount)}
                         </span>,
+                        <EntryActions
+                          key="act"
+                          target={targetFromLedger({ side: 'credit', kind: c.kind, id: c.id, debitId: c.debitId, debitKind: c.debitKind }, 'client')}
+                          onOpen={setEntry}
+                        />,
                       ])}
                       total={money(data.all.totalCredits)}
                       empty="Aucun versement sur cette période"
@@ -545,7 +557,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                     <Section
                       title="Commandes de la période"
                       note="Une commande n'est pas une dette : seules ses livraisons sont facturées."
-                      head={['Créée le', 'N° commande', 'État', 'Commandé', 'Livré', 'Annulé', 'Total TTC', 'Acompte']}
+                      head={['Créée le', 'N° commande', 'État', 'Commandé', 'Livré', 'Annulé', 'Total TTC', 'Acompte', 'Actions']}
                       rows={data.commandsList.map((c) => {
                         const st = deliveryStatus(c);
                         return [
@@ -560,6 +572,11 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                           st.ordered, st.delivered, st.cancelled,
                           money(commandTtc(c)),
                           money((c.advancePaid ?? 0) + (c.extraPaid ?? 0) + (c.creditApplied ?? 0)),
+                          <EntryActions
+                            key="act"
+                            target={(c.advancePaid ?? 0) > 0 ? { kind: 'advance', commandId: c.id } : { kind: 'command', id: c.id }}
+                            onOpen={setEntry}
+                          />,
                         ];
                       })}
                       empty="Aucune commande sur cette période"
@@ -570,11 +587,12 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                     <Section
                       title="Anciennes dettes de la période"
                       note="Imprimées au-dessus du total du compte rendu, chacune avec sa date."
-                      head={['Date', 'Description', 'Montant', 'Reste aujourd’hui']}
+                      head={['Date', 'Description', 'Montant', 'Reste aujourd’hui', 'Actions']}
                       rows={data.oldDebtsList.map((d) => [
                         formatDate(d.date, language), d.description || '—',
                         money(d.amount),
                         <span key="r" className={d.restNow > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>{money(d.restNow)}</span>,
+                        <EntryActions key="act" target={{ kind: 'oldDebt', id: d.id, party: 'client' }} onOpen={setEntry} />,
                       ])}
                       total={money(data.oldDebtsTotal)}
                       empty="Aucune ancienne dette sur cette période"
@@ -641,6 +659,8 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                 : undefined}
             />
           )}
+
+          <EntryEditor request={entry} onClose={() => setEntry(null)} />
 
           <PriorDebtDialog
             open={!!priorAsk}

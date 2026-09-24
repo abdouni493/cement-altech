@@ -175,6 +175,8 @@ export interface ClientDebt {
 
 // ---------- Sales ----------
 export interface SaleLine {
+  /** Identifiant de la ligne en base (modification d'une ligne). */
+  lineId?: string;
   productId: string;
   productName?: string;
   /** Fiche technique vendue sur cette ligne (caisse). La production associée
