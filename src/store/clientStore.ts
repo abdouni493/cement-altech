@@ -43,6 +43,16 @@ interface ClientState {
     method?: PaymentMethodDetails,
   ) => Promise<PartyCreditRefund | undefined>;
   deleteRefund: (id: string) => Promise<void>;
+  /**
+   * ACOMPTE UTILISE SUR UN NOUVEAU DOCUMENT : l'avance du client paie une
+   * vente (caisse ou bon de livraison). Aucune ecriture de caisse — l'argent y
+   * est entre avec le versement qui a cree l'acompte. Renvoie le montant impute.
+   */
+  applyCreditToSale: (saleId: string, amount?: number) => Promise<number>;
+  /** L'avance du client devient l'acompte d'une commande. */
+  applyCreditToCommand: (commandId: string, amount?: number) => Promise<number>;
+  /** Impute l'avance du client sur ses dettes restantes (la plus ancienne d'abord). */
+  rebalanceCredit: (clientId: string) => Promise<number>;
 }
 
 /**
@@ -185,5 +195,26 @@ export const useClientStore = create<ClientState>()((set, get) => ({
     await save('clients.refund.delete', () => rpc.deletePartyRefund(id));
     set(await reloadLedger());
     await refreshClientDebt();
+  },
+
+  applyCreditToSale: async (saleId, amount) => {
+    const used = await save<number>('clients.credit.sale', () => rpc.applyCreditToSale(saleId, amount));
+    set(await reloadLedger());
+    await refreshClientDebt();
+    return Number(used) || 0;
+  },
+
+  applyCreditToCommand: async (commandId, amount) => {
+    const used = await save<number>('clients.credit.command', () => rpc.applyCreditToCommand(commandId, amount));
+    set(await reloadLedger());
+    await refreshClientDebt();
+    return Number(used) || 0;
+  },
+
+  rebalanceCredit: async (clientId) => {
+    const left = await save<number>('clients.credit.rebalance', () => rpc.rebalancePartyCredit('client', clientId));
+    set(await reloadLedger());
+    await refreshClientDebt();
+    return Number(left) || 0;
   },
 }));

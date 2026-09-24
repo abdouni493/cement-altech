@@ -41,6 +41,10 @@ interface SupplierState {
     method?: PaymentMethodDetails,
   ) => Promise<PartyCreditRefund | undefined>;
   deleteRefund: (id: string) => Promise<void>;
+  /** Le trop-verse du fournisseur paie une facture d'achat (aucune ecriture de caisse). */
+  applyCreditToPurchase: (purchaseId: string, amount?: number) => Promise<number>;
+  /** Impute le trop-verse sur les factures restantes du fournisseur. */
+  rebalanceCredit: (supplierId: string) => Promise<number>;
 }
 
 /**
@@ -168,5 +172,19 @@ export const useSupplierStore = create<SupplierState>()((set, get) => ({
     await save('suppliers.refund.delete', () => rpc.deletePartyRefund(id));
     set(await reloadLedger());
     await refreshSupplierDebt();
+  },
+
+  applyCreditToPurchase: async (purchaseId, amount) => {
+    const used = await save<number>('suppliers.credit.purchase', () => rpc.applyCreditToPurchase(purchaseId, amount));
+    set(await reloadLedger());
+    await refreshSupplierDebt();
+    return Number(used) || 0;
+  },
+
+  rebalanceCredit: async (supplierId) => {
+    const left = await save<number>('suppliers.credit.rebalance', () => rpc.rebalancePartyCredit('supplier', supplierId));
+    set(await reloadLedger());
+    await refreshSupplierDebt();
+    return Number(left) || 0;
   },
 }));

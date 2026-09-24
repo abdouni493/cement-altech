@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { CalendarRange } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
-import { todayISO } from '@/lib/utils';
+import { todayISO, localISODate } from '@/lib/utils';
 
 /* ============================================================================
  *  Briques partagées des « comptes rendus de période » (clients,
@@ -27,7 +27,7 @@ const PRESETS: Array<[string, () => [string, string]]> = [
   ['Ce mois-ci', () => [firstDayOfMonth(), todayISO()]],
   ['30 derniers jours', () => {
     const d = new Date(); d.setDate(d.getDate() - 29);
-    return [d.toISOString().slice(0, 10), todayISO()];
+    return [localISODate(d), todayISO()];
   }],
   ['Cette année', () => [`${new Date().getFullYear()}-01-01`, todayISO()]],
 ];

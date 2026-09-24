@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   HandCoins, History, Undo2, Eye, Pencil, Printer, Trash2, Wallet, Coins,
-  ShoppingBag, ClipboardList, Truck, ScissorsSquare, TrendingUp, Package,
+  ShoppingBag, ClipboardList, Truck, ScissorsSquare, TrendingUp, Package, PiggyBank,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -23,8 +23,8 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useLanguage } from '@/hooks/useLanguage';
 import { buildClientHistory, type HistoryPayment, type HistoryDelivery } from '@/lib/partyHistory';
-import { computePartyBalance } from '@/lib/partyBalance';
-import { netCommandTotals, commandTtc } from '@/lib/commandBilling';
+import { clientAccountOf } from '@/lib/accounts';
+import { commandTtc } from '@/lib/commandBilling';
 import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel, todayISO } from '@/lib/utils';
 import { printSaleInvoice } from '@/lib/invoicePrint';
 import { printDeliveryNote, printCommandOrder, printPaymentReceipt } from '@/lib/documents';
@@ -64,9 +64,25 @@ interface Props {
   onStatement?: (client: Client) => void;
 }
 
+/** Ligne de l'onglet « Acompte & imputations ». */
+interface CreditUseRow {
+  date: string;
+  reference: string;
+  label: string;
+  documentTotal: number;
+  amount: number;
+}
+
 export function ClientHistoryScreen({
-  client, onClose, onNewVersement, onNewOldDebt, onEditOldDebt, onRefund, onStatement,
+  client: requested, onClose, onNewVersement, onNewOldDebt, onEditOldDebt, onRefund, onStatement,
 }: Props) {
+  // Le dernier client affiche reste en memoire pendant l'animation de
+  // fermeture : l'ecran s'efface en douceur au lieu de disparaitre d'un coup.
+  const [shown, setShown] = useState<Client | null>(requested);
+  useEffect(() => { if (requested) setShown(requested); }, [requested]);
+  const client = requested ?? shown;
+  const isOpen = !!requested;
+
   const { can } = usePermissions();
   const { language } = useLanguage();
   const settings = useSettingsStore((s) => s.settings);
@@ -104,6 +120,13 @@ export function ClientHistoryScreen({
     { title: string; message?: string; run: () => Promise<void> } | null
   >(null);
 
+  // L'historique se ferme : les fenetres ouvertes par-dessus se ferment aussi.
+  useEffect(() => {
+    if (requested) return;
+    setViewSale(null); setEditSale(null); setViewCommand(null);
+    setViewDelivery(null); setEditPayment(null); setConfirm(null);
+  }, [requested]);
+
   const history = useMemo(() => {
     if (!client) return null;
     return buildClientHistory({
@@ -112,19 +135,41 @@ export function ClientHistoryScreen({
     });
   }, [client, sales, commands, deliveries, payments, oldDebts, refunds, debts, adjustments]);
 
+  /** Situation du compte — le MEME calcul que la carte du client. */
   const balance = useMemo(() => {
     if (!client) return null;
-    const cs = sales.filter((s) => s.clientId === client.id);
-    const cc = commands.filter((c) => c.clientId === client.id);
-    const net = netCommandTotals(cc, cs);
-    return computePartyBalance({
-      documentsBilled: cs.reduce((s, x) => s + x.finalAmount, 0) + net.billed,
-      documentsPaid: cs.reduce((s, x) => s + x.paidAmount, 0) + net.paid,
-      documentsRest: cs.reduce((s, x) => s + x.restAmount, 0) + net.rest,
-      oldDebts: oldDebts.filter((d) => d.partyId === client.id),
-      credit: clients.find((c) => c.id === client.id)?.creditAmount ?? 0,
-    });
-  }, [client, sales, commands, oldDebts, clients]);
+    return clientAccountOf(client.id, { clients, sales, commands, deliveries, oldDebts });
+  }, [client, sales, commands, deliveries, oldDebts, clients]);
+
+  /** Ce que l'argent du compte du client (versements, acompte) a paye. */
+  const creditUses = useMemo<CreditUseRow[]>(() => {
+    if (!client) return [];
+    const rows: CreditUseRow[] = [];
+    sales
+      .filter((s) => s.clientId === client.id && (s.allocatedAmount ?? 0) > 0.004)
+      .forEach((s) => {
+        const d = s.deliveryId ? deliveries.find((x) => x.id === s.deliveryId) : undefined;
+        rows.push({
+          date: s.date,
+          reference: d?.reference ?? s.reference,
+          label: d ? `Bon de livraison ${d.reference}` : `Vente ${s.reference}`,
+          documentTotal: s.finalAmount,
+          amount: s.allocatedAmount ?? 0,
+        });
+      });
+    commands
+      .filter((c) => c.clientId === client.id && (c.creditApplied ?? 0) > 0.004)
+      .forEach((c) =>
+        rows.push({
+          date: c.createdAt.slice(0, 10),
+          reference: c.reference,
+          label: `Acompte de la commande ${c.reference}`,
+          documentTotal: commandTtc(c),
+          amount: c.creditApplied ?? 0,
+        })
+      );
+    return rows;
+  }, [client, sales, commands, deliveries]);
 
   if (!client || !history || !balance) return null;
 
@@ -242,8 +287,8 @@ export function ClientHistoryScreen({
         virementNumber: p.virementNumber,
         bankName: p.bankName,
         totalDebt: balance.billed,
-        totalPaid: balance.paid,
-        restAmount: balance.rest,
+        totalPaid: balance.paid + balance.credit + balance.advance,
+        restAmount: Math.max(0, balance.net),
       },
       settings
     );
@@ -742,6 +787,34 @@ export function ClientHistoryScreen({
       },
     },
     {
+      key: 'credit', label: 'Acompte & imputations', icon: <PiggyBank size={14} />,
+      rows: creditUses as never[],
+      columns: [
+        { key: 'date', label: 'Date', render: (r: CreditUseRow) => formatDate(r.date, language) },
+        { key: 'label', label: 'Document paye', render: (r: CreditUseRow) => <span className="font-semibold">{r.label}</span> },
+        { key: 'total', label: 'Total du document', align: 'right', render: (r: CreditUseRow) => money(r.documentTotal) },
+        {
+          key: 'amount', label: 'Paye par le compte du client', align: 'right',
+          render: (r: CreditUseRow) => <span className="font-bold text-pistachio">{money(r.amount)}</span>,
+        },
+      ] as DataColumn<never>[],
+      stats: [
+        { label: 'Acompte disponible', value: money(balance.credit), tone: 'pos', icon: <PiggyBank size={12} /> },
+        { label: 'Acompte sur commandes', value: money(balance.advance), tone: 'pos' },
+        { label: 'Imputations', value: String(creditUses.length) },
+        { label: 'Total impute', value: money(sum(creditUses.map((r) => r.amount))), tone: 'accent' },
+      ],
+      dateOf: (r: never) => (r as unknown as CreditUseRow).date,
+      searchOf: (r: never) => {
+        const x = r as unknown as CreditUseRow;
+        return `${x.reference} ${x.label}`;
+      },
+      empty: "Aucun document paye par le compte du client (versement en trop ou acompte)",
+      note:
+        "Quand le client verse PLUS que sa dette, l'excedent devient son ACOMPTE : il s'affiche sur sa carte et "
+        + "paie ses prochaines ventes, livraisons ou commandes. Cet onglet montre ce que cet argent a deja paye.",
+    },
+    {
       key: 'oldSales', label: 'Anciennes ventes', icon: <History size={14} />,
       rows: history.historicalSales as never[],
       columns: saleColumns as DataColumn<never>[],
@@ -863,19 +936,19 @@ export function ClientHistoryScreen({
     { label: 'Total facture', value: money(balance.billed), tone: 'accent' },
     { label: 'Total encaisse', value: money(balance.paid), tone: 'pos' },
     { label: 'Reste du', value: money(balance.rest), tone: 'neg' },
-    { label: 'Avance du client', value: money(balance.credit), tone: 'pos' },
+    { label: 'Acompte (avance + commandes)', value: money(balance.credit + balance.advance), tone: 'pos' },
     {
       label: balance.hasCredit ? 'Solde en sa faveur' : 'Solde net',
       value: balance.hasCredit ? `+ ${money(balance.creditToReturn)}` : money(Math.max(0, balance.net)),
       tone: balance.hasCredit ? 'pos' : 'neg',
     },
-    { label: 'Part payee', value: `${balance.paidPercent.toFixed(0)} %`, tone: 'accent' },
+    { label: 'Commandes non livrees', value: money(balance.pendingCommands), tone: 'accent' },
   ];
 
   return (
     <>
       <PartyHistoryModal
-        open={!!client}
+        open={isOpen}
         onClose={onClose}
         title={`Historique — ${client.name}`}
         subtitle={`${client.phone || 'sans telephone'}${client.address ? ` · ${client.address}` : ''}`}

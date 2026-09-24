@@ -21,7 +21,7 @@ import { useStockStore } from '@/store/stockStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
-import { formatCurrency, formatDate, matchesDateFilter, isWithinRange, type DateFilter } from '@/lib/utils';
+import { formatCurrency, formatDate, matchesDateFilter, isWithinRange, todayISO, type DateFilter } from '@/lib/utils';
 import { printInvoice } from '@/lib/print';
 import { toast } from '@/components/ui/Toast';
 import type { Purchase } from '@/types';
@@ -37,8 +37,8 @@ export default function PurchasePage() {
 
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState<DateFilter | 'period'>('all');
-  const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
-  const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 10));
+  const [startDate, setStartDate] = useState(todayISO());
+  const [endDate, setEndDate] = useState(todayISO());
   const [unitFilter, setUnitFilter] = useState('');
   // Toutes les interfaces s'ouvrent en TABLEAU par defaut ; le choix de
   // l'operateur est memorise pour cet ecran.

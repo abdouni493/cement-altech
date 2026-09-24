@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
@@ -14,6 +14,8 @@ import type { ActionItem } from '@/components/ui/ActionMenu';
 import { panelVariants, EASE } from '@/lib/animations';
 import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from '@/lib/utils';
 import { withinPeriod } from '@/lib/partyHistory';
+import { lockScroll } from '@/lib/scrollLock';
+import { PresenceLayer } from '@/components/ui/PresenceLayer';
 import { cn } from '@/lib/utils';
 
 /* ============================================================================
@@ -91,51 +93,62 @@ export function PartyHistoryModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, title]);
 
+  // La fermeture passe par une ref : l'effet ne depend que de `open` et ne se
+  // rejoue plus a chaque rendu de l'ecran parent (qui recreait sa fonction).
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
-    // L'ecran occupe toute la fenetre : la page qui est dessous ne doit plus
-    // defiler. Le style est repose a chaque rendu tant que l'ecran est
-    // ouvert, car une fenetre modale ouverte PAR-DESSUS le remet a zero en se
-    // refermant.
-    document.body.style.overflow = 'hidden';
+    // L'ecran occupe toute la fenetre : la page qui est dessous ne defile
+    // plus. Le verrou est PARTAGE avec les fenetres modales : fermer une
+    // fenetre ouverte par-dessus ne rend plus le defilement trop tot, et
+    // fermer l'historique le rend toujours.
+    const release = lockScroll();
     const onKey = (e: KeyboardEvent) => {
       // Echap ne ferme l'historique que si aucune fenetre n'est ouverte
       // par-dessus (detail d'une vente, confirmation de suppression...).
       if (e.key !== 'Escape') return;
       if (document.querySelector('[data-modal-open="true"]')) return;
-      onClose();
+      closeRef.current();
     };
     document.addEventListener('keydown', onKey);
     return () => {
-      document.body.style.overflow = '';
+      release();
       document.removeEventListener('keydown', onKey);
     };
-  }, [open, onClose]);
+  }, [open]);
 
   const active = sections.find((s) => s.key === tab) ?? sections[0];
 
-  /** Lignes de l'onglet apres filtre de periode et recherche. */
+  /** Lignes de l'onglet apres filtre de periode et recherche — de la plus
+   *  ANCIENNE a la plus RECENTE. */
   const filtered = useMemo(() => {
     if (!active) return [] as never[];
     const q = search.trim().toLowerCase();
-    return (active.rows as never[]).filter((row) => {
-      if (!withinPeriod(active.dateOf(row), from || undefined, to || undefined)) return false;
-      if (!q) return true;
-      const haystack = `${active.searchOf(row)} ${formatDate(active.dateOf(row))} ${active.dateOf(row)}`;
-      return haystack.toLowerCase().includes(q);
-    });
+    return (active.rows as never[])
+      .filter((row) => {
+        if (!withinPeriod(active.dateOf(row), from || undefined, to || undefined)) return false;
+        if (!q) return true;
+        const haystack = `${active.searchOf(row)} ${formatDate(active.dateOf(row))} ${active.dateOf(row)}`;
+        return haystack.toLowerCase().includes(q);
+      })
+      .map((row, i) => ({ row, i }))
+      .sort((a, b) =>
+        (active.dateOf(a.row) || '').localeCompare(active.dateOf(b.row) || '') || a.i - b.i
+      )
+      .map((x) => x.row);
   }, [active, from, to, search]);
-
-  if (!open || !active) return null;
 
   return createPortal(
     <AnimatePresence>
-      <motion.div
+      {open && active && (
+      <PresenceLayer
         key="party-history"
         className="fixed inset-0 z-[70] flex flex-col bg-cream"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1, transition: { duration: 0.14 } }}
-        exit={{ opacity: 0, transition: { duration: 0.1 } }}
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0, transition: { duration: 0.18, ease: EASE } }}
+        exit={{ opacity: 0, y: 8, transition: { duration: 0.14, ease: EASE } }}
       >
         {/* ---------------------------------------------------- en-tete ---- */}
         <div className="shrink-0 border-b border-gold/20 bg-gradient-card px-4 py-3 sm:px-6">
@@ -301,7 +314,8 @@ export function PartyHistoryModal({
             </motion.div>
           </AnimatePresence>
         </div>
-      </motion.div>
+      </PresenceLayer>
+      )}
     </AnimatePresence>,
     document.body
   );

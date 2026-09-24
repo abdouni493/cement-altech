@@ -50,8 +50,20 @@ export function formatDateTime(dateStr: string | Date, lang: 'fr' | 'ar' = 'fr')
     : `${day}/${month}/${year} ${hours}:${minutes}`;
 }
 
+/** `YYYY-MM-DD` d'une date, en heure LOCALE (jamais en UTC). */
+export function localISODate(d: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * Date du jour, en heure LOCALE.
+ * `toISOString()` donne la date UTC : sur un poste en avance sur l'UTC, chaque
+ * document saisi le matin tombait la veille — un décalage d'un jour dans les
+ * comptes rendus et les rapports.
+ */
 export function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localISODate(new Date());
 }
 
 export function nowTime(): string {

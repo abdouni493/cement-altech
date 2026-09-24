@@ -1,4 +1,5 @@
 import JsBarcode from 'jsbarcode';
+import { openPrintPreview } from './printWindow';
 
 // Generate a random EAN-13 barcode (12 digits + computed check digit)
 export function generateEAN13(): string {
@@ -67,9 +68,7 @@ export function printBarcode(value: string, productName: string) {
   renderBarcode(svg, value, { width: 3, height: 100, fontSize: 20, margin: 16 });
   const barcodeMarkup = new XMLSerializer().serializeToString(svg);
 
-  const win = window.open('', '_blank', 'width=600,height=400');
-  if (!win) return;
-  win.document.write(`
+  openPrintPreview(`
     <html>
       <head>
         <title>Code-barres — ${productName}</title>
@@ -94,6 +93,5 @@ export function printBarcode(value: string, productName: string) {
         </script>
       </body>
     </html>
-  `);
-  win.document.close();
+  `, `Code-barres — ${productName}`);
 }

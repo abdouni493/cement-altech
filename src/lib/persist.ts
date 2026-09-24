@@ -37,6 +37,9 @@ export async function trySave<T>(label: string, run: () => Promise<T>): Promise<
 function humanize(message: string): string {
   const m = message.replace(/^\[[^\]]+\]\s*/, '');
   if (/duplicate key|already exists/i.test(m)) return 'cet enregistrement existe déjà';
+  if (/PGRST202|Could not find the function/i.test(m))
+    return 'fonction absente de la base de données ; exécutez le dernier script SQL ' +
+           '(altech_production_update_acomptes_comptes_rendus.sql) dans Supabase';
   // Le stock d'un produit ne peut pas devenir négatif (products_qty_positive).
   if (/products_qty_positive/i.test(m))
     return "le stock d'un produit deviendrait négatif ; mettez la base à jour " +

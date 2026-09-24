@@ -747,7 +747,8 @@ export function OperationsTotals({ inPeriod }: { inPeriod: (date: string) => boo
       purchasesTotal: pPurch.reduce((s, x) => s + x.totalAmount, 0),
       commandsCount: pCmd.length,
       commandsTotal: pCmd.reduce((s, x) => s + commandTtc(x), 0),
-      commandsRest: netCmd.rest,
+      /** Part des commandes pas encore livree (donc pas encore facturee). */
+      commandsRest: netCmd.billed,
       deliveriesCount: pDel.length,
       deliveriesQty: pDel.reduce((s, d) => s + d.items.reduce((a, i) => a + i.quantity, 0), 0),
       deliveriesValue: pDel.reduce((s, d) => s + (d.totalTtc ?? 0), 0),
@@ -759,10 +760,14 @@ export function OperationsTotals({ inPeriod }: { inPeriod: (date: string) => boo
       oldDebtsRest: pOld.reduce((s, x) => s + x.restAmount, 0),
       refundsCount: pRef.length,
       refundsTotal: pRef.reduce((s, x) => s + x.amount, 0),
-      /** Ce que les clients doivent encore : ventes + part non facturee des commandes + ardoises. */
+      /**
+       * Ce que les clients doivent encore : ventes + anciennes dettes CLIENTS.
+       * Une commande non livree n'est pas une dette (sa part livree est deja une
+       * vente) et les anciennes dettes fournisseurs n'ont rien a faire ici.
+       */
       totalDebt:
-        pSales.reduce((s, x) => s + x.restAmount, 0) + netCmd.rest
-        + pOld.reduce((s, x) => s + x.restAmount, 0),
+        pSales.reduce((s, x) => s + x.restAmount, 0)
+        + clientOldDebts.filter((d) => inPeriod(d.date)).reduce((s, x) => s + x.restAmount, 0),
     };
   }, [
     sales, purchases, commands, deliveries,
@@ -772,7 +777,7 @@ export function OperationsTotals({ inPeriod }: { inPeriod: (date: string) => boo
   const tiles = [
     { icon: <Receipt size={17} />, label: 'Ventes & livraisons', value: formatCurrency(stats.salesTotal), sub: `${stats.salesCount} facture(s) · reste ${formatCurrency(stats.salesRest)}`, grad: 'from-[#A6E9CE] to-[#3FB591]' },
     { icon: <Truck size={17} />, label: 'Dont livraisons', value: formatCurrency(stats.delSalesTotal), sub: `${stats.delSalesCount} bon(s) · reste ${formatCurrency(stats.delSalesRest)}`, grad: 'from-[#CDB0F5] to-[#9B7ED8]' },
-    { icon: <Wallet size={17} />, label: 'Dettes clients', value: formatCurrency(stats.totalDebt), sub: 'ventes + commandes + ardoises', grad: 'from-[#FF9CC0] to-[#F0568A]' },
+    { icon: <Wallet size={17} />, label: 'Dettes clients', value: formatCurrency(stats.totalDebt), sub: 'ventes + anciennes dettes clients', grad: 'from-[#FF9CC0] to-[#F0568A]' },
     { icon: <ShoppingCart size={17} />, label: 'Achats', value: formatCurrency(stats.purchasesTotal), sub: `${stats.purchasesCount} facture(s)`, grad: 'from-[#FFD08A] to-[#F2944A]' },
     { icon: <ClipboardList size={17} />, label: 'Commandes', value: formatCurrency(stats.commandsTotal), sub: `${stats.commandsCount} · non facturé ${formatCurrency(stats.commandsRest)}`, grad: 'from-[#F7B7D2] to-[#D96C9C]' },
     { icon: <Package size={17} />, label: 'Matière livrée', value: formatCurrency(stats.materialsCost), sub: `${Math.round(stats.deliveriesQty * 1000) / 1000} unité(s) remises`, grad: 'from-[#B9E1F5] to-[#5AA8CE]' },

@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   HandCoins, History, Undo2, Eye, Pencil, Printer, Trash2, Wallet, Coins,
-  Package, TrendingUp,
+  Package, TrendingUp, PiggyBank,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -18,7 +18,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useLanguage } from '@/hooks/useLanguage';
 import { buildSupplierHistory, type HistoryPayment } from '@/lib/partyHistory';
-import { computePartyBalance } from '@/lib/partyBalance';
+import { supplierAccountOf } from '@/lib/accounts';
 import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel, todayISO } from '@/lib/utils';
 import { printInvoice } from '@/lib/print';
 import { printPaymentReceipt } from '@/lib/documents';
@@ -52,9 +52,16 @@ interface Props {
 }
 
 export function SupplierHistoryScreen({
-  supplier, onClose, onNewVersement, onNewOldDebt, onEditOldDebt, onRefund,
+  supplier: requested, onClose, onNewVersement, onNewOldDebt, onEditOldDebt, onRefund,
   onStatement, onEditPurchase,
 }: Props) {
+  // Le dernier fournisseur affiche reste en memoire pendant l'animation de
+  // fermeture : l'ecran s'efface en douceur.
+  const [shown, setShown] = useState<Supplier | null>(requested);
+  useEffect(() => { if (requested) setShown(requested); }, [requested]);
+  const supplier = requested ?? shown;
+  const isOpen = !!requested;
+
   const { can } = usePermissions();
   const { language } = useLanguage();
   const settings = useSettingsStore((s) => s.settings);
@@ -77,6 +84,12 @@ export function SupplierHistoryScreen({
     { title: string; message?: string; run: () => Promise<void> } | null
   >(null);
 
+  // L'historique se ferme : les fenetres ouvertes par-dessus se ferment aussi.
+  useEffect(() => {
+    if (requested) return;
+    setViewPurchase(null); setEditPayment(null); setConfirm(null);
+  }, [requested]);
+
   const history = useMemo(() => {
     if (!supplier) return null;
     return buildSupplierHistory({
@@ -84,16 +97,10 @@ export function SupplierHistoryScreen({
     });
   }, [supplier, purchases, payments, oldDebts, refunds]);
 
+  /** Situation du compte — le MEME calcul que la carte du fournisseur. */
   const balance = useMemo(() => {
     if (!supplier) return null;
-    const ps = purchases.filter((p) => p.supplierId === supplier.id);
-    return computePartyBalance({
-      documentsBilled: ps.reduce((s, x) => s + x.totalAmount, 0),
-      documentsPaid: ps.reduce((s, x) => s + x.paidAmount, 0),
-      documentsRest: ps.reduce((s, x) => s + x.restAmount, 0),
-      oldDebts: oldDebts.filter((d) => d.partyId === supplier.id),
-      credit: suppliers.find((x) => x.id === supplier.id)?.creditAmount ?? 0,
-    });
+    return supplierAccountOf(supplier.id, { suppliers, purchases, oldDebts });
   }, [supplier, purchases, oldDebts, suppliers]);
 
   if (!supplier || !history || !balance) return null;
@@ -137,8 +144,8 @@ export function SupplierHistoryScreen({
         virementNumber: p.virementNumber,
         bankName: p.bankName,
         totalDebt: balance.billed,
-        totalPaid: balance.paid,
-        restAmount: balance.rest,
+        totalPaid: balance.paid + balance.credit,
+        restAmount: Math.max(0, balance.net),
       },
       settings
     );
@@ -375,6 +382,38 @@ export function SupplierHistoryScreen({
       },
     },
     {
+      key: 'credit', label: 'Trop-verse & imputations', icon: <PiggyBank size={14} />,
+      rows: history.purchases.concat(history.historicalPurchases)
+        .filter((p) => (p.allocatedAmount ?? 0) > 0.004) as never[],
+      columns: [
+        { key: 'date', label: 'Date', render: (p: Purchase) => formatDate(p.date, language) },
+        { key: 'ref', label: 'Facture payee', render: (p: Purchase) => <span className="font-semibold">{p.reference}</span> },
+        { key: 'bon', label: 'N bon', hideOnMobile: true, render: (p: Purchase) => p.bonNumber || '—' },
+        { key: 'total', label: 'Total facture', align: 'right', render: (p: Purchase) => money(p.totalAmount) },
+        {
+          key: 'alloc', label: 'Paye par le compte du fournisseur', align: 'right',
+          render: (p: Purchase) => <span className="font-bold text-pistachio">{money(p.allocatedAmount ?? 0)}</span>,
+        },
+      ] as DataColumn<never>[],
+      stats: [
+        { label: 'Trop-verse disponible', value: money(balance.credit), tone: 'pos', icon: <PiggyBank size={12} /> },
+        {
+          label: 'Total impute',
+          value: money(sum(history.purchases.concat(history.historicalPurchases).map((p) => p.allocatedAmount ?? 0))),
+          tone: 'accent',
+        },
+      ],
+      dateOf: (p: never) => (p as unknown as Purchase).date,
+      searchOf: (p: never) => {
+        const x = p as unknown as Purchase;
+        return `${x.reference} ${x.bonNumber ?? ''}`;
+      },
+      empty: "Aucune facture payee par le compte du fournisseur (versement en trop ou trop-verse)",
+      note:
+        "Quand l'entreprise verse PLUS que la dette, l'excedent devient un TROP-VERSE : il s'affiche sur la carte du "
+        + "fournisseur et paie ses prochaines factures d'achat. Cet onglet montre ce que cet argent a deja paye.",
+    },
+    {
       key: 'oldPurchases', label: 'Anciens achats', icon: <History size={14} />,
       rows: history.historicalPurchases as never[],
       columns: purchaseColumns as DataColumn<never>[],
@@ -449,7 +488,7 @@ export function SupplierHistoryScreen({
   return (
     <>
       <PartyHistoryModal
-        open={!!supplier}
+        open={isOpen}
         onClose={onClose}
         title={`Historique — ${supplier.name}`}
         subtitle={`${supplier.phone || 'sans telephone'}${supplier.address ? ` · ${supplier.address}` : ''}`}

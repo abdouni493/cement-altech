@@ -4,7 +4,7 @@ import {
   CreditCard, Plus, Minus, X, Search, ShoppingBag, UserPlus, FlaskConical,
   Printer, CheckCircle2, Tag, RotateCcw, FileText, Layers, AlertTriangle,
   Factory, Phone, MapPin, Beaker, ClipboardList, Truck, User, Hash,
-  History, Percent,
+  History, Percent, PiggyBank,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -102,7 +102,10 @@ export default function POS() {
   const items = useComptoirStore((s) => s.items);
   const products = useStockStore((s) => s.products);
   const ficheTechnics = useFicheTechnicStore((s) => s.ficheTechnics);
-  const { clients, addClient, updateClient, getOrCreatePassager } = useClientStore();
+  const {
+    clients, addClient, updateClient, getOrCreatePassager,
+    applyCreditToSale, applyCreditToCommand, payDebt,
+  } = useClientStore();
   const addPosSale = useSalesStore((s) => s.addPosSale);
   const addCommand = useCommandStore((s) => s.addCommand);
   const settings = useSettingsStore((s) => s.settings);
@@ -135,6 +138,11 @@ export default function POS() {
   const [tvaRate, setTvaRate] = useState<number>(DEFAULT_TVA_RATE);
   const [paid, setPaid] = useState<number>(0);
   const [paidEdited, setPaidEdited] = useState(false);
+  /** L'acompte du client (versé en trop auparavant) paie cette vente / commande. */
+  const [useCredit, setUseCredit] = useState(true);
+  const [creditInput, setCreditInput] = useState<number | null>(null);
+  /** La monnaie n'est pas rendue : elle reste sur le compte du client. */
+  const [keepChange, setKeepChange] = useState(false);
   const [showClientForm, setShowClientForm] = useState(false);
   const [saving, setSaving] = useState(false);
   // ---- document mode : vente directe vs commande ----
@@ -216,9 +224,21 @@ export default function POS() {
     [subtotal, reductionEnabled, reduction, tvaEnabled, tvaRate]
   );
   const finalAmount = tva.totalTTC;
-  const effectivePaid = paidEdited ? paid : finalAmount;
-  const change = Math.max(0, effectivePaid - finalAmount);
-  const rest = Math.max(0, finalAmount - effectivePaid);
+
+  /* ---- ACOMPTE DU CLIENT ---------------------------------------------------
+   * Un client qui a versé plus que sa dette dispose d'un acompte : il est
+   * proposé ici et vient en déduction de ce qu'il paie maintenant. Il ne
+   * rentre pas une seconde fois en caisse (il y est entré avec le versement). */
+  const isPassager = !!selectedClient && selectedClient.name.toLowerCase().startsWith('client passager');
+  const clientCredit = selectedClient && !isPassager ? Math.max(0, selectedClient.creditAmount ?? 0) : 0;
+  const creditUsed = posMode === 'sale' && useCredit && clientCredit > 0
+    ? Math.max(0, Math.min(creditInput ?? clientCredit, clientCredit, finalAmount))
+    : 0;
+  const dueNow = Math.max(0, Math.round((finalAmount - creditUsed) * 100) / 100);
+  const effectivePaid = paidEdited ? paid : dueNow;
+  // La monnaie rendue n'est PAS de l'argent encaissé : seul le dû entre en caisse.
+  const change = Math.max(0, effectivePaid - dueNow);
+  const rest = Math.max(0, dueNow - effectivePaid);
 
   /** Fiche lines resolved into the batches that will be produced on validation. */
   const plannedProductions = useMemo(
@@ -363,6 +383,7 @@ export default function POS() {
     // tickets : le caissier enchaîne généralement plusieurs saisies du même type
     setCart([]); setReduction(0); setReductionEnabled(false);
     setPaid(0); setPaidEdited(false); setClientId(null); setClientSearch('');
+    setUseCredit(true); setCreditInput(null); setKeepChange(false);
     setDocDate(todayISO()); setBonNumber('');
     setReceiveDate(todayISO()); setReceiveHour('14'); setReceiveMinute('30');
     setCmdCustomTotal(null); setVersement(0);
@@ -372,6 +393,7 @@ export default function POS() {
 
   /** Sélection d'un client : son adresse connue est proposée, à confirmer. */
   const selectClient = (c: Client) => {
+    setCreditInput(null);
     setClientId(c.id);
     setClientSearch(c.name);
     setClientAddress(c.address || '');
@@ -446,12 +468,19 @@ export default function POS() {
         })),
       }));
 
+      // Seul ce qui est DÛ entre en caisse : la monnaie rendue n'est pas un
+      // encaissement (elle gonflait la caisse et la facture « payée »).
+      const cashPaid = Math.min(Number(effectivePaid) || 0, dueNow);
+      const excess = Math.max(0, (Number(effectivePaid) || 0) - dueNow);
+      const usedCredit = creditUsed;
+      const keepExcess = keepChange && excess > 0.004 && !!clientId && !isPassager;
+
       const sale = await addPosSale({
         clientId: saleClientId,
         date: docDate,
         bonNumber: bonNumber.trim() || undefined,
         reduction: reductionEnabled ? Number(reduction) : 0,
-        paidAmount: Number(effectivePaid),
+        paidAmount: cashPaid,
         historical: historicalMode,
         tvaEnabled,
         tvaRate: Number(tvaRate),
@@ -471,17 +500,36 @@ export default function POS() {
         productions,
       });
 
+      // l'acompte du client paie une partie de la vente (sans écriture de caisse)
+      if (usedCredit > 0.004 && sale?.id) {
+        try {
+          const applied = await applyCreditToSale(sale.id, usedCredit);
+          if (applied > 0) toast.info(`Acompte du client utilisé : ${formatCurrency(applied)}`);
+        } catch { /* message déjà affiché */ }
+      }
+      // la monnaie laissée par le client reste sur son compte (acompte)
+      if (keepExcess && clientId) {
+        try {
+          await payDebt(
+            clientId, excess, new Date().toISOString(),
+            `Monnaie laissée sur le compte — vente ${sale.reference}`, { method: 'especes' }
+          );
+          toast.info(`${formatCurrency(excess)} ajoutés au compte du client (acompte)`);
+        } catch { /* message déjà affiché */ }
+      }
+      const savedSale = useSalesStore.getState().sales.find((x) => x.id === sale.id) ?? sale;
+
       toast.success(
         historicalMode
           ? 'Ancienne vente enregistrée — stock et comptoir inchangés, historique du client mis à jour'
           : productions.length > 0
             ? `Vente créée · ${productions.length} production(s) lancée(s)`
-            : rest > 0 ? 'Vente créée (dette client)' : 'Vente créée et payée'
+            : savedSale.restAmount > 0 ? 'Vente créée (dette client)' : 'Vente créée et payée'
       );
       setPrintPrompt({
-        sale,
+        sale: savedSale,
         productions: invoiceProductions,
-        client: clients.find((c) => c.id === saleClientId) ?? null,
+        client: useClientStore.getState().clients.find((c) => c.id === saleClientId) ?? null,
       });
       reset();
     } catch {
@@ -494,7 +542,12 @@ export default function POS() {
   // ---- command total (mirrors the "Nouvelle commande" pricing) ----
   const cmdComputedTotal = subtotal;
   const cmdFinalTotal = cmdCustomTotal !== null ? cmdCustomTotal : cmdComputedTotal;
-  const cmdRest = Math.max(0, cmdFinalTotal - (Number(versement) || 0));
+  /** Acompte du client utilisé comme acompte de la commande. */
+  const cmdCreditUsed = posMode === 'command' && useCredit && clientCredit > 0
+    ? Math.max(0, Math.min(creditInput ?? clientCredit, clientCredit,
+        Math.max(0, cmdFinalTotal - (Number(versement) || 0))))
+    : 0;
+  const cmdRest = Math.max(0, cmdFinalTotal - (Number(versement) || 0) - cmdCreditUsed);
 
   // --------------------------------------------------------- create command --
   const createCommandFromCart = async () => {
@@ -550,8 +603,15 @@ export default function POS() {
         createdAt: createdAtOverride,
       });
 
+      if (cmdCreditUsed > 0.004 && cmd?.id && client.id === selectedClient?.id) {
+        try {
+          const applied = await applyCreditToCommand(cmd.id, cmdCreditUsed);
+          if (applied > 0) toast.info(`Acompte du client utilisé sur la commande : ${formatCurrency(applied)}`);
+        } catch { /* message déjà affiché */ }
+      }
+      const savedCmd = useCommandStore.getState().commands.find((c) => c.id === cmd.id) ?? cmd;
       toast.success(`Commande créée · ${cmd.reference}`);
-      setCommandPrompt(cmd);
+      setCommandPrompt(savedCmd);
       reset();
     } catch {
       /* the store already showed the error */
@@ -1249,6 +1309,35 @@ export default function POS() {
                   <span>{tvaEnabled ? 'Total TTC' : 'Total'}</span>
                   <span className="tabular text-gold-dark">{formatCurrency(finalAmount)}</span>
                 </div>
+
+                {clientCredit > 0 && (
+                  <div className="rounded-xl border border-pistachio/40 bg-pistachio/10 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <Switch checked={useCredit} onChange={setUseCredit} label="Utiliser l'acompte du client" />
+                      <span className="flex items-center gap-1 text-xs font-bold tabular text-pistachio">
+                        <PiggyBank size={13} /> {formatCurrency(clientCredit)} disponible
+                      </span>
+                    </div>
+                    {useCredit && (
+                      <>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs text-text-muted">Acompte utilisé sur cette vente</span>
+                          <Input
+                            type="number" step="any" min={0}
+                            value={creditUsed}
+                            onChange={(e) => setCreditInput(Math.max(0, Number(e.target.value)))}
+                            className="max-w-[140px] h-9"
+                          />
+                        </div>
+                        <div className="flex justify-between text-xs font-semibold">
+                          <span className="text-text-muted">Reste à payer maintenant</span>
+                          <span className="tabular text-gold-dark">{formatCurrency(dueNow)}</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 <Input
                   label="Le client paie"
                   type="number"
@@ -1257,9 +1346,18 @@ export default function POS() {
                   onChange={(e) => { setPaid(Number(e.target.value)); setPaidEdited(true); }}
                 />
                 <div className="flex justify-between">
-                  <span className="text-text-muted">Monnaie à rendre</span>
+                  <span className="text-text-muted">
+                    {keepChange && change > 0 ? 'Laissé sur le compte (acompte)' : 'Monnaie à rendre'}
+                  </span>
                   <span className="tabular font-semibold text-pistachio">{formatCurrency(change)}</span>
                 </div>
+                {change > 0 && selectedClient && !isPassager && (
+                  <Switch
+                    checked={keepChange}
+                    onChange={setKeepChange}
+                    label="Ne pas rendre la monnaie : la garder en acompte du client"
+                  />
+                )}
                 {rest > 0 && (
                   <div className="flex justify-between">
                     <span className="text-text-muted">Reste (dette)</span>
@@ -1358,6 +1456,30 @@ export default function POS() {
                   value={versement}
                   onChange={(e) => setVersement(Number(e.target.value))}
                 />
+                {clientCredit > 0 && (
+                  <div className="rounded-xl border border-pistachio/40 bg-pistachio/10 p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <Switch checked={useCredit} onChange={setUseCredit} label="Utiliser l'acompte du client" />
+                      <span className="flex items-center gap-1 text-xs font-bold tabular text-pistachio">
+                        <PiggyBank size={13} /> {formatCurrency(clientCredit)} disponible
+                      </span>
+                    </div>
+                    {useCredit && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs text-text-muted">Acompte utilisé sur la commande</span>
+                        <Input
+                          type="number" step="any" min={0}
+                          value={cmdCreditUsed}
+                          onChange={(e) => setCreditInput(Math.max(0, Number(e.target.value)))}
+                          className="max-w-[140px] h-9"
+                        />
+                      </div>
+                    )}
+                    <p className="text-[10px] text-text-muted">
+                      Déjà encaissé : il n'entre pas une seconde fois en caisse et paiera les livraisons de cette commande.
+                    </p>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-text-muted">Reste à payer (dette)</span>
                   <span className={`tabular font-bold ${cmdRest > 0 ? 'text-rose-deep' : 'text-pistachio'}`}>

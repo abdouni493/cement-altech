@@ -2,7 +2,9 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { X } from 'lucide-react';
-import { modalVariants } from '@/lib/animations';
+import { modalVariants, EASE } from '@/lib/animations';
+import { lockScroll } from '@/lib/scrollLock';
+import { PresenceLayer } from './PresenceLayer';
 import { cn } from '@/lib/utils';
 
 interface ModalProps {
@@ -24,11 +26,18 @@ const sizes = {
 /**
  * Pile des fenêtres réellement ouvertes. Une modale ouverte PAR-DESSUS une
  * autre (le choix de la TVA au-dessus du compte rendu, par exemple) doit être
- * la SEULE que la touche Échap referme, et le défilement de la page ne se
- * rétablit qu'une fois la dernière fenêtre refermée.
+ * la SEULE que la touche Échap referme.
  */
 const openStack: symbol[] = [];
 
+/* ----------------------------------------------------------------------------
+ *  OUVERTURE ET FERMETURE FLUIDES — ET JAMAIS D'ECRAN BLOQUE
+ *  · le défilement de la page passe par le verrou partagé (`lockScroll`) :
+ *    il revient dès que la DERNIERE fenêtre se ferme, quel que soit l'ordre ;
+ *  · dès que la fermeture commence, le voile devient « transparent aux
+ *    clics » (`PresenceLayer`) : une fenêtre qui s'efface ne peut plus
+ *    intercepter un clic, même si son animation est ralentie ou interrompue.
+ * -------------------------------------------------------------------------- */
 export function Modal({ open, onClose, title, children, size = 'md', footer }: ModalProps) {
   // La fermeture passe par une ref : l'effet ne se rejoue donc pas à chaque
   // rendu et l'ordre de la pile reste celui des ouvertures.
@@ -39,7 +48,7 @@ export function Modal({ open, onClose, title, children, size = 'md', footer }: M
     if (!open) return;
     const id = Symbol('modal');
     openStack.push(id);
-    document.body.style.overflow = 'hidden';
+    const release = lockScroll();
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && openStack[openStack.length - 1] === id) closeRef.current();
     };
@@ -48,25 +57,23 @@ export function Modal({ open, onClose, title, children, size = 'md', footer }: M
       document.removeEventListener('keydown', handler);
       const i = openStack.indexOf(id);
       if (i >= 0) openStack.splice(i, 1);
-      if (openStack.length === 0) document.body.style.overflow = '';
+      release();
     };
   }, [open]);
 
   return createPortal(
     <AnimatePresence>
       {open && (
-        <motion.div
+        <PresenceLayer
+          key="modal-root"
           className="fixed inset-0 z-[90] flex items-center justify-center p-4"
           initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
+          animate={{ opacity: 1, transition: { duration: 0.16, ease: EASE } }}
+          exit={{ opacity: 0, transition: { duration: 0.12, ease: EASE } }}
         >
-          <motion.div
+          <div
             className="absolute inset-0 bg-[#7A2E55]/30 backdrop-blur-sm"
             onClick={onClose}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
           />
           <motion.div
             variants={modalVariants}
@@ -93,14 +100,14 @@ export function Modal({ open, onClose, title, children, size = 'md', footer }: M
                 </button>
               </div>
             )}
-            <div className="overflow-y-auto px-6 py-5 flex-1">{children}</div>
+            <div className="overflow-y-auto overscroll-contain px-6 py-5 flex-1">{children}</div>
             {footer && (
               <div className="px-6 py-4 border-t border-gold/15 flex justify-end gap-3 shrink-0">
                 {footer}
               </div>
             )}
           </motion.div>
-        </motion.div>
+        </PresenceLayer>
       )}
     </AnimatePresence>,
     document.body

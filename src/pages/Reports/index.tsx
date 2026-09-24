@@ -4,7 +4,7 @@ import {
   TrendingUp, FileText, Printer, Wallet, ShoppingCart, Banknote, Package,
   Receipt, Truck, Users, HardHat, Coins, History, ClipboardList,
   ScissorsSquare, Undo2, PiggyBank, FlaskConical, ListChecks, CheckSquare,
-  Square, LayoutGrid, Building2, Factory, Layers,
+  Square, LayoutGrid, Building2, Factory, Layers, Scale, Calculator, AlertTriangle,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -34,7 +34,10 @@ import { printListDocument } from '@/lib/statementPrint';
 import { panelVariants, EASE } from '@/lib/animations';
 import { cn } from '@/lib/utils';
 import { groupByParty, type ReportPart, type ReportStat } from './reportParts';
+import { DebtsOverview } from './DebtsOverview';
+import { GainsBreakdown } from './GainsBreakdown';
 import type { DocColumn, DocRow } from '@/lib/officialDoc';
+import type { PartyOldDebt } from '@/types';
 
 /* ============================================================================
  *  RAPPORT GENERAL
@@ -103,6 +106,10 @@ export default function ReportsPage() {
   const [active, setActive] = useState('sales');
   const [printOpen, setPrintOpen] = useState(false);
   const [checked, setChecked] = useState<string[]>([]);
+  /** Anciennes dettes datees AVANT la periode : on demande avant d'imprimer. */
+  const [oldDebtAsk, setOldDebtAsk] = useState<
+    { clients: PartyOldDebt[]; suppliers: PartyOldDebt[]; run: (include: boolean) => void } | null
+  >(null);
 
   const money = formatCurrency;
   const nameOfClient = (id: string | null) => (id ? clients.find((c) => c.id === id)?.name || 'Client inconnu' : 'Client passager');
@@ -193,7 +200,7 @@ export default function ReportsPage() {
     const rCommands = groupByParty(
       commands.filter((c) => !c.isHistorical && (inP(c.createdAt) || inP(c.receiveDate))),
       (c) => c.clientName,
-      (c) => c.receiveDate || c.createdAt
+      (c) => c.createdAt
     );
     const cmdNet = netCommandTotals(rCommands, sales);
     list.push({
@@ -239,7 +246,7 @@ export default function ReportsPage() {
         const st = deliveryStatus(c);
         return {
           cells: [
-            formatDate(c.receiveDate || c.createdAt.slice(0, 10)),
+            formatDate(c.createdAt.slice(0, 10)),
             `${c.clientName.toUpperCase()} — ${c.reference}`,
             st.ordered, st.delivered, money(commandTtc(c)),
           ],
@@ -251,8 +258,9 @@ export default function ReportsPage() {
 
     // ---- 3. LIVRAISONS ----
     const commandById = new Map(commands.map((c) => [c.id, c]));
+    // Les livraisons NOUVELLES et ANCIENNES forment un seul tableau.
     const rDeliveries = deliveries
-      .filter((d) => !d.isHistorical && inP(d.deliveredAt))
+      .filter((d) => inP(d.deliveredAt))
       .map((d) => ({ d, cmd: commandById.get(d.commandId) }));
     const deliveryLines = rDeliveries.flatMap(({ d, cmd }) =>
       d.items.map((it) => {
@@ -263,6 +271,7 @@ export default function ReportsPage() {
           date: d.deliveredAt.slice(0, 10),
           client: cmd?.clientName ?? '—',
           reference: d.reference,
+          historical: !!d.isHistorical,
           location: d.location || cmd?.clientAddress || '—',
           designation: it.productName,
           quantity: it.quantity,
@@ -275,11 +284,11 @@ export default function ReportsPage() {
     const sortedDeliveryLines = groupByParty(deliveryLines, (l) => l.client, (l) => l.date);
     list.push({
       key: 'deliveries', group: 'clients', label: 'Livraisons', icon: <Truck size={15} />,
-      note: 'Chaque bon de livraison éclaté ligne à ligne : date, lieu, produit, quantité et valeur.',
+      note: 'Chaque bon de livraison — nouveaux et anciens ensemble — éclaté ligne à ligne : date, lieu, produit, quantité et valeur.',
       count: rDeliveries.length,
       total: money(sum(deliveryLines.map((l) => l.amount))),
       stats: [
-        { label: 'Bons de livraison', value: String(rDeliveries.length) },
+        { label: 'Bons de livraison', value: `${rDeliveries.length} (dont ${rDeliveries.filter(({ d }) => d.isHistorical).length} anciens)` },
         { label: 'Quantité remise', value: String(Math.round(sum(deliveryLines.map((l) => l.quantity)) * 1000) / 1000) },
         { label: 'Valeur H.T', value: money(sum(deliveryLines.map((l) => l.amount))), tone: 'accent' },
         { label: 'Encaissé', value: money(sum(rDeliveries.map(({ d }) => d.paidAmount ?? 0))), tone: 'pos' },
@@ -292,7 +301,10 @@ export default function ReportsPage() {
       ],
       rows: sortedDeliveryLines.map((l) => [
         <span key="c" className="font-semibold">{l.client}</span>,
-        l.reference,
+        <span key="r">
+          {l.reference}
+          {l.historical && <Badge variant="warning" className="ml-1 text-[9px]">Ancienne</Badge>}
+        </span>,
         formatDate(l.date, language),
         l.location,
         l.designation,
@@ -309,7 +321,7 @@ export default function ReportsPage() {
       printRows: sortedDeliveryLines.map((l): DocRow => ({
         cells: [
           formatDate(l.date),
-          `${l.client.toUpperCase()} — ${l.designation.toUpperCase()}`,
+          `${l.client.toUpperCase()} — ${l.designation.toUpperCase()}${l.historical ? ' (ANCIENNE)' : ''}`,
           l.location.toUpperCase(),
           l.quantity,
           money(l.amount),
@@ -474,48 +486,6 @@ export default function ReportsPage() {
       })),
       printTotalLabel: 'Total des anciennes commandes',
       printTotalValue: money(sum(oldCommands.map(commandTtc))),
-    });
-
-    // ---- 7. ANCIENNES LIVRAISONS ----
-    const oldDeliveries = deliveries
-      .filter((d) => d.isHistorical && inP(d.deliveredAt))
-      .map((d) => ({ d, cmd: commandById.get(d.commandId) }));
-    const oldDeliveryQty = sum(oldDeliveries.map(({ d }) => sum(d.items.map((i) => i.quantity))));
-    list.push({
-      key: 'oldDeliveries', group: 'clients', label: 'Anciennes livraisons', icon: <History size={15} />,
-      note: "Livraisons d'anciennes commandes : aucune matière n'a été retirée du stock.",
-      count: oldDeliveries.length,
-      total: money(sum(oldDeliveries.map(({ d }) => d.totalHt ?? 0))),
-      stats: [
-        { label: 'Bons', value: String(oldDeliveries.length) },
-        { label: 'Quantité remise', value: String(Math.round(oldDeliveryQty * 1000) / 1000) },
-        { label: 'Valeur H.T', value: money(sum(oldDeliveries.map(({ d }) => d.totalHt ?? 0))), tone: 'accent' },
-      ],
-      columns: [
-        { label: 'Client' }, { label: 'N° BL' }, { label: 'Date' }, { label: 'Commande' },
-        { label: 'Quantité', align: 'right' }, { label: 'Total H.T', align: 'right' },
-      ],
-      rows: oldDeliveries.map(({ d, cmd }) => [
-        <span key="c" className="font-semibold">{cmd?.clientName ?? '—'}</span>,
-        d.reference, formatDate(d.deliveredAt.slice(0, 10), language), cmd?.reference ?? '—',
-        sum(d.items.map((i) => i.quantity)),
-        money(d.totalHt ?? 0),
-      ]),
-      printColumns: [
-        DATE_COL, DESIGNATION_COL,
-        { label: 'Quantite', align: 'center', width: '12%' },
-        { label: 'P.T H.T', align: 'right', width: '20%' },
-      ],
-      printRows: oldDeliveries.map(({ d, cmd }): DocRow => ({
-        cells: [
-          formatDate(d.deliveredAt.slice(0, 10)),
-          `${(cmd?.clientName ?? '—').toUpperCase()} — ANCIEN BON ${d.reference}`,
-          sum(d.items.map((i) => i.quantity)),
-          money(d.totalHt ?? 0),
-        ],
-      })),
-      printTotalLabel: 'Total des anciennes livraisons',
-      printTotalValue: money(sum(oldDeliveries.map(({ d }) => d.totalHt ?? 0))),
     });
 
     // ---- 8. ANCIENNES DETTES CLIENTS ----
@@ -1182,27 +1152,80 @@ export default function ReportsPage() {
     ? [`PERIODE DU ${formatDate(period.from)} AU ${formatDate(period.to)}`]
     : [];
 
+  /** Anciennes dettes (avec un reste) datees AVANT la periode choisie. */
+  const priorOldDebts = useMemo(() => {
+    if (!period) return { clients: [] as PartyOldDebt[], suppliers: [] as PartyOldDebt[] };
+    const before = (d: PartyOldDebt) => d.date.slice(0, 10) < period.from && d.restAmount > 0.004;
+    const byDate = (a: PartyOldDebt, b: PartyOldDebt) => a.date.localeCompare(b.date);
+    return {
+      clients: clientOldDebts.filter(before).sort(byDate),
+      suppliers: supplierOldDebts.filter(before).sort(byDate),
+    };
+  }, [period, clientOldDebts, supplierOldDebts]);
+
+  /**
+   * Partie « anciennes dettes » completee par les dettes ANTERIEURES a la
+   * periode (acceptees par l'operateur) : chacune avec sa date, au-dessus du
+   * total, qui les inclut.
+   */
+  const withPrior = (part: ReportPart, include: boolean): ReportPart => {
+    if (!include) return part;
+    const list = part.key === 'clientOldDebts' ? priorOldDebts.clients
+      : part.key === 'supplierOldDebts' ? priorOldDebts.suppliers : [];
+    if (!list.length) return part;
+    const extra: DocRow[] = list.map((d) => ({
+      cells: [
+        formatDate(d.date),
+        `${(d.partyName ?? '—').toUpperCase()} — ${(d.description || 'ANCIENNE DETTE').toUpperCase()} (ANTERIEURE A LA PERIODE)`,
+        money(d.paidAmount), money(d.restAmount),
+      ],
+    }));
+    const inPeriodRest = (part.key === 'clientOldDebts' ? clientOldDebts : supplierOldDebts)
+      .filter((d) => withinPeriod(d.date, period?.from, period?.to))
+      .reduce((s2, d) => s2 + d.restAmount, 0);
+    return {
+      ...part,
+      printRows: [...extra, ...part.printRows],
+      printTotalValue: money(inPeriodRest + list.reduce((s2, d) => s2 + d.restAmount, 0)),
+    };
+  };
+
+  /** Demande (si besoin) d'ajouter les anciennes dettes anterieures, puis imprime. */
+  const askPriorThen = (keys: string[], run: (include: boolean) => void) => {
+    const wantsClients = keys.includes('clientOldDebts') && priorOldDebts.clients.length > 0;
+    const wantsSuppliers = keys.includes('supplierOldDebts') && priorOldDebts.suppliers.length > 0;
+    if (!wantsClients && !wantsSuppliers) { run(false); return; }
+    setOldDebtAsk({
+      clients: wantsClients ? priorOldDebts.clients : [],
+      suppliers: wantsSuppliers ? priorOldDebts.suppliers : [],
+      run,
+    });
+  };
+
   const printPart = (part: ReportPart) => {
-    printListDocument(
-      {
-        title: part.label,
-        docDate: period?.to || todayISO(),
-        metaLines,
-        tables: [
-          {
-            columns: part.printColumns,
-            rows: part.printRows,
-            totals: part.printTotalLabel
-              ? [{ label: part.printTotalLabel, value: part.printTotalValue ?? '', strong: true }]
-              : undefined,
-            emptyLabel: 'Aucune ligne sur la période',
-          },
-        ],
-        signatures: ['Le responsable', 'Signature'],
-        fileName: `Rapport_${part.label.replace(/\s+/g, '_')}`,
-      },
-      settings
-    );
+    askPriorThen([part.key], (include) => {
+      const p2 = withPrior(part, include);
+      printListDocument(
+        {
+          title: p2.label,
+          docDate: period?.to || todayISO(),
+          metaLines,
+          tables: [
+            {
+              columns: p2.printColumns,
+              rows: p2.printRows,
+              totals: p2.printTotalLabel
+                ? [{ label: p2.printTotalLabel, value: p2.printTotalValue ?? '', strong: true }]
+                : undefined,
+              emptyLabel: 'Aucune ligne sur la période',
+            },
+          ],
+          signatures: ['Le responsable', 'Signature'],
+          fileName: `Rapport_${p2.label.replace(/\s+/g, '_')}`,
+        },
+        settings
+      );
+    });
   };
 
   /**
@@ -1213,7 +1236,11 @@ export default function ReportsPage() {
    */
   const printGeneral = () => {
     setPrintOpen(false);
-    const picked = parts.filter((p) => checked.includes(p.key));
+    askPriorThen(checked, (include) => printGeneralNow(include));
+  };
+
+  const printGeneralNow = (includePrior: boolean) => {
+    const picked = parts.filter((p) => checked.includes(p.key)).map((p) => withPrior(p, includePrior));
     printListDocument(
       {
         title: 'Rapport general',
@@ -1272,6 +1299,25 @@ export default function ReportsPage() {
           )}
         </div>
       </Card>
+
+      {/* ---------------- SITUATION DES DETTES (toujours a jour) ---------------- */}
+      <section className="space-y-3">
+        <h3 className="flex items-center gap-2 font-display text-lg font-semibold text-text-primary">
+          <Scale size={19} className="text-gold" /> Situation des dettes — clients et fournisseurs
+        </h3>
+        <DebtsOverview />
+      </section>
+
+      {/* ---------------- CALCUL DETAILLE DES GAINS ET DEPENSES ---------------- */}
+      <section className="space-y-3">
+        <h3 className="flex flex-wrap items-center gap-2 font-display text-lg font-semibold text-text-primary">
+          <Calculator size={19} className="text-gold" /> Calcul des gains et des dépenses
+          <span className="text-xs font-normal text-text-muted">
+            du {formatDate((period?.from ?? from) || todayISO(), language)} au {formatDate((period?.to ?? to) || todayISO(), language)}
+          </span>
+        </h3>
+        <GainsBreakdown from={period?.from ?? from} to={period?.to ?? to} />
+      </section>
 
       {!period || !current ? (
         <Card index={1} className="py-12 text-center text-text-muted">
@@ -1413,6 +1459,52 @@ export default function ReportsPage() {
           </AnimatePresence>
         </div>
       )}
+
+      {/* ------- anciennes dettes anterieures a la periode : ajouter ? ------- */}
+      <Modal open={!!oldDebtAsk} onClose={() => setOldDebtAsk(null)} title="Dettes antérieures à la période" size="md">
+        {oldDebtAsk && (
+          <div className="space-y-4">
+            <div className="flex items-start gap-3 rounded-2xl border border-caramel/40 bg-caramel/10 px-4 py-3">
+              <AlertTriangle size={20} className="mt-0.5 shrink-0 text-caramel" />
+              <p className="text-sm text-text-secondary">
+                Des <b className="text-text-primary">anciennes dettes datées avant le {formatDate(period?.from ?? '', language)}</b> ne
+                sont pas comprises dans la période choisie. Voulez-vous les ajouter à cette impression ?
+              </p>
+            </div>
+            {[
+              { label: 'Clients', list: oldDebtAsk.clients },
+              { label: 'Fournisseurs', list: oldDebtAsk.suppliers },
+            ].filter((g) => g.list.length).map((g) => (
+              <div key={g.label} className="rounded-xl border border-gold/20 bg-vanilla/40 p-3">
+                <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-gold-dark">{g.label}</p>
+                {g.list.map((d) => (
+                  <div key={d.id} className="flex justify-between gap-2 border-b border-gold/10 py-1 text-xs last:border-0">
+                    <span className="text-text-secondary">
+                      <b className="text-text-primary">{formatDate(d.date, language)}</b> — {d.partyName ?? '—'}
+                      {d.description ? ` · ${d.description}` : ''}
+                    </span>
+                    <span className="shrink-0 font-bold tabular text-rose-deep">reste {money(d.restAmount)}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <div className="flex flex-col gap-2 border-t border-gold/15 pt-4 sm:flex-row">
+              <Button
+                variant="secondary" className="flex-1"
+                onClick={() => { const a = oldDebtAsk; setOldDebtAsk(null); a.run(false); }}
+              >
+                <Printer size={15} /> Imprimer sans
+              </Button>
+              <Button
+                variant="gold" className="flex-1 font-bold"
+                onClick={() => { const a = oldDebtAsk; setOldDebtAsk(null); a.run(true); }}
+              >
+                <Printer size={15} /> Oui, les ajouter
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* ------------------- liste à cocher du rapport général ------------- */}
       <Modal open={printOpen} onClose={() => setPrintOpen(false)} title="Imprimer le rapport général" size="lg">

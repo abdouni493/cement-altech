@@ -110,6 +110,9 @@ export interface PaymentReceiptData {
 
 export function printPaymentReceipt(data: PaymentReceiptData, store: StoreSettings) {
   const isClient = data.kind === 'client';
+  // Verse plus que la dette : l'excedent est un ACOMPTE (client) ou un
+  // trop-verse (fournisseur) — le recu le dit, montant a l'appui.
+  const excess = Math.max(0, Math.round((data.totalPaid - data.totalDebt) * 100) / 100);
   const methodLabel = paymentMethodLabel(data);
   const detail = [
     data.method === 'cheque' && data.chequeNumber ? `N° DE CHEQUE : ${data.chequeNumber}` : '',
@@ -154,6 +157,13 @@ export function printPaymentReceipt(data: PaymentReceiptData, store: StoreSettin
             },
             { label: 'Total payé', value: formatCurrency(data.totalPaid) },
             { label: 'Reste à payer', value: formatCurrency(data.restAmount), strong: true },
+            ...(excess > 0
+              ? [{
+                  label: isClient ? 'Acompte du client (en sa faveur)' : 'Trop-versé (en notre faveur)',
+                  value: `+ ${formatCurrency(excess)}`,
+                  strong: true,
+                }]
+              : []),
           ],
         },
       ],
@@ -162,7 +172,9 @@ export function printPaymentReceipt(data: PaymentReceiptData, store: StoreSettin
       stamps: [
         data.restAmount > 0
           ? { label: 'Versement partiel', tone: 'warn' as const }
-          : { label: 'Dette soldée', tone: 'ok' as const },
+          : excess > 0
+            ? { label: isClient ? 'Dette soldée — acompte' : 'Dette soldée — trop-versé', tone: 'ok' as const }
+            : { label: 'Dette soldée', tone: 'ok' as const },
       ],
       signatures: [isClient ? 'Le client' : 'Le fournisseur', 'Signature'],
       fileName: `Recu_${data.receiptNumber}`,

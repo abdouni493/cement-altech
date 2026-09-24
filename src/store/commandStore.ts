@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type {
-  CommandDelivery, CommandDeliveryItem, CommandAdjustment, CommandAdjustmentLine,
+  CommandDelivery, CommandDeliveryItem, CommandAdjustment, CommandAdjustmentLine, CommandPayment,
 } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
@@ -60,6 +60,10 @@ export interface Command {
   advancePaid: number;
   /** Reglements encaisses depuis l'ecran « Commandes » (hors acompte). */
   extraPaid?: number;
+  /** Detail date de ces reglements (table command_payments). */
+  payments?: CommandPayment[];
+  /** Acompte du client (avance) utilise comme acompte de la commande. */
+  creditApplied?: number;
   paidAmount: number;
   restAmount: number;
   status: 'pending' | 'finalised' | 'cancelled';
@@ -77,7 +81,7 @@ export interface Command {
 export type AddCommandInput = Omit<
   Command,
   'id' | 'reference' | 'createdAt' | 'paidAmount' | 'restAmount' | 'status' | 'createdBy' | 'advancePaid'
-  | 'totalTtc' | 'tvaAmount' | 'extraPaid'
+  | 'totalTtc' | 'tvaAmount' | 'extraPaid' | 'payments' | 'creditApplied'
 > & {
   createdBy?: string;
   advancePaid?: number;
@@ -169,6 +173,11 @@ export interface DeliveryPayment {
   cashPaid?: number;
   /** Part de l'acompte de la commande imputee ici (n'entre pas en caisse). */
   advanceApplied?: number;
+  /**
+   * Acompte du CLIENT (verse en trop auparavant) a utiliser sur ce bon — impute
+   * apres la creation de la facture, sans ecriture de caisse.
+   */
+  creditUsed?: number;
 }
 
 export interface DeliveryDriver {

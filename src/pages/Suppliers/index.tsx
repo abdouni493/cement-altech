@@ -31,7 +31,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency } from '@/lib/utils';
 import { printPaymentReceipt } from '@/lib/documents';
-import { computePartyBalance } from '@/lib/partyBalance';
+import { buildSupplierAccounts, EMPTY_SUPPLIER_ACCOUNT, sumAccounts, type SupplierAccount } from '@/lib/accounts';
 import { toast } from '@/components/ui/Toast';
 import type {
   Supplier, PartyPayment, PaymentMethodDetails, Purchase, PartyOldDebt,
@@ -42,7 +42,7 @@ type SupplierFilter = 'all' | 'debt' | 'clear' | 'credit';
 /** Situation d'un fournisseur telle qu'affichee sur sa carte et dans le tableau. */
 interface SupplierStats {
   count: number;
-  balance: ReturnType<typeof computePartyBalance>;
+  balance: SupplierAccount;
   total: number; paid: number; rest: number; credit: number;
   paymentsCount: number; oldDebtsCount: number; refundsCount: number;
 }
@@ -50,7 +50,7 @@ interface SupplierStats {
 /** Fournisseur sans aucune ecriture — evite un `undefined` dans les tableaux. */
 const EMPTY_SUPPLIER_STATS: SupplierStats = {
   count: 0,
-  balance: computePartyBalance({ documentsBilled: 0, documentsPaid: 0, documentsRest: 0, oldDebts: [] }),
+  balance: EMPTY_SUPPLIER_ACCOUNT,
   total: 0, paid: 0, rest: 0, credit: 0,
   paymentsCount: 0, oldDebtsCount: 0, refundsCount: 0,
 };
@@ -97,41 +97,34 @@ export default function SuppliersPage() {
    * fournisseur au lieu d'etre rebalayees a chaque rendu ET pour chaque carte.
    */
   const statsBySupplier = useMemo(() => {
-    interface Bucket { ps: typeof purchases; pays: number; olds: typeof oldDebts; refs: number }
-    const index = new Map<string, Bucket>();
-    const bucket = (id: string): Bucket => {
-      let b = index.get(id);
-      if (!b) { b = { ps: [], pays: 0, olds: [], refs: 0 }; index.set(id, b); }
-      return b;
+    const accounts = buildSupplierAccounts({ suppliers, purchases, oldDebts });
+    const counts = new Map<string, { pays: number; olds: number; refs: number; docPays: number }>();
+    const count = (id: string) => {
+      let c = counts.get(id);
+      if (!c) { c = { pays: 0, olds: 0, refs: 0, docPays: 0 }; counts.set(id, c); }
+      return c;
     };
-    const creditOf = new Map(suppliers.map((x) => [x.id, x.creditAmount ?? 0]));
-    suppliers.forEach((x) => bucket(x.id));
-    purchases.forEach((p) => { if (p.supplierId) bucket(p.supplierId).ps.push(p); });
-    payments.forEach((p) => { bucket(p.partyId).pays += 1; });
-    oldDebts.forEach((d) => { bucket(d.partyId).olds.push(d); });
-    refunds.forEach((r) => { bucket(r.partyId).refs += 1; });
+    payments.forEach((p) => { count(p.partyId).pays += 1; });
+    oldDebts.forEach((d) => { count(d.partyId).olds += 1; });
+    refunds.forEach((r) => { count(r.partyId).refs += 1; });
+    purchases.forEach((p) => { if (p.supplierId) count(p.supplierId).docPays += (p.payments ?? []).length; });
 
     const out = new Map<string, SupplierStats>();
-    index.forEach((b, id) => {
-      const balance = computePartyBalance({
-        documentsBilled: b.ps.reduce((x, y) => x + y.totalAmount, 0),
-        documentsPaid: b.ps.reduce((x, y) => x + y.paidAmount, 0),
-        documentsRest: b.ps.reduce((x, y) => x + y.restAmount, 0),
-        oldDebts: b.olds,
-        credit: creditOf.get(id) ?? 0,
-      });
+    accounts.forEach((balance, id) => {
+      const c = counts.get(id) ?? { pays: 0, olds: 0, refs: 0, docPays: 0 };
       out.set(id, {
-        count: b.ps.length,
+        count: balance.purchasesCount,
         balance,
         total: balance.billed,
-        paid: balance.paid,
+        // « Regle » = tout l'argent verse, trop-verse compris : achete − regle = solde.
+        paid: balance.paid + balance.credit,
         rest: balance.rest,
         credit: balance.credit,
         // Tous les reglements du fournisseur : ceux saisis sur sa carte ET ceux
         // portes par une facture d'achat.
-        paymentsCount: b.pays + b.ps.reduce((x, p) => x + (p.payments ?? []).length, 0),
-        oldDebtsCount: b.olds.length,
-        refundsCount: b.refs,
+        paymentsCount: c.pays + c.docPays,
+        oldDebtsCount: c.olds,
+        refundsCount: c.refs,
       });
     });
     return out;
@@ -160,17 +153,17 @@ export default function SuppliersPage() {
   );
 
   const globals = useMemo(() => {
-    const total = purchases.reduce((s, p) => s + p.totalAmount, 0)
-      + oldDebts.reduce((s, d) => s + d.amount, 0);
-    const paid = purchases.reduce((s, p) => s + p.paidAmount, 0)
-      + oldDebts.reduce((s, d) => s + d.paidAmount, 0);
-    const rest = purchases.reduce((s, p) => s + p.restAmount, 0)
-      + oldDebts.reduce((s, d) => s + d.restAmount, 0);
-    const credit = suppliers.reduce((s, x) => s + Math.max(0, x.creditAmount ?? 0), 0);
-    const withDebt = suppliers.filter((s) => statsOf(s.id).balance.hasDebt).length;
-    return { total, paid, rest, credit, withDebt };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [purchases, suppliers, oldDebts, statsBySupplier]);
+    const list = [...statsBySupplier.values()].map((x) => x.balance);
+    const net = sumAccounts(list);
+    return {
+      total: list.reduce((acc, x) => acc + x.billed, 0),
+      // tout l'argent verse, trop-verse compris (comme la colonne « Regle »)
+      paid: list.reduce((acc, x) => acc + x.paid + x.credit, 0),
+      rest: net.debt,
+      credit: net.credit,
+      withDebt: net.debtors,
+    };
+  }, [statsBySupplier]);
 
   const handleSubmit = async (data: Omit<Supplier, 'id'>) => {
     if (editing) {
@@ -233,7 +226,7 @@ export default function SuppliersPage() {
         bankName: payment.bankName,
         totalDebt: st.total,
         totalPaid: st.paid,
-        restAmount: st.rest,
+        restAmount: Math.max(0, st.balance.net),
       },
       settings
     );
@@ -560,8 +553,10 @@ export default function SuppliersPage() {
             onClose={() => setVersing(null)}
             clientName={versing.name}
             clientPhone={versing.phone}
+            kind="supplier"
             total={st.total}
-            paid={st.paid + st.credit}
+            paid={st.paid}
+            credit={st.credit}
             onSubmit={(amount, notes, paidAt, method) =>
               handleVersement(versing, amount, notes, paidAt, method)}
           />

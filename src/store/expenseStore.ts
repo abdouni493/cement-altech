@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Expense, Category, PurchaseOrder } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
+import { todayISO } from '@/lib/utils';
 
 interface ExpenseState {
   expenses: Expense[];
@@ -46,7 +47,7 @@ export const useExpenseStore = create<ExpenseState>()((set, get) => ({
 
   addExpense: async (e) => {
     const row = await save('expenses.create', () =>
-      db.expenses.create({ ...e, date: e.date || new Date().toISOString().slice(0, 10) })
+      db.expenses.create({ ...e, date: e.date || todayISO() })
     );
     set({ expenses: [row, ...get().expenses] });
     return row;

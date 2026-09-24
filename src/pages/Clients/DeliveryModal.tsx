@@ -22,6 +22,8 @@ interface DeliveryModalProps {
   editing?: CommandDelivery | null;
   /** Acompte de la commande encore disponible pour être imputé sur ce bon. */
   advanceAvailable?: number;
+  /** Acompte LIBRE du client (versé en trop auparavant), utilisable sur ce bon. */
+  clientCredit?: number;
   onClose: () => void;
   onSave: (
     items: CommandDeliveryItem[],
@@ -58,7 +60,7 @@ function toLocal(iso: string): string {
  * aussitôt dans « Ventes », dans la caisse et dans les rapports.
  */
 export function DeliveryModal({
-  open, command, editing, advanceAvailable = 0, onClose, onSave,
+  open, command, editing, advanceAvailable = 0, clientCredit = 0, onClose, onSave,
 }: DeliveryModalProps) {
   const ficheTechnics = useFicheTechnicStore((s) => s.ficheTechnics);
   const products = useStockStore((s) => s.products);
@@ -79,6 +81,8 @@ export function DeliveryModal({
   const [cashPaid, setCashPaid] = useState(0);
   /** Part de l'acompte de la commande imputée sur ce bon. */
   const [advanceApplied, setAdvanceApplied] = useState(0);
+  /** Part de l'acompte LIBRE du client imputée sur ce bon (-1 = tout ce qui peut l'être). */
+  const [creditApplied, setCreditApplied] = useState(-1);
   const isHistorical = !!command?.isHistorical;
 
   useEffect(() => {
@@ -132,6 +136,8 @@ export function DeliveryModal({
     // On propose desormais la totalite de l'acompte encore disponible ;
     // l'operateur peut toujours le reduire s'il ne veut pas l'imputer ici.
     setAdvanceApplied(editing ? (editing.advanceApplied ?? 0) : -1);
+    // l'acompte libre du client est propose d'office sur un NOUVEAU bon
+    setCreditApplied(editing ? 0 : -1);
   }, [open, command, editing]);
 
   /** Coche « même chauffeur » → on recopie celui de la commande. */
@@ -207,9 +213,14 @@ export function DeliveryModal({
   const advanceUsed = advanceApplied < 0
     ? maxAdvance
     : Math.max(0, Math.min(advanceApplied, maxAdvance));
-  const maxCash = Math.max(0, totalTtc - advanceUsed);
+  /** Acompte libre du client : il paie ce que l'acompte de la commande ne couvre pas. */
+  const maxCredit = Math.max(0, Math.min(clientCredit, totalTtc - advanceUsed));
+  const creditUsed = creditApplied < 0
+    ? maxCredit
+    : Math.max(0, Math.min(creditApplied, maxCredit));
+  const maxCash = Math.max(0, totalTtc - advanceUsed - creditUsed);
   const cashUsed = Math.max(0, Math.min(cashPaid, maxCash));
-  const paidTotal = advanceUsed + cashUsed;
+  const paidTotal = advanceUsed + creditUsed + cashUsed;
   const restToPay = Math.max(0, totalTtc - paidTotal);
 
   const handleSave = async () => {
@@ -239,7 +250,7 @@ export function DeliveryModal({
           driverPlate: driverPlate.trim() || undefined,
           location: location.trim() || undefined,
         },
-        { tvaEnabled, tvaRate, cashPaid: cashUsed, advanceApplied: advanceUsed }
+        { tvaEnabled, tvaRate, cashPaid: cashUsed, advanceApplied: advanceUsed, creditUsed }
       );
       onClose();
     } finally {
@@ -570,6 +581,43 @@ export function DeliveryModal({
                     </div>
                     <p className="text-[10px] text-text-muted mt-1">
                       Déjà encaissé à la commande — n'entre pas une seconde fois en caisse.
+                    </p>
+                  </div>
+                )}
+
+                {maxCredit > 0 && (
+                  <div>
+                    <label className="text-xs font-semibold text-text-secondary flex items-center gap-1.5 mb-1">
+                      <PiggyBank size={13} className="text-pistachio" />
+                      Acompte du client à utiliser
+                      <span className="text-text-muted font-normal">
+                        (disponible {formatCurrency(clientCredit)})
+                      </span>
+                    </label>
+                    <div className="flex gap-1.5">
+                      <input
+                        type="number" step="any" min={0} max={maxCredit}
+                        value={creditUsed}
+                        onChange={(e) => setCreditApplied(Math.max(0, Number(e.target.value)))}
+                        className="flex-1 h-10 rounded-lg border-2 border-[--border-input] bg-[--surface-input] px-3 text-sm tabular font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-gold/30 focus:border-gold"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setCreditApplied(maxCredit)}
+                        className="h-10 px-3 rounded-lg border border-gold/25 text-[11px] font-semibold text-text-muted hover:bg-gold/10 hover:text-gold-dark"
+                      >
+                        Tout
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCreditApplied(0)}
+                        className="h-10 px-3 rounded-lg border border-rose-deep/25 text-[11px] font-semibold text-rose-deep hover:bg-rose-deep/10"
+                      >
+                        Non
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-text-muted mt-1">
+                      Versé en trop par le client auparavant — déjà en caisse, aucune nouvelle écriture.
                     </p>
                   </div>
                 )}

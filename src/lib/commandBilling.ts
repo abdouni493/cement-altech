@@ -1,4 +1,4 @@
-import type { Sale } from '@/types';
+import type { Sale, CommandDelivery } from '@/types';
 import type { Command } from '@/store/commandStore';
 
 /* ============================================================================
@@ -66,4 +66,57 @@ export function netCommandTotals(commands: Command[], sales: Sale[]): CommandNet
     const n = netCommand(cmd, sales);
     return { billed: acc.billed + n.billed, paid: acc.paid + n.paid, rest: acc.rest + n.rest };
   }, { ...ZERO });
+}
+
+/* ============================================================================
+ *  L'ARGENT D'UNE COMMANDE
+ * ----------------------------------------------------------------------------
+ *  argent de la commande = acompte versé à la création
+ *                        + règlements saisis sur la commande
+ *                        + acompte du client (avance) utilisé dessus
+ *  disponible            = cet argent − ce qui est déjà imputé sur ses bons
+ *
+ *  Le disponible est un ACOMPTE du client : il vient en déduction de sa dette
+ *  et paiera automatiquement ses prochaines livraisons.
+ * ========================================================================== */
+
+/** Tout l'argent reçu au titre de la commande elle-même. */
+export function commandMoney(cmd: Command): number {
+  return (cmd.advancePaid ?? 0) + (cmd.extraPaid ?? 0) + (cmd.creditApplied ?? 0);
+}
+
+/** Argent de la commande pas encore imputé sur un bon de livraison. */
+export function commandAdvanceAvailable(cmd: Command, deliveries: CommandDelivery[]): number {
+  const used = deliveries
+    .filter((d) => d.commandId === cmd.id)
+    .reduce((s, d) => s + (d.advanceApplied ?? 0), 0);
+  return Math.max(0, Math.round((commandMoney(cmd) - used) * 100) / 100);
+}
+
+export interface ClientCommandSummary {
+  /** Argent des commandes pas encore imputé (acompte sur commandes). */
+  advance: number;
+  /** Valeur TTC commandée et pas encore livrée (information, pas une dette). */
+  pending: number;
+  /** Nombre de commandes qui attendent encore une livraison. */
+  pendingCount: number;
+}
+
+/** Acompte et valeur non livrée d'une liste de commandes (celles d'un client). */
+export function clientCommandSummary(
+  commands: Command[], sales: Sale[], deliveries: CommandDelivery[]
+): ClientCommandSummary {
+  let advance = 0;
+  let pending = 0;
+  let pendingCount = 0;
+  commands.forEach((cmd) => {
+    if (cmd.status === 'cancelled') return;
+    advance += commandAdvanceAvailable(cmd, deliveries);
+    const left = netCommand(cmd, sales).billed;
+    if (left > 0.005) {
+      pending += left;
+      pendingCount += 1;
+    }
+  });
+  return { advance: Math.round(advance * 100) / 100, pending: Math.round(pending * 100) / 100, pendingCount };
 }

@@ -5,7 +5,7 @@ import {
   ShoppingCart, Plus, Search, Calendar, Clock, Eye, Pencil, Trash2, CheckCircle2,
   AlertTriangle, Printer, UserPlus, X, Coins, User, Phone, Receipt, Truck,
   PackageCheck, History, ClipboardList, MapPin, Hash, Package, Percent, Wallet,
-  ScissorsSquare, PlusCircle, Copy,
+  ScissorsSquare, PlusCircle, Copy, PiggyBank,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -53,7 +53,7 @@ export default function CommandsPage() {
     addDelivery, updateDelivery, deleteDelivery,
     cancelRemainder, increaseCommand: increaseCommandLines,
   } = useCommandStore();
-  const { clients, addClient, updateClient } = useClientStore();
+  const { clients, addClient, updateClient, applyCreditToCommand, applyCreditToSale } = useClientStore();
   const sales = useSalesStore((s) => s.sales);
   const { ficheTechnics } = useFicheTechnicStore();
   const settings = useSettingsStore((s) => s.settings);
@@ -93,6 +93,9 @@ export default function CommandsPage() {
   const [receiveMinute, setReceiveMinute] = useState('30');
   const [customTotal, setCustomTotal] = useState<number | null>(null);
   const [versement, setVersement] = useState(0);
+  /** Acompte du client (versé en trop auparavant) utilisé sur la nouvelle commande. */
+  const [useClientCredit, setUseClientCredit] = useState(true);
+  const [clientCreditInput, setClientCreditInput] = useState<number | null>(null);
   /** TVA de la commande — activable / désactivable, reprise sur les livraisons. */
   const [tvaEnabled, setTvaEnabled] = useState(false);
   const [tvaRate, setTvaRate] = useState(DEFAULT_TVA_RATE);
@@ -118,8 +121,9 @@ export default function CommandsPage() {
   /** Annuler le reste non livre / augmenter les quantites commandees. */
   const [adjust, setAdjust] = useState<{ mode: 'cancel' | 'increase'; cmd: Command } | null>(null);
 
+  // Les bons de livraison d'une commande, du plus ANCIEN au plus RECENT.
   const deliveriesOf = (commandId: string) =>
-    deliveries.filter((d) => d.commandId === commandId).sort((a, b) => b.deliveredAt.localeCompare(a.deliveredAt));
+    deliveries.filter((d) => d.commandId === commandId).sort((a, b) => a.deliveredAt.localeCompare(b.deliveredAt));
 
   /**
    * Acompte de la commande pas encore imputé sur un bon de livraison.
@@ -131,7 +135,7 @@ export default function CommandsPage() {
     const used = deliveries
       .filter((d) => d.commandId === cmd.id)
       .reduce((s, d) => s + (d.advanceApplied ?? 0), 0);
-    return Math.max(0, (cmd.advancePaid ?? 0) + (cmd.extraPaid ?? 0) - used);
+    return Math.max(0, (cmd.advancePaid ?? 0) + (cmd.extraPaid ?? 0) + (cmd.creditApplied ?? 0) - used);
   };
 
   /** Versements imprimés en bas du bon de commande. */
@@ -144,10 +148,16 @@ export default function CommandsPage() {
       .filter((d) => d.commandId === cmd.id && (d.cashPaid ?? 0) > 0)
       .sort((a, b) => a.deliveredAt.localeCompare(b.deliveredAt))
       .forEach((d) => rows.push({ amount: d.cashPaid ?? 0, date: d.deliveredAt.slice(0, 10) }));
-    if ((cmd.extraPaid ?? 0) > 0) {
-      rows.push({ amount: cmd.extraPaid ?? 0, date: todayISO(), label: 'Règlements sur la commande' });
+    const dated = cmd.payments ?? [];
+    dated.forEach((p) => rows.push({ amount: p.amount, date: p.date }));
+    const undated = (cmd.extraPaid ?? 0) - dated.reduce((s, p) => s + p.amount, 0);
+    if (undated > 0.004) {
+      rows.push({ amount: undated, date: cmd.createdAt.slice(0, 10), label: 'Règlements sur la commande' });
     }
-    return rows;
+    if ((cmd.creditApplied ?? 0) > 0) {
+      rows.push({ amount: cmd.creditApplied ?? 0, date: cmd.createdAt.slice(0, 10), label: 'Acompte du client utilisé' });
+    }
+    return rows.sort((a, b) => a.date.localeCompare(b.date));
   };
 
   /* --------------------------------------------------------------- filters */
@@ -291,11 +301,21 @@ export default function CommandsPage() {
 
   const computedTotalSum = selectedItems.reduce((sum, item) => sum + item.totalPrice, 0);
   const finalTotalAmount = customTotal !== null ? customTotal : computedTotalSum;
+  const formTtc = finalTotalAmount + (tvaEnabled ? Math.round(finalTotalAmount * tvaRate) / 100 : 0);
+  /** Acompte du client sélectionné (création seulement). */
+  const selectedClientCredit = !editingId && selectedClient
+    ? Math.max(0, clients.find((c) => c.id === selectedClient.id)?.creditAmount ?? 0)
+    : 0;
+  const formCreditUsed = useClientCredit && selectedClientCredit > 0
+    ? Math.max(0, Math.min(clientCreditInput ?? selectedClientCredit, selectedClientCredit,
+        Math.max(0, formTtc - (Number(versement) || 0))))
+    : 0;
 
   const handleOpenCreateForm = (historical = false) => {
     setEditingId(null); setSelectedClient(null); setSelectedItems([]);
     setReceiveDate(todayISO()); setReceiveHour('14'); setReceiveMinute('30');
     setCustomTotal(null); setVersement(0); setClientSearch(''); setRecipeSearch('');
+    setUseClientCredit(true); setClientCreditInput(null);
     setTvaEnabled(false); setTvaRate(DEFAULT_TVA_RATE);
     setBonNumber(''); setCreatedDate(todayISO()); setOriginalCreatedDate(todayISO());
     setFormHistorical(historical);
@@ -320,7 +340,10 @@ export default function CommandsPage() {
     setDriverPlate(cmd.driverPlate || '');
     setSelectedItems(cmd.items.map((it, i) => ({ ...it, position: it.position ?? i })));
     setReceiveDate(cmd.receiveDate); setReceiveHour(cmd.receiveHour); setReceiveMinute(cmd.receiveMinute);
-    setCustomTotal(cmd.totalAmount); setVersement(cmd.paidAmount);
+    // L'acompte de la commande — et NON tout ce qui a ete paye (acompte +
+    // reglements + encaissements des livraisons) : en re-enregistrant la
+    // commande, ce total devenait l'acompte et entrait une seconde fois en caisse.
+    setCustomTotal(cmd.totalAmount); setVersement(cmd.advancePaid ?? 0);
     setTvaEnabled(!!cmd.tvaEnabled); setTvaRate(cmd.tvaRate || DEFAULT_TVA_RATE);
     setBonNumber(cmd.bonNumber || '');
     setCreatedDate(cmd.createdAt.slice(0, 10)); setOriginalCreatedDate(cmd.createdAt.slice(0, 10));
@@ -381,8 +404,16 @@ export default function CommandsPage() {
         if (updated) setPrintPrompt({ kind: 'command', cmd: updated });
       } else {
         const newCmd = await addCommand(cmdData);
+        let saved = newCmd;
+        if (newCmd && formCreditUsed > 0.004) {
+          try {
+            const applied = await applyCreditToCommand(newCmd.id, formCreditUsed);
+            if (applied > 0) toast.info(`Acompte du client utilisé : ${formatCurrency(applied)}`);
+            saved = useCommandStore.getState().commands.find((c) => c.id === newCmd.id) ?? newCmd;
+          } catch { /* message déjà affiché */ }
+        }
         toast.success('Commande créée');
-        if (newCmd) setPrintPrompt({ kind: 'command', cmd: newCmd });
+        if (saved) setPrintPrompt({ kind: 'command', cmd: saved });
       }
       setFormOpen(false);
     } finally {
@@ -416,12 +447,23 @@ export default function CommandsPage() {
     if (!deliverCmd) return;
     if (editingDelivery) {
       await updateDelivery(editingDelivery.id, items, deliveredAt, notes, driver, payment);
+      const saleId = useCommandStore.getState().deliveries.find((d) => d.id === editingDelivery.id)?.saleId;
+      if (saleId && (payment.creditUsed ?? 0) > 0.004) {
+        try { await applyCreditToSale(saleId, payment.creditUsed); } catch { /* message déjà affiché */ }
+      }
       toast.success('Livraison modifiée — la facture de vente a été mise à jour');
       setEditingDelivery(null);
       setDeliverCmd(null);
       return;
     }
-    const delivery = await addDelivery(deliverCmd.id, items, deliveredAt, notes, driver, payment);
+    let delivery = await addDelivery(deliverCmd.id, items, deliveredAt, notes, driver, payment);
+    if (delivery?.saleId && (payment.creditUsed ?? 0) > 0.004) {
+      try {
+        const applied = await applyCreditToSale(delivery.saleId, payment.creditUsed);
+        if (applied > 0) toast.info(`Acompte du client utilisé : ${formatCurrency(applied)}`);
+        delivery = useCommandStore.getState().deliveries.find((d) => d.id === delivery!.id) ?? delivery;
+      } catch { /* message déjà affiché */ }
+    }
     const refreshed = useCommandStore.getState().commands.find((c) => c.id === deliverCmd.id) ?? deliverCmd;
     const rest = delivery?.restAmount ?? 0;
     toast.success(
@@ -1466,6 +1508,40 @@ export default function CommandsPage() {
             />
           </div>
 
+          {selectedClientCredit > 0 && (
+            <div className="rounded-2xl border border-pistachio/40 bg-pistachio/10 p-4 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="flex items-center gap-2 text-sm font-semibold text-text-primary cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={useClientCredit}
+                    onChange={(e) => setUseClientCredit(e.target.checked)}
+                    className="h-4 w-4 accent-[#B4881B]"
+                  />
+                  <PiggyBank size={15} className="text-pistachio" /> Utiliser l&rsquo;acompte du client
+                </label>
+                <span className="text-xs font-bold tabular text-pistachio">
+                  {formatCurrency(selectedClientCredit)} disponible
+                </span>
+              </div>
+              {useClientCredit && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-text-muted">Montant utilisé comme acompte de la commande</span>
+                  <input
+                    type="number" step="any" min={0}
+                    value={formCreditUsed}
+                    onChange={(e) => setClientCreditInput(Math.max(0, Number(e.target.value)))}
+                    className="h-9 w-36 rounded-lg border-2 border-[--border-input] bg-[--surface-input] px-2 text-right text-sm font-semibold tabular text-text-primary focus:border-gold focus:outline-none focus:ring-2 focus:ring-gold/30"
+                  />
+                </div>
+              )}
+              <p className="text-[11px] text-text-muted">
+                Le client a versé plus que sa dette : cet acompte est déjà en caisse. Il n&rsquo;y entre pas une seconde
+                fois et paiera automatiquement les bons de livraison de cette commande.
+              </p>
+            </div>
+          )}
+
           {/* TVA de la commande — activable / désactivable */}
           <div className="border border-gold/20 rounded-2xl p-4 bg-vanilla/40 space-y-2">
             <div className="flex flex-wrap items-center gap-3">
@@ -1518,9 +1594,7 @@ export default function CommandsPage() {
           <div className="flex justify-between items-center p-3 rounded-xl bg-gold/10 border border-gold/30 text-gold-dark font-bold text-xs">
             <span>Reste à payer (dette enregistrée)</span>
             <span className="text-sm tabular text-rose-deep">
-              {formatCurrency(Math.max(0,
-                finalTotalAmount + (tvaEnabled ? Math.round(finalTotalAmount * tvaRate) / 100 : 0) - versement
-              ))}
+              {formatCurrency(Math.max(0, formTtc - versement - formCreditUsed))}
             </span>
           </div>
 
@@ -1785,6 +1859,9 @@ export default function CommandsPage() {
         editing={editingDelivery}
         advanceAvailable={
           advanceAvailableOf(deliverCmd) + (editingDelivery?.advanceApplied ?? 0)
+        }
+        clientCredit={
+          deliverCmd ? Math.max(0, clients.find((c) => c.id === deliverCmd.clientId)?.creditAmount ?? 0) : 0
         }
         onClose={() => { setDeliverCmd(null); setEditingDelivery(null); }}
         onSave={handleSaveDelivery}

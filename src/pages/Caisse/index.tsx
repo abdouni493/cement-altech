@@ -33,6 +33,8 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { useCountUp } from '@/hooks/useCountUp';
 import { formatCurrency, formatDate, todayISO } from '@/lib/utils';
 import { netCommandTotals } from '@/lib/commandBilling';
+import { caisseBalance, caisseBreakdown } from '@/lib/finance';
+import { buildClientAccounts, sumAccounts } from '@/lib/accounts';
 import { cardVariants } from '@/lib/animations';
 import type { CaisseTransaction, CaisseTransactionType } from '@/types';
 
@@ -72,9 +74,10 @@ export default function CaissePage() {
   const navigate = useNavigate();
 
   const {
-    transactions, addTransaction, updateTransaction, deleteTransaction,
+    transactions, addTransaction, updateTransaction, deleteTransaction, initialBalance,
     categories: caisseCategories, addCategory: addCaisseCategory, deleteCategory: deleteCaisseCategory,
   } = useCaisseStore();
+  const clients = useClientStore((s) => s.clients);
   const sales = useSalesStore((s) => s.sales);
   const purchases = usePurchaseStore((s) => s.purchases);
   const expenses = useExpenseStore((s) => s.expenses);
@@ -129,9 +132,14 @@ export default function CaissePage() {
         w.acomptes.reduce((a, p) => a + p.amount, 0),
       0
     );
-    const inAll = depositsAll + salesCashAll;
-    const outAll = withdrawalsAll + purchasesPaidAll + expensesAll + workerPaidAll;
-    const balance = inAll - outAll;
+    // Chaque encaissement de vente, achat, depense, salaire ou versement ecrit
+    // DEJA sa ligne dans la caisse (declencheurs de la base) : les rajouter
+    // ici les comptait DEUX FOIS. Solde = solde initial + entrees - sorties,
+    // exactement comme `caisse_balance()` cote base.
+    void purchasesPaidAll; void expensesAll; void workerPaidAll;
+    const inAll = depositsAll;
+    const outAll = withdrawalsAll;
+    const balance = caisseBalance(transactions, initialBalance);
 
     // ---- Current snapshots (now) ----
     const comptoirQty = comptoirItems.reduce((s, i) => s + i.quantity, 0);
@@ -161,16 +169,17 @@ export default function CaissePage() {
     // ---- Dettes clients : ventes + part des commandes non encore facturee --
     const salesDebt = pSales.reduce((s, x) => s + x.restAmount, 0);
     const pCommands = commands.filter((cx) => inPeriod(cx.createdAt) || inPeriod(cx.receiveDate));
-    const commandsDebt = netCommandTotals(pCommands, sales).rest;
+    // Une commande NON LIVREE n'est pas une dette : sa valeur restant a livrer
+    // est une information, pas une creance.
+    const commandsDebt = netCommandTotals(pCommands, sales).billed;
     const oldDebtsRest = clientOldDebts
       .filter((d) => inPeriod(d.date))
       .reduce((s, x) => s + x.restAmount, 0);
-    const clientDebtTotal = salesDebt + commandsDebt + oldDebtsRest;
-    /** Dette client TOUTES PERIODES — la vraie ardoise de l'entreprise. */
-    const clientDebtAll =
-      sales.reduce((s, x) => s + x.restAmount, 0)
-      + netCommandTotals(commands, sales).rest
-      + clientOldDebts.reduce((s, x) => s + x.restAmount, 0);
+    const clientDebtTotal = salesDebt + oldDebtsRest;
+    /** Dette client TOUTES PERIODES (acomptes deduits) — le meme calcul que les cartes clients. */
+    const clientDebtAll = sumAccounts(
+      buildClientAccounts({ clients, sales, commands, deliveries, oldDebts: clientOldDebts }).values()
+    ).debt;
     const purchasesTotal = pPurch.reduce((s, x) => s + x.totalAmount, 0);
     const purchasesPaid = pPurch.reduce((s, x) => s + x.paidAmount, 0);
     const expensesTotal = pExp.reduce((s, x) => s + x.amount, 0);
@@ -223,9 +232,13 @@ export default function CaissePage() {
     const depositCats = groupByCat(pTx.filter((x) => x.type === 'deposit'));
     const withdrawalCats = groupByCat(pTx.filter((x) => x.type === 'withdrawal'));
 
-    const periodIn = salesPaid + depositsP;
-    const periodOut = purchasesPaid + expensesTotal + workerPayments + withdrawalsP;
+    // Entrees / sorties de la periode : les ecritures de caisse SEULES (elles
+    // contiennent deja les ventes, achats, depenses et salaires), ventilees
+    // selon le document qui les a produites.
+    const periodIn = depositsP;
+    const periodOut = withdrawalsP;
     const periodNet = periodIn - periodOut;
+    const flow = caisseBreakdown(pTx);
 
     // ---- Per-product sales over the period (qty sold + revenue) ----
     const salesMap = new Map<string, { name: string; units: number; revenue: number; unit?: string; sellByUnit?: boolean }>();
@@ -283,11 +296,11 @@ export default function CaissePage() {
       purchasesByCategory, periodProductions: pProd,
       depositCats, withdrawalCats,
       posSalesTotal, deliverySalesTotal, deliverySalesRest, deliveriesCount,
-      salesDebt, commandsDebt, oldDebtsRest, clientDebtTotal, clientDebtAll,
+      salesDebt, commandsDebt, oldDebtsRest, clientDebtTotal, clientDebtAll, flow,
     };
   }, [
     transactions, sales, purchases, expenses, productions, comptoirItems, products,
-    categories, workers, commands, deliveries, clientOldDebts, bounds, t,
+    categories, workers, commands, deliveries, clientOldDebts, clients, initialBalance, bounds, t,
   ]);
 
   const visibleTx = useMemo(
@@ -551,9 +564,9 @@ export default function CaissePage() {
         <StatCard index={2} label="Total ventes + livraisons" value={c.salesTotal} icon={<Coins size={18} />} format="currency" accent="gold" />
         <StatCard index={3} label="Encaissé sur la période" value={c.salesPaid} icon={<Wallet size={18} />} format="currency" accent="pistachio" />
         <StatCard index={4} label="Dettes sur ventes/livraisons" value={c.salesDebt} icon={<Wallet size={18} />} format="currency" accent="rose" />
-        <StatCard index={5} label="Dettes sur commandes (non livrées)" value={c.commandsDebt} icon={<Receipt size={18} />} format="currency" accent="caramel" />
+        <StatCard index={5} label="Commandes non livrées (pas encore dues)" value={c.commandsDebt} icon={<Receipt size={18} />} format="currency" accent="caramel" />
         <StatCard index={6} label="Anciennes dettes (période)" value={c.oldDebtsRest} icon={<History size={18} />} format="currency" accent="caramel" />
-        <StatCard index={7} label="TOTAL DETTES CLIENTS (tout)" value={c.clientDebtAll} icon={<Wallet size={18} />} format="currency" accent="rose" />
+        <StatCard index={7} label="TOTAL DETTES CLIENTS (acomptes déduits)" value={c.clientDebtAll} icon={<Wallet size={18} />} format="currency" accent="rose" />
       </div>
 
       {/* ===== Per-product sales (period) + comptoir rest (now) ===== */}
@@ -770,19 +783,23 @@ export default function CaissePage() {
             <BreakdownGroup
               title={t('moneyIn')} total={c.periodIn} positive
               items={[
-                { label: t('sales'), value: c.salesPaid, color: 'from-[#A6E9CE] to-[#3FB591]' },
-                { label: t('deposit'), value: c.depositsP, color: 'from-[#FFC2DD] to-[#FF7FB0]' },
+                { label: t('sales'), value: c.flow.sales, color: 'from-[#A6E9CE] to-[#3FB591]' },
+                { label: 'Versements clients', value: c.flow.clientPayments, color: 'from-[#A6E9CE] to-[#2F9E7E]' },
+                { label: 'Acomptes / règlements de commande', value: c.flow.commands, color: 'from-[#FFE08A] to-[#E0A82E]' },
+                { label: 'Excédents récupérés', value: c.flow.supplierRefunds, color: 'from-[#CDB0F5] to-[#9B7ED8]' },
+                { label: 'Autres entrées', value: c.flow.otherIn, color: 'from-[#FFC2DD] to-[#FF7FB0]' },
               ]}
             />
             <BreakdownGroup
               title={t('moneyOut')} total={c.periodOut}
               items={[
-                { label: t('purchase'), value: c.purchasesPaid, color: 'from-[#FFD08A] to-[#F2944A]' },
-                { label: t('expenses'), value: c.expensesTotal, color: 'from-[#FFB0CB] to-[#F2547D]' },
-                { label: 'Salaires', value: c.salaryPaid, color: 'from-[#CDB0F5] to-[#9B7ED8]' },
-                { label: 'Heures sup.', value: c.overtimePaid, color: 'from-[#FFD08A] to-[#F2944A]' },
-                { label: 'Acomptes', value: c.acomptesPaid, color: 'from-[#A6E9CE] to-[#3FB591]' },
-                { label: t('withdrawal'), value: c.withdrawalsP, color: 'from-[#FF9CC0] to-[#E5547F]' },
+                { label: t('purchase'), value: c.flow.purchases, color: 'from-[#FFD08A] to-[#F2944A]' },
+                { label: 'Versements fournisseurs', value: c.flow.supplierPayments, color: 'from-[#FFD08A] to-[#D9772E]' },
+                { label: t('expenses'), value: c.flow.expenses, color: 'from-[#FFB0CB] to-[#F2547D]' },
+                { label: 'Salaires & heures sup.', value: c.flow.salaries, color: 'from-[#CDB0F5] to-[#9B7ED8]' },
+                { label: 'Acomptes employés', value: c.flow.workerAdvances, color: 'from-[#A6E9CE] to-[#3FB591]' },
+                { label: 'Excédents rendus', value: c.flow.clientRefunds, color: 'from-[#FF9CC0] to-[#C94A70]' },
+                { label: 'Autres sorties', value: c.flow.otherOut, color: 'from-[#FF9CC0] to-[#E5547F]' },
               ]}
             />
           </div>

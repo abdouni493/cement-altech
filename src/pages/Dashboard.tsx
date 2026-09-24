@@ -28,6 +28,8 @@ import { useWorkerStore } from '@/store/workerStore';
 import { useCommandStore, deliveryStatus } from '@/store/commandStore';
 import { useCaisseStore } from '@/store/caisseStore';
 import { formatCurrency, formatDate, formatNumber, daysUntil, getMonthLabel } from '@/lib/utils';
+import { caisseBalance as computeCaisseBalance, caisseBreakdown } from '@/lib/finance';
+import { buildClientAccounts, buildSupplierAccounts, sumAccounts } from '@/lib/accounts';
 
 const CHART_COLORS = ['#eab308', '#10b981', '#a855f7', '#f59e0b', '#e11d48', '#3b82f6'];
 
@@ -56,7 +58,11 @@ export default function Dashboard() {
   const suppliers = useSupplierStore((s) => s.suppliers);
   const workers = useWorkerStore((s) => s.workers);
   const commands = useCommandStore((s) => s.commands);
+  const deliveries = useCommandStore((s) => s.deliveries);
+  const clientOldDebts = useClientStore((s) => s.oldDebts);
+  const supplierOldDebts = useSupplierStore((s) => s.oldDebts);
   const transactions = useCaisseStore((s) => s.transactions);
+  const initialBalance = useCaisseStore((s) => s.initialBalance);
 
   const [dismissed, setDismissed] = useState<string[]>([]);
 
@@ -71,9 +77,14 @@ export default function Dashboard() {
       return x.getMonth() === thisMonth && x.getFullYear() === thisYear;
     };
 
-    const todayRevenue = sales
-      .filter((s) => new Date(s.date).toDateString() === today)
-      .reduce((sum, s) => sum + s.paidAmount, 0);
+    // Encaisse aujourd'hui = l'argent REELLEMENT entre en caisse ce jour
+    // (ventes, versements clients, reglements de commande). La somme des
+    // `paidAmount` des ventes du jour y ajoutait l'avance de commande et
+    // l'acompte, encaisses les jours precedents.
+    const todayFlow = caisseBreakdown(
+      transactions.filter((t) => new Date(t.date).toDateString() === today)
+    );
+    const todayRevenue = todayFlow.sales + todayFlow.clientPayments + todayFlow.commands;
     const todaySalesCount = sales.filter((s) => new Date(s.date).toDateString() === today).length;
 
     const monthSales = sales.filter((s) => inThisMonth(s.date)).reduce((sum, s) => sum + s.finalAmount, 0);
@@ -94,23 +105,19 @@ export default function Dashboard() {
     const lowStock = products.filter((p) => p.currentQuantity <= p.minAlertQuantity);
     const outOfStock = products.filter((p) => p.currentQuantity <= 0);
 
-    const clientDebts =
-      sales.reduce((s, x) => s + x.restAmount, 0) + commands.reduce((s, x) => s + x.restAmount, 0);
-    const supplierDebts = purchases.reduce((s, p) => s + p.restAmount, 0);
+    // Dettes NETTES (acomptes deduits) — le meme calcul que les cartes clients /
+    // fournisseurs. L'ancien calcul additionnait le reste des commandes a celui
+    // de leurs propres bons de livraison : la marchandise livree comptait deux fois.
+    const clientDebts = sumAccounts(
+      buildClientAccounts({ clients, sales, commands, deliveries, oldDebts: clientOldDebts }).values()
+    ).debt;
+    const supplierDebts = sumAccounts(
+      buildSupplierAccounts({ suppliers, purchases, oldDebts: supplierOldDebts }).values()
+    ).debt;
 
-    const deposits = transactions.filter((t) => t.type === 'deposit').reduce((s, t) => s + t.amount, 0);
-    const withdrawals = transactions.filter((t) => t.type === 'withdrawal').reduce((s, t) => s + t.amount, 0);
-    const caisseBalance =
-      deposits +
-      sales.reduce((s, x) => s + x.paidAmount, 0) -
-      withdrawals -
-      purchases.reduce((s, x) => s + x.paidAmount, 0) -
-      expenses.reduce((s, x) => s + x.amount, 0) -
-      workers.reduce(
-        (s, w) =>
-          s + w.payments.reduce((a, p) => a + p.amount, 0) + w.acomptes.reduce((a, p) => a + p.amount, 0),
-        0
-      );
+    // Solde de caisse : solde initial + entrees - sorties. Les ventes, achats,
+    // depenses et salaires y sont DEJA (declencheurs de la base).
+    const caisseBalance = computeCaisseBalance(transactions, initialBalance);
 
     const todayProductions = productions.filter((p) => new Date(p.date).toDateString() === today);
     const productionValue = productions.reduce((s, p) => s + p.totalValue, 0);
@@ -133,7 +140,10 @@ export default function Dashboard() {
       todayProductions, productionValue, productionCost, unpaidOvertime, unpaidOvertimeCount,
       pendingDeliveries, treasury: caisseBalance + stockValue + comptoirValue,
     };
-  }, [products, sales, purchases, productions, comptoirItems, expenses, workers, commands, transactions]);
+  }, [
+    products, sales, purchases, productions, comptoirItems, expenses, workers, commands, transactions,
+    clients, suppliers, deliveries, clientOldDebts, supplierOldDebts, initialBalance,
+  ]);
 
   /* -------------------------------------------------------------- alerts */
   const alerts = useMemo<AlertItem[]>(() => {

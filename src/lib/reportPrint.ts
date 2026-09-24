@@ -15,6 +15,7 @@
 import type { StoreSettings, Lang } from '@/types';
 import { formatDate, formatDateTime } from './utils';
 import { BRAND, BRAND_CSS, HEAD_CSS, headerCity, headerHtml } from './officialDoc';
+import { openPrintPreview } from './printWindow';
 
 export type CellTone = 'default' | 'pos' | 'neg' | 'muted' | 'accent';
 export type RowVariant = 'category' | 'subheader' | 'detail' | 'subtotal' | 'total';
@@ -181,9 +182,6 @@ function renderTable(sec: PrintTableSection): string {
 }
 
 export function printDetailedReport(doc: ReportDoc, store: StoreSettings, lang: Lang = 'fr') {
-  const win = window.open('', '_blank', 'width=980,height=1040');
-  if (!win) return;
-
   const dir = lang === 'ar' ? 'rtl' : 'ltr';
   const printedOn = lang === 'ar' ? 'طُبع في' : 'Imprimé le';
   const printBtn = lang === 'ar' ? 'طباعة' : 'Imprimer';
@@ -210,7 +208,7 @@ export function printDetailedReport(doc: ReportDoc, store: StoreSettings, lang: 
 
   const sectionsHtml = doc.sections.map(renderTable).join('');
 
-  win.document.write(`<!doctype html>
+  openPrintPreview(`<!doctype html>
 <html lang="${lang}" dir="${dir}">
   <head><meta charset="utf-8"/><title>${esc(doc.docTitle)}</title><style>${css}</style></head>
   <body>
@@ -237,6 +235,5 @@ export function printDetailedReport(doc: ReportDoc, store: StoreSettings, lang: 
     </div>
     <script>window.onload=function(){setTimeout(function(){window.print();},400);};<\/script>
   </body>
-</html>`);
-  win.document.close();
+</html>`, doc.docTitle);
 }

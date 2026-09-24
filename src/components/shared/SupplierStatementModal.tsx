@@ -1,21 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  FileBarChart, Printer, Coins, RotateCcw, Package, History, Undo2, PiggyBank,
-  LayoutGrid,
+  FileBarChart, Printer, Coins, RotateCcw, Package, PiggyBank, BookOpenText,
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
+import { Badge } from '@/components/ui/Badge';
 import { PeriodPicker, firstDayOfMonth } from './PeriodReport';
-import { StatementPrintDialog, type StatementPrintChoice } from './StatementPrintDialog';
+import {
+  StatementPrintDialog, type StatementPrintChoice, type StatementPrintPart,
+} from './StatementPrintDialog';
+import { PriorDebtDialog } from './PriorDebtDialog';
+import { Section } from './ClientStatementModal';
 import { usePurchaseStore } from '@/store/purchaseStore';
 import { useSupplierStore } from '@/store/supplierStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
-import { formatCurrency, formatDate, formatDateTime, todayISO, paymentMethodLabel } from '@/lib/utils';
-import { computePartyBalance } from '@/lib/partyBalance';
-import { buildSupplierHistory, withinPeriod, type HistoryPayment } from '@/lib/partyHistory';
-import { printPartyStatement, type StatementSection } from '@/lib/statementPrint';
+import { formatCurrency, formatDate, todayISO } from '@/lib/utils';
+import { supplierAccountOf } from '@/lib/accounts';
+import {
+  buildSupplierLedger, sliceLedger, ledgerRows, type DebitKind, type LedgerSlice,
+} from '@/lib/ledger';
+import { printPartyStatement, statementTotals, dayBefore } from '@/lib/statementPrint';
 import { panelVariants, EASE } from '@/lib/animations';
 import { cn } from '@/lib/utils';
 import type { Supplier } from '@/types';
@@ -23,23 +29,24 @@ import type { Supplier } from '@/types';
 /* ============================================================================
  *  COMPTE RENDU D'UN FOURNISSEUR SUR UNE PERIODE
  * ----------------------------------------------------------------------------
- *  Meme presentation et meme mecanique d'impression que le compte rendu du
- *  client : barre de synthese, une PARTIE a la fois (achats, versements,
- *  anciens achats, anciennes dettes, excedents recuperes, produits), puis une
- *  LISTE A COCHER avant d'imprimer — quelles parties, quels produits, avec ou
- *  sans TVA — et un document rendu sur le modele du bon de livraison.
+ *  Meme mecanique que le compte rendu du client, a partir du RELEVE du
+ *  fournisseur (factures d'achat, anciennes dettes, reglements) :
+ *   · achats NOUVEAUX et ANCIENS dans un seul tableau, avec les colonnes
+ *     « N de bon » (saisi sur l'achat) et « Matricule » ;
+ *   · du plus ANCIEN au plus RECENT ;
+ *   · TOTAL, TOTAL VERSEMENTS et RESTE justes — sans compter deux fois un
+ *     versement deja impute sur une facture ;
+ *   · versements listes en fin de document, marchandises facultatives,
+ *     dette anterieure signalee avant l'impression.
  * ========================================================================== */
 
-type PartKey = 'purchases' | 'payments' | 'oldPurchases' | 'oldDebts' | 'refunds' | 'products';
+type PartKey = 'releve' | 'purchases' | 'versements' | 'oldDebts' | 'products';
 
-const qty = (n: number) => Number(n.toFixed(3)).toLocaleString('fr-FR');
-
-/** Noms des produits d'une facture, repris en designation (comme a l'impression). */
-const productNames = (products: { productName?: string }[]) =>
-  products.map((l) => (l.productName || '—').trim()).filter(Boolean).join(', ') || '—';
-/** Quantite totale d'une facture (comme a l'impression). */
-const productQty = (products: { quantity?: number }[]) =>
-  qty(products.reduce((s, l) => s + (l.quantity || 0), 0));
+const creditKindLabel: Record<string, string> = {
+  payment: 'Versement direct',
+  docPayment: 'Reglement facture',
+  refund: 'Excedent recupere',
+};
 
 export function SupplierStatementModal({ supplier, onClose }: { supplier: Supplier | null; onClose: () => void }) {
   const { language } = useLanguage();
@@ -53,84 +60,50 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
   const [from, setFrom] = useState(firstDayOfMonth());
   const [to, setTo] = useState(todayISO());
   const [period, setPeriod] = useState<{ from: string; to: string } | null>(null);
-  const [part, setPart] = useState<PartKey>('purchases');
+  const [part, setPart] = useState<PartKey>('releve');
   const [printOpen, setPrintOpen] = useState(false);
+  const [priorAsk, setPriorAsk] = useState<{ choice: StatementPrintChoice; slice: LedgerSlice } | null>(null);
 
   useEffect(() => {
     if (!supplier) return;
     setFrom(firstDayOfMonth());
     setTo(todayISO());
     setPeriod(null);
-    setPart('purchases');
+    setPart('releve');
     setPrintOpen(false);
+    setPriorAsk(null);
   }, [supplier?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const data = useMemo(() => {
     if (!supplier || !period) return null;
     const { from: f, to: t } = period;
-    const h = buildSupplierHistory({ supplierId: supplier.id, purchases, payments, oldDebts, refunds });
-    const inP = (d?: string) => withinPeriod(d, f, t);
+    const ledger = buildSupplierLedger({ supplierId: supplier.id, purchases, payments, refunds, oldDebts });
+    const all = sliceLedger(ledger, f, t, { debitKinds: ['purchase', 'oldDebt'] });
+    const purchasesList = all.debits.filter((d) => d.kind === 'purchase');
+    const oldDebtsList = all.debits.filter((d) => d.kind === 'oldDebt');
 
-    const purchasesList = h.purchases.filter((p) => inP(p.date)).sort((a, b) => a.date.localeCompare(b.date));
-    const oldPurchasesList = h.historicalPurchases.filter((p) => inP(p.date));
-    // Le compte rendu ne retient QUE les reglements directs saisis sur la
-    // carte du fournisseur — les reglements portes par une facture d'achat
-    // n'y figurent plus, ni a l'ecran ni a l'impression.
-    const paymentsList = h.payments
-      .filter((p) => inP(p.date) && p.source === 'direct')
-      .sort((a, b) => a.date.localeCompare(b.date));
-    const oldDebtsList = h.oldDebts.filter((d) => inP(d.date));
-    const refundsList = h.refunds.filter((r) => inP(r.refundedAt));
-
-    // Une ligne par produit ET par prix d'achat pratique sur la periode.
-    const grouped = new Map<string, {
-      key: string; name: string; unit?: string; quantity: number; unitPrice: number;
-      amount: number; invoices: Set<string>;
-    }>();
-    [...purchasesList, ...oldPurchasesList].forEach((p) =>
-      p.products.forEach((l) => {
-        if (!(l.quantity > 0)) return;
-        const name = (l.productName || '—').trim();
-        const key = `${name.toLowerCase()}|${l.unit ?? ''}|${l.purchasePrice}`;
+    const grouped = new Map<string, { key: string; name: string; unit?: string; quantity: number; unitPrice: number; amount: number; invoices: Set<string> }>();
+    purchasesList.forEach((d) =>
+      d.lines.forEach((l) => {
+        const key = `${l.designation.toLowerCase()}|${l.unit ?? ''}|${l.unitPrice}`;
         const cur = grouped.get(key) ?? {
-          key, name, unit: l.unit, quantity: 0, unitPrice: l.purchasePrice, amount: 0,
-          invoices: new Set<string>(),
+          key, name: l.designation, unit: l.unit, quantity: 0, unitPrice: l.unitPrice, amount: 0, invoices: new Set<string>(),
         };
         cur.quantity += l.quantity;
-        cur.amount += l.quantity * l.purchasePrice;
-        cur.invoices.add(p.reference);
+        cur.amount += l.amount;
+        cur.invoices.add(d.reference);
         grouped.set(key, cur);
       })
     );
-    const products = [...grouped.values()].sort((a, b) => b.amount - a.amount);
-
-    const sum = (arr: number[]) => arr.reduce((a, b) => a + b, 0);
-    const total = sum(purchasesList.map((x) => x.totalAmount));
-    const paid = sum(purchasesList.map((x) => x.paidAmount));
-    const rest = sum(purchasesList.map((x) => x.restAmount));
-    const settled = sum(paymentsList.map((x) => x.amount));
-    const oldDebtsTotal = sum(oldDebtsList.map((x) => x.amount));
-    const oldDebtsRest = sum(oldDebtsList.map((x) => x.restAmount));
-    const refunded = sum(refundsList.map((x) => x.amount));
-
-    const allPurchases = purchases.filter((x) => x.supplierId === supplier.id);
-    const account = computePartyBalance({
-      documentsBilled: sum(allPurchases.map((x) => x.totalAmount)),
-      documentsPaid: sum(allPurchases.map((x) => x.paidAmount)),
-      documentsRest: sum(allPurchases.map((x) => x.restAmount)),
-      oldDebts: oldDebts.filter((d) => d.partyId === supplier.id),
-      credit: supplierRows.find((x) => x.id === supplier.id)?.creditAmount ?? 0,
-    });
+    const products = [...grouped.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+    const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 
     return {
-      purchasesList, oldPurchasesList, paymentsList, oldDebtsList, refundsList, products,
-      total, paid, rest, settled, refunded, oldDebtsTotal, oldDebtsRest, account,
-      oldPurchasesTotal: sum(oldPurchasesList.map((x) => x.totalAmount)),
-      productsQty: sum(products.map((x) => x.quantity)),
-      productsAmount: sum(products.map((x) => x.amount)),
-      billed: total + oldDebtsTotal,
-      outstanding: rest + oldDebtsRest,
-      lines: sum(purchasesList.map((x) => x.products.length)),
+      ledger, all, purchasesList, oldDebtsList, products,
+      rows: ledgerRows(all, all.priorBalance),
+      account: supplierAccountOf(supplier.id, { suppliers: supplierRows, purchases, oldDebts }),
+      purchasesTotal: sum(purchasesList.map((d) => d.amount)),
+      oldDebtsTotal: sum(oldDebtsList.map((d) => d.amount)),
     };
   }, [supplier, period, purchases, payments, oldDebts, refunds, supplierRows]);
 
@@ -138,159 +111,95 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
     ? `Du ${formatDate(period.from, language)} au ${formatDate(period.to, language)}`
     : '';
 
-  const doPrint = (choice: StatementPrintChoice) => {
-    if (!supplier || !data || !period) return;
-    setPrintOpen(false);
+  /* ------------------------------------------------------- l'impression -- */
+  const sliceFor = (c: StatementPrintChoice): LedgerSlice | null => {
+    if (!data || !period) return null;
+    const kinds: DebitKind[] = [];
+    if (c.purchases) kinds.push('purchase');
+    if (c.oldDebts) kinds.push('oldDebt');
+    return sliceLedger(data.ledger, period.from, period.to, { debitKinds: kinds });
+  };
 
-    const money = formatCurrency;
-    const picked = new Set(choice.parts);
-    const sections: StatementSection[] = [];
-
-    if (picked.has('purchases') && data.purchasesList.length) {
-      sections.push({
-        title: 'ACHATS DE LA PERIODE',
-        columns: [
-          { label: 'Date', align: 'center', width: '13%' },
-          { label: 'Designation', align: 'left' },
-          { label: 'Quantite', align: 'center', width: '10%' },
-          { label: 'Regle', align: 'right', width: '18%' },
-          { label: 'Total', align: 'right', width: '18%' },
-        ],
-        rows: data.purchasesList.map((p) => ({
-          cells: [
-            formatDate(p.date), productNames(p.products).toUpperCase(), productQty(p.products),
-            money(p.paidAmount), money(p.totalAmount),
-          ],
-        })),
-        totals: [{ label: 'Total des achats', value: money(data.total), strong: true }],
-      });
-    }
-
-    if (picked.has('payments') && data.paymentsList.length) {
-      sections.push({
-        title: 'VERSEMENTS DE LA PERIODE',
-        columns: [
-          { label: 'Date', align: 'center', width: '16%' },
-          { label: 'Designation', align: 'left' },
-          { label: 'Mode', align: 'left', width: '22%' },
-          { label: 'Montant', align: 'right', width: '20%' },
-        ],
-        rows: data.paymentsList.map((p) => ({
-          cells: [
-            formatDate(p.date.slice(0, 10)), p.origin.toUpperCase(),
-            p.source === 'direct' ? paymentMethodLabel(p).toUpperCase() : '/',
-            money(p.amount),
-          ],
-        })),
-        totals: [{
-          label: 'Total regle',
-          value: money(data.paymentsList.reduce((s, p) => s + p.amount, 0)),
-          strong: true,
-        }],
-      });
-    }
-
-    if (picked.has('oldPurchases') && data.oldPurchasesList.length) {
-      sections.push({
-        title: 'ANCIENS ACHATS',
-        columns: [
-          { label: 'Date', align: 'center', width: '13%' },
-          { label: 'Designation', align: 'left' },
-          { label: 'Quantite', align: 'center', width: '10%' },
-          { label: 'Regle', align: 'right', width: '18%' },
-          { label: 'Total', align: 'right', width: '18%' },
-        ],
-        rows: data.oldPurchasesList.map((p) => ({
-          cells: [
-            formatDate(p.date), productNames(p.products).toUpperCase(), productQty(p.products),
-            money(p.paidAmount), money(p.totalAmount),
-          ],
-        })),
-        totals: [{ label: 'Total', value: money(data.oldPurchasesTotal), strong: true }],
-      });
-    }
-
-    if (picked.has('oldDebts') && data.oldDebtsList.length) {
-      sections.push({
-        title: 'ANCIENNES DETTES',
-        columns: [
-          { label: 'Date', align: 'center', width: '16%' },
-          { label: 'Designation', align: 'left' },
-          { label: 'Regle', align: 'right', width: '20%' },
-          { label: 'Reste', align: 'right', width: '20%' },
-        ],
-        rows: data.oldDebtsList.map((d) => ({
-          cells: [
-            formatDate(d.date), (d.description || 'ANCIENNE DETTE').toUpperCase(),
-            money(d.paidAmount), money(d.restAmount),
-          ],
-        })),
-        totals: [{ label: 'Total reste du', value: money(data.oldDebtsRest), strong: true }],
-      });
-    }
-
-    if (picked.has('refunds') && data.refundsList.length) {
-      sections.push({
-        title: 'EXCEDENTS RECUPERES',
-        columns: [
-          { label: 'Date', align: 'center', width: '16%' },
-          { label: 'Designation', align: 'left' },
-          { label: 'Mode', align: 'left', width: '22%' },
-          { label: 'Montant', align: 'right', width: '20%' },
-        ],
-        rows: data.refundsList.map((r) => ({
-          cells: [
-            formatDate(r.refundedAt.slice(0, 10)),
-            `RECUPERATION EXC-${r.id.slice(0, 8).toUpperCase()}`,
-            paymentMethodLabel(r).toUpperCase(), money(r.amount),
-          ],
-        })),
-        totals: [{ label: 'Total recupere', value: money(data.refunded), strong: true }],
-      });
-    }
-
-    const productLines = choice.includeProducts
-      ? data.products
-          .filter((p) => choice.products.includes(p.key))
-          .map((p) => ({
-            designation: p.name, quantity: p.quantity, unit: p.unit,
-            unitPrice: p.unitPrice, amount: p.amount,
-          }))
-      : [];
-
-    const ht = productLines.reduce((s, l) => s + l.amount, 0);
-    const tva = choice.applyTva ? Math.round(ht * choice.tvaRate) / 100 : 0;
-
+  const runPrint = (c: StatementPrintChoice, slice: LedgerSlice, includePrior: boolean) => {
+    if (!supplier) return;
     printPartyStatement(
       {
         kind: 'supplier',
+        mode: 'statement',
         party: { name: supplier.name, phone: supplier.phone, address: supplier.address },
-        from: period.from,
-        to: period.to,
-        productTitle: productLines.length ? 'MARCHANDISES RECUES SUR LA PERIODE' : undefined,
-        productLines,
-        sections,
-        applyTva: choice.applyTva,
-        tvaRate: choice.tvaRate,
-        tvaAmount: tva,
-        paidAmount: data.paymentsList.reduce((s, p) => s + p.amount, 0),
-        restAmount: data.outstanding + tva,
-        versements: data.paymentsList.map((p) => ({ amount: p.amount, date: p.date.slice(0, 10) })),
+        slice,
+        includeOldDebts: c.oldDebts,
+        includePrior,
+        includeVersements: c.versements,
+        includeProducts: c.products,
+        tvaMode: c.tvaMode,
+        tvaRate: c.tvaRate,
       },
       settings
     );
   };
 
-  const parts: { key: PartKey; label: string; icon: JSX.Element; count: number; total?: string }[] = data
+  const onPrintChoice = (c: StatementPrintChoice) => {
+    setPrintOpen(false);
+    const slice = sliceFor(c);
+    if (!slice) return;
+    if (c.oldDebts && Math.abs(slice.priorBalance) > 0.004) {
+      setPriorAsk({ choice: c, slice });
+      return;
+    }
+    runPrint(c, slice, false);
+  };
+
+  const preview = (c: StatementPrintChoice) => {
+    const slice = sliceFor(c);
+    if (!slice) return { ht: 0, tva: 0, total: 0, versements: 0, rest: 0 };
+    const t = statementTotals({
+      slice, includeOldDebts: c.oldDebts, includePrior: false,
+      includeVersements: c.versements, tvaMode: c.tvaMode, tvaRate: c.tvaRate,
+    });
+    return { ht: t.ht, tva: t.tva, total: t.total, versements: t.versements, rest: t.rest };
+  };
+
+  const printParts: StatementPrintPart[] = data
     ? [
-        { key: 'purchases', label: 'Achats', icon: <Package size={14} />, count: data.purchasesList.length, total: formatCurrency(data.total) },
-        { key: 'payments', label: 'Versements', icon: <Coins size={14} />, count: data.paymentsList.length, total: formatCurrency(data.paymentsList.reduce((s, p) => s + p.amount, 0)) },
-        { key: 'oldPurchases', label: 'Anciens achats', icon: <History size={14} />, count: data.oldPurchasesList.length, total: formatCurrency(data.oldPurchasesTotal) },
-        { key: 'oldDebts', label: 'Anciennes dettes', icon: <PiggyBank size={14} />, count: data.oldDebtsList.length, total: formatCurrency(data.oldDebtsTotal) },
-        { key: 'refunds', label: 'Excédents récupérés', icon: <Undo2 size={14} />, count: data.refundsList.length, total: formatCurrency(data.refunded) },
-        { key: 'products', label: 'Produits', icon: <Package size={14} />, count: data.products.length, total: formatCurrency(data.productsAmount) },
+        {
+          key: 'purchases', group: 'table', label: "Factures d'achat",
+          hint: 'Nouveaux et anciens achats, avec N° de bon et matricule',
+          count: data.purchasesList.length, total: formatCurrency(data.purchasesTotal),
+        },
+        {
+          key: 'oldDebts', group: 'foot', label: 'Anciennes dettes / dette antérieure',
+          hint: Math.abs(data.all.priorBalance) > 0.004
+            ? `Au-dessus du total, avec leur date. Dette antérieure au ${formatDate(dayBefore(data.all.from))} : ${formatCurrency(data.all.priorBalance)} (proposée avant l'impression).`
+            : 'Au-dessus du total, avec leur date.',
+          count: data.oldDebtsList.length + (Math.abs(data.all.priorBalance) > 0.004 ? 1 : 0),
+          total: data.oldDebtsList.length ? formatCurrency(data.oldDebtsTotal) : undefined,
+          defaultChecked: data.oldDebtsList.length > 0 || Math.abs(data.all.priorBalance) > 0.004,
+        },
+        {
+          key: 'versements', group: 'foot', label: 'Versements',
+          hint: 'Total versements, reste, et liste datée en fin de document',
+          count: data.all.credits.length, total: formatCurrency(data.all.totalCredits), defaultChecked: true,
+        },
+        {
+          key: 'products', group: 'extra', label: 'Tableau des marchandises',
+          hint: 'Récapitulatif par produit et par prix d’achat',
+          count: data.products.length, defaultChecked: false,
+        },
       ]
     : [];
+
+  const parts: { key: PartKey; label: string; icon: JSX.Element; count: number }[] = data
+    ? [
+        { key: 'releve', label: 'Relevé', icon: <BookOpenText size={14} />, count: data.rows.length },
+        { key: 'purchases', label: 'Achats', icon: <Package size={14} />, count: data.purchasesList.length },
+        { key: 'versements', label: 'Versements', icon: <Coins size={14} />, count: data.all.credits.length },
+        { key: 'oldDebts', label: 'Anciennes dettes', icon: <PiggyBank size={14} />, count: data.oldDebtsList.length },
+        { key: 'products', label: 'Produits', icon: <Package size={14} />, count: data.products.length },
+      ]
+    : [];
+
+  const money = formatCurrency;
 
   return (
     <Modal open={!!supplier} onClose={onClose} title={`Compte rendu — ${supplier?.name ?? ''}`} size="xl">
@@ -327,27 +236,35 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
                 </div>
               </div>
 
-              {data.account.hasCredit && (
+              {data.account.credit > 0.004 && (
                 <div className="flex items-start gap-3 rounded-2xl border border-pistachio/40 bg-pistachio/10 px-4 py-3">
                   <PiggyBank size={20} className="mt-0.5 shrink-0 text-pistachio" />
                   <div>
                     <p className="text-sm font-bold text-pistachio">
-                      Trop-versé à récupérer : + {formatCurrency(data.account.creditToReturn)}
+                      Trop-versé disponible : {money(data.account.credit)}
                     </p>
                     <p className="mt-0.5 text-xs text-text-secondary">
-                      L&rsquo;entreprise a payé plus que ses factures. Utilisez « Récupérer l&rsquo;excédent » sur sa carte.
+                      L&rsquo;entreprise a versé plus que les factures : ce trop-versé paiera les prochains achats
+                      (il est proposé à leur création) ou peut être récupéré depuis la carte du fournisseur.
                     </p>
                   </div>
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
-                <Kpi label="Total acheté" value={formatCurrency(data.billed)} tone="accent" />
-                <Kpi label="Total réglé" value={formatCurrency(data.paid + data.settled)} tone="pos" />
-                <Kpi label="Reste dû (période)" value={formatCurrency(data.outstanding)} tone="neg" />
-                <Kpi label="Excédent récupéré" value={formatCurrency(data.refunded)} tone="pos" />
-                <Kpi label="Articles reçus" value={String(data.lines)} />
-                <Kpi label="Quantité reçue" value={qty(data.productsQty)} tone="accent" />
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
+                <Kpi
+                  label={`Dette antérieure au ${formatDate(dayBefore(data.all.from), language)}`}
+                  value={money(data.all.priorBalance)}
+                  tone={data.all.priorBalance > 0 ? 'neg' : 'pos'}
+                />
+                <Kpi label="Achats (période)" value={money(data.all.totalDebits)} tone="accent" />
+                <Kpi label="Versements (période)" value={money(data.all.totalCredits)} tone="pos" />
+                <Kpi label="Reste (période)" value={money(data.all.rest)} tone={data.all.rest > 0 ? 'neg' : 'pos'} />
+                <Kpi
+                  label={`Solde au ${formatDate(data.all.to, language)}`}
+                  value={money(data.all.closingBalance)}
+                  tone={data.all.closingBalance > 0 ? 'neg' : 'pos'}
+                />
               </div>
 
               <div className="flex gap-1 overflow-x-auto rounded-2xl border border-gold/15 bg-vanilla/30 p-1.5">
@@ -385,104 +302,103 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
 
               <AnimatePresence mode="wait">
                 <motion.div key={part} variants={panelVariants} initial="hidden" animate="visible" exit="exit">
-                  {part === 'purchases' && (
+                  {part === 'releve' && (
                     <Section
-                      title="Achats de la période"
-                      head={['N° facture', 'Date', 'N° bon', 'Matricule', 'Désignation', 'Quantité', 'Total', 'Réglé', 'Reste']}
-                      rows={data.purchasesList.map((p) => [
-                        p.reference, formatDate(p.date, language),
-                        p.bonNumber || '—', p.driverPlate || '—',
-                        productNames(p.products), productQty(p.products),
-                        formatCurrency(p.totalAmount),
-                        <span key="p" className="text-pistachio">{formatCurrency(p.paidAmount)}</span>,
-                        <span key="r" className={p.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>
-                          {formatCurrency(p.restAmount)}
+                      title="Relevé du compte (de la plus ancienne à la plus récente opération)"
+                      note="Chaque facture d'achat et ancienne dette augmente ce que l'entreprise doit ; chaque versement le diminue."
+                      head={['Date', 'Opération', 'Détail', 'Débit', 'Crédit', 'Solde']}
+                      lead={[
+                        formatDate(data.all.from, language), 'Solde antérieur', '—', '', '',
+                        <span key="s" className="font-bold">{money(data.all.priorBalance)}</span>,
+                      ]}
+                      rows={data.rows.map((r) => [
+                        formatDate(r.date, language),
+                        <span key="l" className="font-semibold">{r.label}</span>,
+                        <span key="d" className="text-text-muted">{r.detail || '—'}</span>,
+                        r.debit ? <span key="db" className="text-rose-deep">{money(r.debit)}</span> : '',
+                        r.credit ? <span key="cr" className="text-pistachio">{money(r.credit)}</span> : '',
+                        <span key="b" className={r.balance > 0 ? 'font-bold text-rose-deep' : 'font-bold text-pistachio'}>
+                          {money(r.balance)}
                         </span>,
                       ])}
-                      total={formatCurrency(data.total)}
+                      foot={[
+                        'Totaux de la période', '', '',
+                        money(data.all.totalDebits), money(data.all.totalCredits), money(data.all.closingBalance),
+                      ]}
+                      empty="Aucune opération sur cette période"
+                    />
+                  )}
+
+                  {part === 'purchases' && (
+                    <Section
+                      title="Achats de la période (nouveaux et anciens)"
+                      head={['Date', 'N° facture', 'N° bon', 'Matricule', 'Désignation', 'Quantité', 'Total', 'Reste aujourd’hui']}
+                      rows={data.purchasesList.map((d) => [
+                        formatDate(d.date, language),
+                        <span key="r" className="font-semibold">
+                          {d.reference}
+                          {d.historical && <Badge variant="warning" className="ml-1 text-[9px]">Ancien</Badge>}
+                        </span>,
+                        d.bonNumber || '—',
+                        d.driverPlate || '—',
+                        d.lines.map((l) => l.designation).join(', ') || '—',
+                        Math.round(d.lines.reduce((s, l) => s + l.quantity, 0) * 1000) / 1000,
+                        money(d.amount),
+                        <span key="x" className={d.restNow > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>{money(d.restNow)}</span>,
+                      ])}
+                      total={money(data.purchasesTotal)}
                       empty="Aucune facture sur cette période"
                     />
                   )}
 
-                  {part === 'payments' && (
+                  {part === 'versements' && (
                     <Section
-                      title="Versements de la période"
-                      note="Uniquement les règlements directs saisis sur la carte du fournisseur."
-                      head={['Date et heure', 'Origine', 'Mode de règlement', 'Note', 'Montant']}
-                      rows={data.paymentsList.map((p: HistoryPayment) => [
-                        formatDateTime(p.date, language),
-                        p.origin,
-                        paymentMethodLabel(p),
-                        p.notes || '—',
-                        <span key="a" className="font-bold text-pistachio">{formatCurrency(p.amount)}</span>,
+                      title="Argent versé sur la période"
+                      note="Règlements saisis sur la carte du fournisseur et règlements portés par les factures — c'est exactement le « total versements » du compte rendu."
+                      head={['Date', 'Type', 'Libellé', 'Mode', 'Montant']}
+                      rows={data.all.credits.map((c) => [
+                        formatDate(c.date, language),
+                        <Badge key="t" variant={c.kind === 'payment' ? 'success' : c.kind === 'refund' ? 'danger' : 'info'} className="text-[10px]">
+                          {creditKindLabel[c.kind] ?? c.kind}
+                        </Badge>,
+                        c.label,
+                        c.method || '—',
+                        <span key="a" className={c.amount < 0 ? 'font-bold text-rose-deep' : 'font-bold text-pistachio'}>
+                          {c.amount < 0 ? `− ${money(-c.amount)}` : money(c.amount)}
+                        </span>,
                       ])}
-                      total={formatCurrency(data.paymentsList.reduce((s, p) => s + p.amount, 0))}
-                      empty="Aucun règlement sur cette période"
-                    />
-                  )}
-
-                  {part === 'oldPurchases' && (
-                    <Section
-                      title="Anciens achats"
-                      note="Factures antérieures au logiciel — ni le stock ni la caisse ne les ont vues passer."
-                      head={['N° facture', 'Date', 'N° bon', 'Matricule', 'Désignation', 'Quantité', 'Total', 'Réglé', 'Reste']}
-                      rows={data.oldPurchasesList.map((p) => [
-                        p.reference, formatDate(p.date, language),
-                        p.bonNumber || '—', p.driverPlate || '—',
-                        productNames(p.products), productQty(p.products),
-                        formatCurrency(p.totalAmount),
-                        <span key="p" className="text-pistachio">{formatCurrency(p.paidAmount)}</span>,
-                        <span key="r" className="text-rose-deep">{formatCurrency(p.restAmount)}</span>,
-                      ])}
-                      total={formatCurrency(data.oldPurchasesTotal)}
-                      empty="Aucun ancien achat sur cette période"
+                      total={money(data.all.totalCredits)}
+                      empty="Aucun versement sur cette période"
                     />
                   )}
 
                   {part === 'oldDebts' && (
                     <Section
-                      title="Anciennes dettes"
-                      head={['Date', 'Description', 'Montant', 'Réglé', 'Reste']}
+                      title="Anciennes dettes de la période"
+                      note="Imprimées au-dessus du total du compte rendu, chacune avec sa date."
+                      head={['Date', 'Description', 'Montant', 'Reste aujourd’hui']}
                       rows={data.oldDebtsList.map((d) => [
                         formatDate(d.date, language), d.description || '—',
-                        formatCurrency(d.amount),
-                        <span key="p" className="text-pistachio">{formatCurrency(d.paidAmount)}</span>,
-                        <span key="r" className={d.restAmount > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>
-                          {formatCurrency(d.restAmount)}
-                        </span>,
+                        money(d.amount),
+                        <span key="r" className={d.restNow > 0 ? 'font-bold text-rose-deep' : 'text-pistachio'}>{money(d.restNow)}</span>,
                       ])}
-                      total={formatCurrency(data.oldDebtsTotal)}
+                      total={money(data.oldDebtsTotal)}
                       empty="Aucune ancienne dette sur cette période"
-                    />
-                  )}
-
-                  {part === 'refunds' && (
-                    <Section
-                      title="Excédents récupérés"
-                      head={['Date et heure', 'Reçu n°', 'Mode', 'Note', 'Montant']}
-                      rows={data.refundsList.map((r) => [
-                        formatDateTime(r.refundedAt, language),
-                        `EXC-${r.id.slice(0, 8).toUpperCase()}`,
-                        paymentMethodLabel(r), r.notes || '—',
-                        <span key="a" className="font-bold text-pistachio">+ {formatCurrency(r.amount)}</span>,
-                      ])}
-                      total={formatCurrency(data.refunded)}
-                      empty="Aucun trop-versé récupéré sur cette période"
                     />
                   )}
 
                   {part === 'products' && (
                     <Section
-                      title="Marchandises reçues"
-                      note="Une ligne par produit ET par prix d'achat — c'est la base du tableau imprimé."
+                      title="Marchandises reçues sur la période"
+                      note="Une ligne par produit ET par prix d'achat — c'est le tableau « marchandises » facultatif du document imprimé."
                       head={['Produit', 'Factures', 'Quantité', 'Prix unitaire', 'Montant']}
                       rows={data.products.map((p) => [
                         p.name, p.invoices.size,
-                        `${qty(p.quantity)}${p.unit ? ` ${p.unit}` : ''}`,
-                        formatCurrency(p.unitPrice),
-                        <span key="a" className="font-bold text-gold-dark">{formatCurrency(p.amount)}</span>,
+                        `${Math.round(p.quantity * 1000) / 1000}${p.unit ? ` ${p.unit}` : ''}`,
+                        money(p.unitPrice),
+                        <span key="a" className="font-bold text-gold-dark">{money(p.amount)}</span>,
                       ])}
-                      total={formatCurrency(data.productsAmount)}
+                      total={money(data.products.reduce((s, p) => s + p.amount, 0))}
                       empty="Aucune marchandise reçue sur cette période"
                     />
                   )}
@@ -495,22 +411,27 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
             <StatementPrintDialog
               open={printOpen}
               onClose={() => setPrintOpen(false)}
-              onPrint={doPrint}
+              onPrint={onPrintChoice}
+              kind="supplier"
+              parts={printParts}
+              preview={preview}
               title={`Imprimer le compte rendu — ${supplier.name}`}
-              parts={parts
-                .filter((p) => p.key !== 'products')
-                .map((p) => ({
-                  key: p.key, label: p.label, count: p.count, total: p.total,
-                  defaultChecked: p.count > 0,
-                }))}
-              products={data.products.map((p) => ({
-                key: p.key,
-                label: p.name,
-                detail: `${qty(p.quantity)}${p.unit ? ` ${p.unit}` : ''} × ${formatCurrency(p.unitPrice)}`,
-                amount: p.amount,
-              }))}
+              printLabel="Imprimer le compte rendu"
             />
           )}
+
+          <PriorDebtDialog
+            open={!!priorAsk}
+            onClose={() => setPriorAsk(null)}
+            onDecide={(include) => {
+              const ask = priorAsk;
+              setPriorAsk(null);
+              if (ask) runPrint(ask.choice, ask.slice, include);
+            }}
+            partyName={supplier.name}
+            slice={priorAsk?.slice ?? null}
+            kind="supplier"
+          />
         </div>
       )}
     </Modal>
@@ -524,57 +445,6 @@ function Kpi({ label, value, tone }: { label: string; value: string; tone?: 'pos
     <div className="rounded-xl border border-gold/15 bg-vanilla/40 px-3 py-2.5">
       <p className="text-[10px] uppercase leading-tight tracking-wide text-text-muted">{label}</p>
       <p className={`mt-0.5 text-sm font-bold tabular ${color}`}>{value}</p>
-    </div>
-  );
-}
-
-function Section({
-  title, note, head, rows, total, empty,
-}: {
-  title: string;
-  note?: string;
-  head: string[];
-  rows: React.ReactNode[][];
-  total?: string;
-  empty: string;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-3 rounded-xl border-l-4 border-gold bg-gold/8 px-3 py-2">
-        <h4 className="flex items-center gap-2 text-sm font-bold text-gold-dark">
-          <LayoutGrid size={14} />{title}
-        </h4>
-        {total && <span className="text-sm font-bold tabular text-gold-dark">{total}</span>}
-      </div>
-      {note && <p className="px-1 text-[11px] italic text-text-muted">{note}</p>}
-      {rows.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-gold/25 bg-vanilla/20 py-6 text-center text-xs italic text-text-muted">
-          {empty}
-        </p>
-      ) : (
-        <div className="overflow-x-auto rounded-xl border border-gold/15">
-          <table className="w-full text-sm">
-            <thead className="bg-vanilla/60 text-text-secondary">
-              <tr>
-                {head.map((h, i) => (
-                  <th key={h} className={`whitespace-nowrap px-3 py-2 text-[11px] font-bold uppercase ${i === 0 ? 'text-left' : 'text-right'}`}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={i} className="border-t border-gold/10 hover:bg-gold/5">
-                  {r.map((cell, j) => (
-                    <td key={j} className={`px-3 py-2 text-xs ${j === 0 ? 'text-left' : 'text-right tabular'}`}>{cell}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }

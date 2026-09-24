@@ -1,76 +1,63 @@
 import type { StoreSettings } from '@/types';
-import { formatCurrency, formatDate } from './utils';
+import { formatCurrency, formatDate, todayISO } from './utils';
 import {
-  printOfficialDocument, versementLine,
+  printOfficialDocument,
   type DocColumn, type DocRow, type DocTable, type DocTotal,
 } from './officialDoc';
 import type { ClientFiscal } from './documents';
+import type { LedgerSlice, LedgerCredit, LedgerDebit } from './ledger';
 
 /* ============================================================================
  *  IMPRESSIONS « A LA CARTE » — TOUJOURS SUR LE PAPIER DU BON DE LIVRAISON
  * ----------------------------------------------------------------------------
  *  L'entreprise n'a QU'UN SEUL modele imprime : celui du bon de livraison
- *  (`officialDoc.ts`). En-tete de la societe a gauche, raison sociale au
- *  centre, logo a droite, « <VILLE> LE jj/mm/aaaa », titre souligne, bloc
- *  « DOIT : <tiers> » a gauche et references a droite, tableaux encadres,
- *  totaux accroches aux deux dernieres colonnes, « LE CLIENT » et
- *  « SIGNATURE » en pied.
+ *  (`officialDoc.ts`). Ce module rend, sur ce meme papier :
  *
- *  Ce module rend, sur ce meme papier :
+ *   1. `printPartyStatement()` — le COMPTE RENDU d'un client / fournisseur et
+ *      le BON DE LIVRAISON d'une periode, sur le modele demande :
  *
- *   1. `printPartyStatement()` — le COMPTE RENDU d'un client / fournisseur,
- *      dont l'operateur choisit les parties a imprimer (ventes, commandes,
- *      livraisons, versements, anciennes ecritures...) et s'il veut ou non
- *      le detail des PRODUITS, avec ou sans TVA ;
+ *        · UN SEUL tableau des operations, de la plus ANCIENNE a la plus
+ *          RECENTE — nouvelles ET anciennes livraisons (ou achats) melees ;
+ *        · au pied de ce tableau, AU-DESSUS du total : les anciennes dettes
+ *          (chacune avec sa date) et, si l'operateur l'accepte, la dette
+ *          anterieure a la periode ;
+ *        · puis TOTAL, TOTAL VERSEMENTS et RESTE ;
+ *        · les versements ne forment plus un tableau : ils sont LISTES a la fin
+ *          du document, chacun avec sa date ;
+ *        · le tableau des marchandises n'apparait que si l'operateur le coche.
  *
  *   2. `printListDocument()` — n'importe quelle LISTE (une partie d'un
- *      historique, une partie du rapport general) avec sa colonne DATE, sa
- *      colonne DESIGNATION et ses totaux.
+ *      historique, une partie du rapport general) avec ses totaux.
  * ========================================================================== */
 
-/** Ligne « marchandise » du compte rendu : designation, quantite, prix, total. */
-export interface StatementProductLine {
-  designation: string;
-  quantity: number;
-  unit?: string;
-  unitPrice: number;
-  amount: number;
-}
+export type StatementTvaMode = 'documents' | 'none' | 'forced';
 
-/** Une partie imprimee du compte rendu (ventes, commandes, versements...). */
-export interface StatementSection {
-  title?: string;
-  columns: DocColumn[];
-  rows: DocRow[];
-  totals?: DocTotal[];
-  emptyLabel?: string;
-  note?: string;
-}
-
-export interface PartyStatementData {
+export interface StatementPrintOptions {
   kind: 'client' | 'supplier';
+  /** Compte rendu, ou bon de livraison d'une periode (livraisons seules). */
+  mode: 'statement' | 'deliveries';
   party: ClientFiscal;
-  from: string;
-  to: string;
-  /** Tableau des marchandises — imprime seulement si l'operateur le demande. */
-  productLines?: StatementProductLine[];
-  productTitle?: string;
-  /** Parties cochees dans la liste avant impression. */
-  sections?: StatementSection[];
-  applyTva?: boolean;
-  tvaRate?: number;
-  tvaAmount?: number;
-  /** VERSEMENT et LE REST du bloc de totaux. */
-  paidAmount?: number;
-  restAmount?: number;
-  /** Detail de chaque versement, repris en bas a gauche du document. */
-  versements?: { amount: number; date: string; label?: string }[];
+  /** Releve deja filtre sur les types d'operations choisis. */
+  slice: LedgerSlice;
+  /** Lignes « ancienne dette » de la periode, au-dessus du total. */
+  includeOldDebts: boolean;
+  /** Ligne « dette anterieure a la periode », au-dessus du total. */
+  includePrior: boolean;
+  /** TOTAL VERSEMENTS / RESTE et liste des versements en fin de document. */
+  includeVersements: boolean;
+  /** Tableau recapitulatif des marchandises. */
+  includeProducts: boolean;
+  tvaMode: StatementTvaMode;
+  tvaRate: number;
+  /** Tableaux d'information (commandes en cours, annulations...). */
+  extraTables?: DocTable[];
 }
 
 const qty = (n: number): string => {
   const v = Math.round((n || 0) * 1000) / 1000;
   return Number.isInteger(v) ? String(v) : String(v).replace('.', ',');
 };
+const r2 = (n: number) => Math.round((n || 0) * 100) / 100;
 
 function fiscalLines(c: ClientFiscal): string[] {
   return [
@@ -83,107 +70,253 @@ function fiscalLines(c: ClientFiscal): string[] {
   ].filter(Boolean);
 }
 
-/**
- * COMPTE RENDU D'UN TIERS — modele du bon de livraison.
- *
- * Le TOTAL est toujours presente HORS TAXES d'abord ; la TVA choisie au moment
- * de l'impression vient ensuite et donne le TOTAL T.T.C. Le bloc de totaux
- * s'accroche aux deux dernieres colonnes du tableau des marchandises, comme sur
- * le bon de livraison ; chaque versement est repris en bas a gauche avec sa
- * date (« VERSEMENT DE 600 000,00 DA LE 09/06/2026 »).
- */
-export function printPartyStatement(data: PartyStatementData, store: StoreSettings) {
-  const isClient = data.kind === 'client';
-  const lines = data.productLines ?? [];
-  const ht = lines.reduce((s, l) => s + l.amount, 0);
-  const rate = data.tvaRate ?? 19;
-  const tva = data.applyTva ? (data.tvaAmount ?? Math.round(ht * rate) / 100) : 0;
-  const ttc = ht + tva;
-  const paid = data.paidAmount ?? 0;
-  const rest = data.restAmount ?? Math.max(0, ttc - paid);
+/** La veille d'une date `YYYY-MM-DD`. */
+export function dayBefore(date: string): string {
+  const d = new Date(`${date}T12:00:00`);
+  d.setDate(d.getDate() - 1);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
 
-  const totals: DocTotal[] = [{ label: 'Total H.T', value: formatCurrency(ht) }];
-  if (data.applyTva) {
-    totals.push({ label: `T.V.A ${rate} %`, value: formatCurrency(tva) });
-    totals.push({ label: 'Total T.T.C', value: formatCurrency(ttc), strong: true });
-  } else {
-    totals.push({ label: 'Total', value: formatCurrency(ttc), strong: true });
+/** Operations du tableau principal (hors anciennes dettes). */
+export function mainDebits(slice: LedgerSlice): LedgerDebit[] {
+  return slice.debits.filter((d) => d.kind !== 'oldDebt');
+}
+
+/** Totaux du document — partages par l'apercu de la fenetre et l'impression. */
+export function statementTotals(o: Pick<StatementPrintOptions,
+  'slice' | 'includeOldDebts' | 'includePrior' | 'includeVersements' | 'tvaMode' | 'tvaRate'>) {
+  const main = mainDebits(o.slice);
+  const ht = r2(main.reduce((s, d) => s + d.ht, 0));
+  const docTva = r2(main.reduce((s, d) => s + d.tva, 0));
+  const tva = o.tvaMode === 'none' ? 0 : o.tvaMode === 'forced' ? r2((ht * (o.tvaRate || 0)) / 100) : docTva;
+  const ttc = r2(ht + tva);
+  const oldDebts = o.includeOldDebts ? o.slice.debits.filter((d) => d.kind === 'oldDebt') : [];
+  const oldDebtsTotal = r2(oldDebts.reduce((s, d) => s + d.amount, 0));
+  const prior = o.includePrior ? o.slice.priorBalance : 0;
+  const total = r2(ttc + oldDebtsTotal + prior);
+  const versements = o.includeVersements ? o.slice.totalCredits : 0;
+  const rest = r2(total - versements);
+  const rates = [...new Set(main.filter((d) => d.tvaEnabled && d.tva > 0).map((d) => d.tvaRate ?? 0))];
+  return { ht, tva, ttc, oldDebts, oldDebtsTotal, prior, total, versements, rest, rates };
+}
+
+/** « VERSEMENT DE 600 000,00 DA LE 09/06/2026 » et variantes. */
+export function creditLine(c: LedgerCredit): string {
+  const when = formatDate(c.date);
+  if (c.kind === 'payment') {
+    const mode = c.method && c.method !== 'Espèces' ? ` (${c.method.toUpperCase()})` : '';
+    return `VERSEMENT DE ${formatCurrency(c.amount)} LE ${when}${mode}`;
   }
-  totals.push({ label: 'Versement', value: formatCurrency(paid) });
-  totals.push({ label: 'Le rest', value: formatCurrency(rest), strong: true });
+  if (c.kind === 'refund') {
+    return `${c.label.toUpperCase()} : − ${formatCurrency(-c.amount)} LE ${when}`;
+  }
+  return `${c.label.toUpperCase()} : ${formatCurrency(c.amount)} LE ${when}`;
+}
 
-  const tables: DocTable[] = [];
+/**
+ * COMPTE RENDU D'UN TIERS / BON DE LIVRAISON D'UNE PERIODE.
+ */
+export function printPartyStatement(o: StatementPrintOptions, store: StoreSettings) {
+  const isClient = o.kind === 'client';
+  const { slice } = o;
+  const t = statementTotals(o);
+  const main = mainDebits(slice);
 
-  if (lines.length > 0) {
-    tables.push({
-      title: data.productTitle,
-      columns: [
-        { label: 'Designation', align: 'left' },
-        { label: 'Quantite', align: 'center', width: '16%' },
-        { label: 'Prix U', align: 'right', width: '20%' },
-        { label: 'P.T H.T', align: 'right', width: '22%' },
-      ],
-      rows: lines.map((l): DocRow => ({
-        cells: [
-          l.designation.toUpperCase(),
-          `${qty(l.quantity)}${l.unit ? ` ${l.unit}` : ''}`,
-          formatCurrency(l.unitPrice),
-          formatCurrency(l.amount),
-        ],
-      })),
-      totals,
-      emptyLabel: 'Aucune marchandise sur la periode',
+  /* ---- le tableau des operations --------------------------------------- */
+  let columns: DocColumn[];
+  const rows: DocRow[] = [];
+
+  if (isClient) {
+    columns = [
+      { label: 'Date', align: 'center', width: '12%' },
+      { label: 'Designation', align: 'left' },
+      { label: 'Adresse de livraison', align: 'left', width: '20%' },
+      { label: 'Quantite', align: 'center', width: '11%' },
+      { label: 'Prix U', align: 'right', width: '15%' },
+      { label: 'P.T H.T', align: 'right', width: '17%' },
+    ];
+    main.forEach((d) => {
+      const where = (d.location || (d.kind === 'sale' ? 'VENTE COMPTOIR' : '') || '/').toUpperCase();
+      if (!d.lines.length) {
+        rows.push({ cells: [formatDate(d.date), d.label.toUpperCase(), where, '', '', formatCurrency(d.ht)] });
+        return;
+      }
+      d.lines.forEach((l) =>
+        rows.push({
+          cells: [
+            formatDate(d.date),
+            `${l.designation.toUpperCase()}${d.historical ? ' (ANCIENNE)' : ''}`,
+            where,
+            `${qty(l.quantity)}${l.unit ? ` ${l.unit}` : ''}`,
+            formatCurrency(l.unitPrice),
+            formatCurrency(l.amount),
+          ],
+        })
+      );
+    });
+  } else {
+    // Fournisseur : colonnes « N de bon » et « Matricule » demandees.
+    columns = [
+      { label: 'Date', align: 'center', width: '11%' },
+      { label: 'N de bon', align: 'center', width: '12%' },
+      { label: 'Matricule', align: 'center', width: '13%' },
+      { label: 'Designation', align: 'left' },
+      { label: 'Quantite', align: 'center', width: '10%' },
+      { label: 'Prix U', align: 'right', width: '13%' },
+      { label: 'Montant', align: 'right', width: '15%' },
+    ];
+    main.forEach((d) => {
+      const bon = (d.bonNumber || '/').toUpperCase();
+      const plate = (d.driverPlate || '/').toUpperCase();
+      if (!d.lines.length) {
+        rows.push({ cells: [formatDate(d.date), bon, plate, d.label.toUpperCase(), '', '', formatCurrency(d.ht)] });
+        return;
+      }
+      d.lines.forEach((l) =>
+        rows.push({
+          cells: [
+            formatDate(d.date), bon, plate,
+            `${l.designation.toUpperCase()}${d.historical ? ' (ANCIEN ACHAT)' : ''}`,
+            `${qty(l.quantity)}${l.unit ? ` ${l.unit}` : ''}`,
+            formatCurrency(l.unitPrice),
+            formatCurrency(l.amount),
+          ],
+        })
+      );
     });
   }
 
-  (data.sections ?? []).forEach((sec) =>
-    tables.push({
-      title: sec.title,
-      columns: sec.columns,
-      rows: sec.rows,
-      totals: sec.totals,
-      emptyLabel: sec.emptyLabel ?? 'Aucune ecriture sur la periode',
-      note: sec.note,
+  /* ---- le bloc de totaux (accroche aux deux dernieres colonnes) --------- */
+  const totals: DocTotal[] = [];
+  const showTva = t.tva > 0.004;
+  if (showTva) {
+    const rateLabel = o.tvaMode === 'forced'
+      ? ` ${o.tvaRate} %`
+      : t.rates.length === 1 ? ` ${t.rates[0]} %` : '';
+    totals.push({ label: 'Total H.T', value: formatCurrency(t.ht) });
+    totals.push({ label: `T.V.A${rateLabel}`, value: formatCurrency(t.tva) });
+    totals.push({ label: 'Total T.T.C', value: formatCurrency(t.ttc) });
+  } else if (t.oldDebts.length || (o.includePrior && Math.abs(t.prior) > 0.004)) {
+    totals.push({ label: isClient ? 'Total des operations' : 'Total des achats', value: formatCurrency(t.ttc) });
+  }
+  // Anciennes dettes : AU-DESSUS du total, chacune avec sa date.
+  t.oldDebts.forEach((d) =>
+    totals.push({
+      label: `Ancienne dette du ${formatDate(d.date)}${d.description ? ` — ${d.description}` : ''}`,
+      value: formatCurrency(d.amount),
     })
   );
+  // Dette (ou acompte) anterieure a la periode.
+  if (o.includePrior && Math.abs(t.prior) > 0.004) {
+    const until = formatDate(dayBefore(slice.from));
+    totals.push(
+      t.prior > 0
+        ? { label: `Dette anterieure au ${until}`, value: formatCurrency(t.prior) }
+        : { label: `Acompte anterieur au ${until}`, value: `− ${formatCurrency(-t.prior)}` }
+    );
+  }
+  const hasExtraRows = showTva || t.oldDebts.length > 0 || (o.includePrior && Math.abs(t.prior) > 0.004);
+  totals.push({ label: hasExtraRows ? 'Total general' : 'Total', value: formatCurrency(t.total), strong: true });
+  if (o.includeVersements) {
+    totals.push({ label: 'Total versements', value: formatCurrency(t.versements) });
+    totals.push(
+      t.rest >= -0.004
+        ? { label: 'Reste a payer', value: formatCurrency(Math.max(0, t.rest)), strong: true }
+        : {
+            label: isClient ? 'Solde en faveur du client' : 'Trop-verse au fournisseur',
+            value: formatCurrency(-t.rest),
+            strong: true,
+          }
+    );
+  }
 
-  // Aucune partie cochee : on imprime au moins le bloc de totaux.
-  if (tables.length === 0) {
+  const tables: DocTable[] = [
+    {
+      title: o.mode === 'deliveries'
+        ? undefined
+        : isClient ? 'Operations de la periode' : 'Achats de la periode',
+      columns,
+      rows,
+      totals,
+      totalsLabelSpan: 3,
+      emptyLabel: isClient ? 'Aucune livraison ni vente sur la periode' : 'Aucun achat sur la periode',
+    },
+  ];
+
+  /* ---- marchandises (optionnel) ----------------------------------------- */
+  if (o.includeProducts) {
+    const grouped = new Map<string, { name: string; unit?: string; qty: number; price: number; amount: number }>();
+    main.forEach((d) =>
+      d.lines.forEach((l) => {
+        const key = `${l.designation.toLowerCase()}|${l.unit ?? ''}|${l.unitPrice}`;
+        const cur = grouped.get(key) ?? { name: l.designation, unit: l.unit, qty: 0, price: l.unitPrice, amount: 0 };
+        cur.qty += l.quantity;
+        cur.amount += l.amount;
+        grouped.set(key, cur);
+      })
+    );
+    const list = [...grouped.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
     tables.push({
+      title: isClient ? 'Marchandises de la periode' : 'Marchandises recues sur la periode',
       columns: [
         { label: 'Designation', align: 'left' },
         { label: 'Quantite', align: 'center', width: '16%' },
         { label: 'Prix U', align: 'right', width: '20%' },
         { label: 'P.T H.T', align: 'right', width: '22%' },
       ],
-      rows: [],
-      totals,
+      rows: list.map((p) => ({
+        cells: [
+          p.name.toUpperCase(),
+          `${qty(p.qty)}${p.unit ? ` ${p.unit}` : ''}`,
+          formatCurrency(p.price),
+          formatCurrency(r2(p.amount)),
+        ],
+      })),
+      totals: [{ label: 'Total marchandises', value: formatCurrency(r2(list.reduce((s, p) => s + p.amount, 0))), strong: true }],
       emptyLabel: 'Aucune marchandise sur la periode',
     });
   }
 
+  (o.extraTables ?? []).forEach((x) => tables.push(x));
+
+  const period = `${formatDate(slice.from)} AU ${formatDate(slice.to)}`;
   printOfficialDocument(
     {
-      title: isClient ? 'COMPTE RENDU CLIENT' : 'COMPTE RENDU FOURNISSEUR',
-      docDate: data.to,
+      title: o.mode === 'deliveries'
+        ? 'BON DE LIVRAISON'
+        : isClient ? 'COMPTE RENDU CLIENT' : 'COMPTE RENDU FOURNISSEUR',
+      docDate: slice.to,
       doitLabel: isClient ? 'DOIT' : 'FOURNISSEUR',
-      doitName: data.party.name,
-      doitLines: fiscalLines(data.party),
-      metaLines: [`COMPTE RENDU DU ${formatDate(data.from)} AU ${formatDate(data.to)}`],
+      doitName: o.party.name,
+      doitLines: fiscalLines(o.party),
+      metaLines: [o.mode === 'deliveries' ? `LIVRAISON DU ${period}` : `COMPTE RENDU DU ${period}`],
       tables,
-      footNotes: (data.versements ?? []).map((v) =>
-        v.label
-          ? `${v.label.toUpperCase()} : ${formatCurrency(v.amount)} LE ${formatDate(v.date)}`
-          : versementLine(v.amount, v.date)
-      ),
+      // Les versements ne forment plus un tableau : ils sont LISTES en fin de
+      // document, chacun avec sa date.
+      footNotes: o.includeVersements
+        ? [...slice.credits]
+            .sort((a, b) => a.date.localeCompare(b.date))
+            .map(creditLine)
+        : [],
       signatures: [isClient ? 'Le client' : 'Le fournisseur', 'Signature'],
-      fileName: `Compte_Rendu_${data.party.name.replace(/\s+/g, '_')}`,
+      fileName: `${o.mode === 'deliveries' ? 'Livraisons' : 'Compte_Rendu'}_${o.party.name.replace(/\s+/g, '_')}`,
     },
     store
   );
 }
 
 /* -------------------------------------------------------------------------- */
+
+/** Une partie imprimee d'une liste (historique, rapport general). */
+export interface StatementSection {
+  title?: string;
+  columns: DocColumn[];
+  rows: DocRow[];
+  totals?: DocTotal[];
+  emptyLabel?: string;
+  note?: string;
+}
 
 export interface ListDocumentData {
   title: string;
@@ -207,7 +340,7 @@ export function printListDocument(data: ListDocumentData, store: StoreSettings) 
   printOfficialDocument(
     {
       title: data.title.toUpperCase(),
-      docDate: data.docDate || new Date().toISOString().slice(0, 10),
+      docDate: data.docDate || todayISO(),
       doitLabel: data.partyLabel,
       doitName: data.partyName,
       doitLines: data.partyLines,

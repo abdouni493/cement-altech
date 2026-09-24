@@ -18,7 +18,10 @@ interface VersementModalProps {
   clientPhone?: string;
   /** Situation du tiers, toutes factures / commandes confondues. */
   total: number;
+  /** Déjà payé, ACOMPTE compris. */
   paid: number;
+  /** Acompte actuel du tiers (déjà compris dans `paid`). */
+  credit?: number;
   /** (montant, note, dateHeure ISO, mode de règlement) */
   onSubmit: (
     amount: number,
@@ -54,7 +57,7 @@ const METHOD_ICONS: Record<PaymentMethod, typeof Banknote> = {
  * (n° de virement + banque facultatifs).
  */
 export function VersementModal({
-  open, onClose, kind = 'client', clientName, clientPhone, total, paid, onSubmit,
+  open, onClose, kind = 'client', clientName, clientPhone, total, paid, credit = 0, onSubmit,
 }: VersementModalProps) {
   const isClient = kind === 'client';
   const rest = Math.max(0, total - paid);
@@ -115,9 +118,12 @@ export function VersementModal({
             <span className="font-semibold text-text-primary">{clientName}</span>
             {clientPhone ? ` · ${clientPhone}` : ''}
           </p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className={`grid gap-2 ${credit > 0.004 ? 'grid-cols-4' : 'grid-cols-3'}`}>
             <Figure label="Dette totale" value={formatCurrency(total)} />
-            <Figure label={isClient ? 'Déjà versé' : 'Déjà payé'} value={formatCurrency(paid)} accent="text-pistachio" />
+            <Figure label={isClient ? 'Déjà versé' : 'Déjà payé'} value={formatCurrency(Math.max(0, paid - credit))} accent="text-pistachio" />
+            {credit > 0.004 && (
+              <Figure label={isClient ? 'Acompte actuel' : 'Trop-versé actuel'} value={formatCurrency(credit)} accent="text-pistachio" />
+            )}
             <Figure label="Reste dû" value={formatCurrency(rest)} accent="text-rose-deep" />
           </div>
         </div>
@@ -233,9 +239,10 @@ export function VersementModal({
           <div className="flex items-start gap-2 rounded-xl border border-caramel/40 bg-caramel/10 px-3.5 py-2.5 text-xs text-caramel">
             <AlertTriangle size={15} className="shrink-0 mt-0.5" />
             <span>
-              Le montant dépasse la dette de <strong>{formatCurrency(excess)}</strong>. Le versement
-              sera tout de même enregistré {isClient ? 'et encaissé' : 'et décaissé'}, l&rsquo;excédent restera en avance
-              sur le compte {isClient ? 'du client' : 'du fournisseur'}.
+              Le montant dépasse la dette de <strong>{formatCurrency(excess)}</strong>. Le versement est
+              enregistré en entier {isClient ? 'et encaissé' : 'et décaissé'} : les <strong>{formatCurrency(excess)}</strong> en
+              trop deviennent un <strong>ACOMPTE</strong> sur le compte {isClient ? 'du client' : 'du fournisseur'}, affiché
+              sur sa carte et utilisable sur {isClient ? 'ses prochaines commandes, ventes et livraisons' : 'ses prochains achats'}.
             </span>
           </div>
         )}
@@ -245,10 +252,10 @@ export function VersementModal({
           <div className="flex items-center gap-2 text-xs text-text-muted">
             <span className="tabular font-semibold text-text-secondary">{formatCurrency(rest)}</span>
             <ArrowRight size={14} className="text-gold" />
-            <span>dette après versement</span>
+            <span>{excess > 0 ? 'acompte après versement' : 'dette après versement'}</span>
           </div>
           <span className={`text-lg font-bold tabular ${newRest > 0 ? 'text-rose-deep' : 'text-pistachio'}`}>
-            {formatCurrency(newRest)}
+            {excess > 0 ? `+ ${formatCurrency(excess)}` : formatCurrency(newRest)}
           </span>
         </div>
 

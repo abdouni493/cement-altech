@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Plus, X, Truck, Package, Wallet, Ruler, Check, FileText, CarFront, History, AlertTriangle, PencilLine } from 'lucide-react';
+import { Search, Plus, X, Truck, Package, Wallet, Ruler, Check, FileText, CarFront, History, AlertTriangle, PencilLine, PiggyBank } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
@@ -44,7 +44,7 @@ interface Line extends PurchaseLine {
 export function CreatePurchase({ onClose, onCreated, historical = false, editing = null }: CreatePurchaseProps) {
   const products = useStockStore((s) => s.products);
   const addProduct = useStockStore((s) => s.addProduct);
-  const { suppliers, addSupplier } = useSupplierStore();
+  const { suppliers, addSupplier, applyCreditToPurchase, payDebt: paySupplier } = useSupplierStore();
   const addPurchase = usePurchaseStore((s) => s.addPurchase);
   const updatePurchase = usePurchaseStore((s) => s.updatePurchase);
 
@@ -64,6 +64,9 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
   const [showProductForm, setShowProductForm] = useState(false);
   const [showSupplierForm, setShowSupplierForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** Trop-versé du fournisseur (versé en trop auparavant) utilisé sur cette facture. */
+  const [useSupplierCredit, setUseSupplierCredit] = useState(true);
+  const [creditInput, setCreditInput] = useState<number | null>(null);
 
   // ---- Pré-remplissage en modification -----------------------------------
   // La base réconcilie le stock PAR ÉCART (nouvelle quantité − ancienne) : on
@@ -100,6 +103,19 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
     () => lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.purchasePrice) || 0), 0),
     [lines]
   );
+
+  /* ---- TROP-VERSE DU FOURNISSEUR -------------------------------------------
+   * L'entreprise a déjà versé plus que ses factures : ce trop-versé paie la
+   * nouvelle facture sans nouvelle sortie de caisse. */
+  const supplierCredit = !isEdit && supplierId
+    ? Math.max(0, suppliers.find((s) => s.id === supplierId)?.creditAmount ?? 0)
+    : 0;
+  const creditUsed = useSupplierCredit && supplierCredit > 0
+    ? Math.max(0, Math.min(creditInput ?? supplierCredit, supplierCredit, total))
+    : 0;
+  const dueAfterCredit = Math.max(0, total - creditUsed);
+  /** Payé EN PLUS du dû : devient un versement au fournisseur (trop-versé). */
+  const overpaid = !isEdit ? Math.max(0, (Number(paidAmount) || 0) - dueAfterCredit) : 0;
 
   const productResults = useMemo(() => {
     if (!productSearch) return [];
@@ -201,6 +217,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
         return;
       }
 
+      const cash = Math.min(Number(paidAmount) || 0, dueAfterCredit);
       const purchase = await addPurchase({
         supplierId,
         date,
@@ -208,8 +225,23 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
         bonNumber: bonNumber.trim(),
         isHistorical: historical,
         products: payloadLines,
-        paidAmount: Number(paidAmount),
+        paidAmount: cash,
       });
+      if (creditUsed > 0.004 && purchase?.id) {
+        try {
+          const applied = await applyCreditToPurchase(purchase.id, creditUsed);
+          if (applied > 0) toast.info(`Trop-versé du fournisseur utilisé : ${formatCurrency(applied)}`);
+        } catch { /* message déjà affiché */ }
+      }
+      if (overpaid > 0.004 && !historical) {
+        try {
+          await paySupplier(
+            supplierId, overpaid, new Date(`${date}T12:00:00`).toISOString(),
+            `Versé en plus de la facture ${purchase.reference}`, { method: 'especes' }
+          );
+          toast.info(`${formatCurrency(overpaid)} versés en plus : trop-versé du fournisseur`);
+        } catch { /* message déjà affiché */ }
+      }
       toast.success(
         historical
           ? "Ancien achat enregistré — stock actuel inchangé, historique du fournisseur mis à jour"
@@ -502,14 +534,63 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
             onChange={(e) => setPaidAmount(Number(e.target.value))}
             className="max-w-[180px]"
           />
-          <Button variant="secondary" size="sm" onClick={() => setPaidAmount(total)}>Tout payer</Button>
+          <Button variant="secondary" size="sm" onClick={() => setPaidAmount(isEdit ? total : dueAfterCredit)}>Tout payer</Button>
           <div>
             <p className="text-xs text-text-muted">Reste (dette fournisseur)</p>
             <p className="text-xl font-bold text-rose-deep tabular">
-              {formatCurrency(Math.max(0, total - paidAmount))}
+              {formatCurrency(Math.max(0, (isEdit ? total : dueAfterCredit) - paidAmount))}
             </p>
           </div>
         </div>
+
+        {supplierCredit > 0 && (
+          <div className="mt-3 rounded-xl border border-pistachio/40 bg-pistachio/10 p-3 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Switch
+                checked={useSupplierCredit}
+                onChange={setUseSupplierCredit}
+                label="Utiliser le trop-versé du fournisseur"
+              />
+              <span className="flex items-center gap-1 text-xs font-bold tabular text-pistachio">
+                <PiggyBank size={13} /> {formatCurrency(supplierCredit)} disponible
+              </span>
+            </div>
+            {useSupplierCredit && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-text-muted">Montant imputé sur cette facture</span>
+                <Input
+                  type="number" step="any" min={0}
+                  value={creditUsed}
+                  onChange={(e) => setCreditInput(Math.max(0, Number(e.target.value)))}
+                  className="max-w-[160px] h-9"
+                />
+                <span className="text-xs text-text-muted">
+                  → reste à payer <b className="tabular text-gold-dark">{formatCurrency(dueAfterCredit)}</b>
+                </span>
+              </div>
+            )}
+            <p className="text-[11px] text-text-muted">
+              Argent déjà versé au fournisseur en plus de ses factures : aucune nouvelle sortie de caisse.
+            </p>
+          </div>
+        )}
+
+        {overpaid > 0.004 && (
+          <p className="mt-3 flex items-start gap-2 rounded-xl border border-caramel/40 bg-caramel/10 px-3 py-2 text-xs text-caramel">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>
+              Le montant payé dépasse la facture de <b>{formatCurrency(overpaid)}</b> : cet excédent est enregistré comme
+              un versement au fournisseur et devient son <b>trop-versé</b>, utilisable sur ses prochains achats.
+            </span>
+          </p>
+        )}
+
+        {isEdit && (editing?.allocatedAmount ?? 0) > 0.004 && (
+          <p className="mt-3 text-[11px] text-text-muted">
+            Dont <b className="text-pistachio">{formatCurrency(editing?.allocatedAmount ?? 0)}</b> payés par le compte du
+            fournisseur (versements / trop-versé) — sans écriture de caisse propre.
+          </p>
+        )}
       </section>
 
       <div className="flex justify-end gap-3">

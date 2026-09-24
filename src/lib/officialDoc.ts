@@ -1,5 +1,6 @@
 import type { StoreSettings } from '@/types';
 import { formatCurrency, formatDate } from './utils';
+import { openPrintPreview } from './printWindow';
 
 /* ============================================================================
  *  MODÈLE OFFICIEL DES DOCUMENTS IMPRIMÉS
@@ -70,6 +71,12 @@ export interface DocTable {
   rows: DocRow[];
   /** Bloc de totaux accroché au pied du tableau, sur ses 2 dernières colonnes. */
   totals?: DocTotal[];
+  /**
+   * Nombre de colonnes occupées par le LIBELLÉ d'un total (défaut : 1, ou 2
+   * au-delà de six colonnes). Les comptes rendus l'élargissent pour que
+   * « ANCIENNE DETTE DU 01/01/2026 — … » tienne sur une ligne.
+   */
+  totalsLabelSpan?: number;
   emptyLabel?: string;
   note?: string;
 }
@@ -322,7 +329,7 @@ function tableHtml(t: DocTable): string {
   /* Les totaux ne tiennent que sur les DEUX dernières colonnes : la partie
      gauche du tableau s'arrête, comme sur le modèle papier. Au-delà de six
      colonnes, le libellé prend deux colonnes pour ne pas se couper en deux. */
-  const labelSpan = cols.length >= 6 ? 2 : 1;
+  const labelSpan = Math.max(1, Math.min(cols.length - 1, t.totalsLabelSpan ?? (cols.length >= 6 ? 2 : 1)));
   const voidSpan = Math.max(0, cols.length - 1 - labelSpan);
   const voidCell = voidSpan > 0 ? `<td class="tot-void" colspan="${voidSpan}"></td>` : '';
   const totals = (t.totals ?? [])
@@ -355,16 +362,13 @@ function tableHtml(t: DocTable): string {
  * papier à en-tête, quel que soit le document.
  */
 export function printOfficialDocument(data: DocData, store: StoreSettings) {
-  const win = window.open('', '_blank', 'width=900,height=1040');
-  if (!win) return;
-
   const signs = data.signatures?.length ? data.signatures : ['Signature'];
   // Modèle papier : le premier cartouche à GAUCHE, le dernier à DROITE.
   const leftSign = signs.length > 1 ? signs[0] : '';
   const rightSign = signs[signs.length - 1];
   const city = headerCity(store);
 
-  win.document.write(`<!doctype html>
+  openPrintPreview(`<!doctype html>
 <html lang="fr">
   <head><meta charset="utf-8"/><title>${esc(data.fileName)}</title><style>${CSS}</style></head>
   <body>
@@ -410,6 +414,5 @@ export function printOfficialDocument(data: DocData, store: StoreSettings) {
     </div>
     <script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>
   </body>
-</html>`);
-  win.document.close();
+</html>`, data.fileName);
 }

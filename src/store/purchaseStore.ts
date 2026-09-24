@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Purchase } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
+import { todayISO } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 import { useStockStore } from './stockStore';
 import { useCaisseStore } from './caisseStore';
@@ -60,7 +61,7 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
       const total =
         p.totalAmount ?? p.products.reduce((acc, pr) => acc + pr.quantity * pr.purchasePrice, 0);
       const paid = p.paidAmount || 0;
-      const purDate = p.date || new Date().toISOString().slice(0, 10);
+      const purDate = p.date || todayISO();
 
       // create_purchase() writes the invoice + its lines, feeds the stock
       // (trg_purchase_line_stock) and books the caisse withdrawal.

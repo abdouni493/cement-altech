@@ -65,6 +65,8 @@ type CalcStores = {
   destructions: ReturnType<typeof useComptoirStore.getState>['destructions'];
   workers: ReturnType<typeof useWorkerStore.getState>['workers'];
   transactions: ReturnType<typeof useCaisseStore.getState>['transactions'];
+  /** Solde initial de la caisse (réglage). */
+  initialBalance?: number;
   productions?: ReturnType<typeof useProductionStore.getState>['productions'];
 };
 
@@ -156,20 +158,13 @@ export function computeReportCalc(report: CaisseReport, stores: CalcStores): Rep
   // Net economic gains over the period
   const gains = salesGross - purchasesTotal - workerTotal - expensesTotal - destroyedValue;
 
-  // Theoretical cash in the drawer at the end of the period (cumulative cash flow)
+  // Caisse THEORIQUE en fin de periode : solde initial + toutes les entrees -
+  // toutes les sorties jusqu'a ce jour. Les ventes, achats, depenses et
+  // salaires ont DEJA leur ligne dans la caisse (declencheurs de la base) :
+  // les rajouter les comptait deux fois et faussait le « decalage ».
   const cumDeposits = transactions.filter((t) => t.type === 'deposit' && upTo(t.date)).reduce((s, x) => s + x.amount, 0);
   const cumWithdrawals = transactions.filter((t) => t.type === 'withdrawal' && upTo(t.date)).reduce((s, x) => s + x.amount, 0);
-  const cumSalesPaid = sales.filter((s) => upTo(s.date)).reduce((s, x) => s + x.paidAmount, 0);
-  const cumPurchPaid = purchases.filter((p) => upTo(p.date)).reduce((s, x) => s + x.paidAmount, 0);
-  const cumExp = expenses.filter((e) => upTo(e.date)).reduce((s, x) => s + x.amount, 0);
-  const cumWorker = workers.reduce(
-    (s, w) =>
-      s +
-      w.payments.filter((p) => upTo(p.date)).reduce((a, p) => a + p.amount, 0) +
-      w.acomptes.filter((p) => upTo(p.date)).reduce((a, p) => a + p.amount, 0),
-    0
-  );
-  const theoretical = cumDeposits + cumSalesPaid - cumWithdrawals - cumPurchPaid - cumExp - cumWorker;
+  const theoretical = (stores.initialBalance ?? 0) + cumDeposits - cumWithdrawals;
   const decalage = report.declaredAmount - theoretical;
 
   return {
@@ -826,11 +821,12 @@ export default function CaisseReportsPage() {
   const productCategories = useStockStore((s) => s.categories);
   const workers = useWorkerStore((s) => s.workers);
   const transactions = useCaisseStore((s) => s.transactions);
+  const initialBalance = useCaisseStore((s) => s.initialBalance);
   const suppliers = useSupplierStore((s) => s.suppliers);
   const clients = useClientStore((s) => s.clients);
   const settings = useSettingsStore((s) => s.settings);
 
-  const stores: DetailStores = { sales, purchases, expenses, destructions, workers, transactions, productions, products, productCategories, comptoirItems, suppliers };
+  const stores: DetailStores = { sales, purchases, expenses, destructions, workers, transactions, initialBalance, productions, products, productCategories, comptoirItems, suppliers };
 
   const printReport = (r: CaisseReport) => {
     printDetailedReport(buildCaisseReportDoc(r, stores, clients, t, language), settings, language);

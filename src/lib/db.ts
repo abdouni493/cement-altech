@@ -344,6 +344,7 @@ const toPurchase = (r: any): Purchase => ({
   totalAmount: num(r.total_amount),
   paidAmount: num(r.paid_amount),
   restAmount: num(r.rest_amount),
+  allocatedAmount: num(r.allocated_amount),
   createdBy: r.created_by ?? undefined,
   products: (r.purchase_lines ?? []).map((l: any) => ({
     productId: l.product_id ?? '',
@@ -378,6 +379,7 @@ const toSale = (r: any): Sale => ({
   finalAmount: num(r.final_amount),
   paidAmount: num(r.paid_amount),
   restAmount: num(r.rest_amount),
+  allocatedAmount: num(r.allocated_amount),
   status: r.status,
   createdBy: r.created_by ?? undefined,
   products: (r.sale_lines ?? []).map((l: any) => ({
@@ -529,6 +531,17 @@ const toCommand = (r: any): Command => ({
   totalTtc: r.total_ttc === null || r.total_ttc === undefined ? num(r.total_amount) : num(r.total_ttc),
   advancePaid: num(r.advance_paid),
   extraPaid: num(r.extra_paid),
+  creditApplied: num(r.credit_applied),
+  payments: (r.command_payments ?? [])
+    .map((p: any) => ({
+      id: p.id,
+      commandId: p.command_id,
+      amount: num(p.amount),
+      date: p.date,
+      notes: p.notes ?? undefined,
+      createdAt: p.created_at,
+    }))
+    .sort((a: { date: string }, b: { date: string }) => (a.date || '').localeCompare(b.date || '')),
   paidAmount: num(r.paid_amount),
   restAmount: num(r.rest_amount),
   status: r.status,
@@ -537,6 +550,10 @@ const toCommand = (r: any): Command => ({
   createdBy: r.created_by ?? '',
   items: (r.command_items ?? []).map((i: any) => ({
     id: i.id,
+    position: i.position ?? undefined,
+    // La quantite a laquelle le client a RENONCE (« Annuler le reste ») : sans
+    // elle, chaque ecran croyait encore la marchandise « a livrer ».
+    cancelledQuantity: num(i.cancelled_quantity),
     deliveredQuantity: num(i.delivered_quantity),
     productId: i.product_id ?? undefined,
     ficheTechnicId: i.fiche_technic_id ?? undefined,
@@ -568,6 +585,7 @@ const toCaisseTx = (r: any): CaisseTransaction => ({
   description: r.description ?? '',
   categoryId: r.category_id ?? undefined,
   categoryName: r.category_name ?? undefined,
+  refTable: r.ref_table ?? undefined,
   createdAt: r.created_at,
   createdBy: r.created_by ?? undefined,
 });
@@ -700,14 +718,21 @@ export const db = {
     // PLUSIEURS FOIS le meme produit (quantites et prix differents), l'ordre de
     // saisie est donc la seule chose qui distingue ces lignes entre elles.
     list: async (): Promise<Command[]> => {
+      const byPosition = (r: any) => toCommand({
+        ...r,
+        command_items: [...(r.command_items ?? [])].sort(
+          (a: any, b: any) => (a.position ?? 0) - (b.position ?? 0)
+        ),
+      });
+      // `command_payments` (reglements dates) n'existe qu'une fois
+      // altech_production_update_acomptes_comptes_rendus.sql execute.
       try {
-        return (await select<any>('commands', '*, command_items(*)', 'created_at'))
-          .map((r: any) => toCommand({
-            ...r,
-            command_items: [...(r.command_items ?? [])].sort(
-              (a: any, b: any) => (a.position ?? 0) - (b.position ?? 0)
-            ),
-          }));
+        return (await select<any>('commands', '*, command_items(*), command_payments(*)', 'created_at')).map(byPosition);
+      } catch (e) {
+        if (!isMissingSchema((e as Error).message)) throw e;
+      }
+      try {
+        return (await select<any>('commands', '*, command_items(*)', 'created_at')).map(byPosition);
       } catch (e) {
         if (!isMissingSchema((e as Error).message)) throw e;
         return (await select<any>('commands', '*, command_items(*)', 'created_at')).map(toCommand);
@@ -1119,6 +1144,20 @@ export const rpc = {
       p_bank_name: method.bankName || null,
     }),
   deletePartyRefund: (id: string) => call<void>('delete_party_refund', { p_id: id }),
+
+  // /clients & /suppliers — l'ACOMPTE du tiers utilise sur un nouveau document
+  /** Impute l'acompte du client sur une vente (caisse ou bon de livraison). */
+  applyCreditToSale: (saleId: string, amount?: number) =>
+    call<number>('apply_credit_to_sale', { p_sale_id: saleId, p_amount: amount ?? null }),
+  /** Utilise l'acompte du client comme acompte d'une commande. */
+  applyCreditToCommand: (commandId: string, amount?: number) =>
+    call<number>('apply_credit_to_command', { p_command_id: commandId, p_amount: amount ?? null }),
+  /** Impute le trop-verse du fournisseur sur une facture d'achat. */
+  applyCreditToPurchase: (purchaseId: string, amount?: number) =>
+    call<number>('apply_credit_to_purchase', { p_purchase_id: purchaseId, p_amount: amount ?? null }),
+  /** Impute l'acompte d'un tiers sur ses dettes restantes (la plus ancienne d'abord). */
+  rebalancePartyCredit: (partyType: PartyType, partyId: string) =>
+    call<number>('rebalance_party_credit', { p_party_type: partyType, p_party_id: partyId }),
 
   // /commands — livraisons partielles
   createCommandDelivery: (payload: Record<string, any>) =>

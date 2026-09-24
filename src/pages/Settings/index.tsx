@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useAuthStore } from '@/store/authStore';
 import { useLanguage } from '@/hooks/useLanguage';
-import { downloadJSON } from '@/lib/utils';
+import { downloadJSON, todayISO } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 
 const STORE_KEYS = [
@@ -53,7 +53,7 @@ export default function SettingsPage() {
   const handleBackup = () => {
     const data: Record<string, unknown> = {};
     STORE_KEYS.forEach((k) => { const v = localStorage.getItem(k); if (v) data[k] = JSON.parse(v); });
-    downloadJSON(data, `altech-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    downloadJSON(data, `altech-backup-${todayISO()}.json`);
     toast.success('Sauvegarde téléchargée');
   };
 

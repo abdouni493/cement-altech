@@ -1,14 +1,25 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { ErrorBoundary } from './ErrorBoundary';
 import { FAST } from '@/lib/animations';
+import { resetScrollLock } from '@/lib/scrollLock';
 
 export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
+
+  // CHANGER D'ECRAN REND TOUJOURS LA PAGE UTILISABLE.
+  // Aucune fenetre ne survit a la navigation (bouton retour du navigateur,
+  // menu lateral...) : le defilement et les clics sont rendus, le menu mobile
+  // se replie et la nouvelle page s'ouvre en haut.
+  useEffect(() => {
+    resetScrollLock();
+    setSidebarOpen(false);
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+  }, [location.pathname]);
 
   return (
     <div className="flex min-h-screen bg-cream">

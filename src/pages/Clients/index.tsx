@@ -33,8 +33,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency } from '@/lib/utils';
 import { printPaymentReceipt } from '@/lib/documents';
-import { computePartyBalance } from '@/lib/partyBalance';
-import { netCommandTotals } from '@/lib/commandBilling';
+import { buildClientAccounts, EMPTY_CLIENT_ACCOUNT, sumAccounts, type ClientAccount } from '@/lib/accounts';
 import { toast } from '@/components/ui/Toast';
 import type { Client, PartyPayment, PaymentMethodDetails, PartyOldDebt } from '@/types';
 
@@ -42,7 +41,7 @@ type ClientFilter = 'all' | 'debt' | 'clear' | 'credit';
 
 /** Situation d'un client telle qu'affichee sur sa carte et dans le tableau. */
 interface ClientStats {
-  balance: ReturnType<typeof computePartyBalance>;
+  balance: ClientAccount;
   total: number; paid: number; rest: number; credit: number;
   salesCount: number; commandsCount: number; paymentsCount: number;
   oldDebtsCount: number; refundsCount: number;
@@ -50,7 +49,7 @@ interface ClientStats {
 
 /** Client sans aucune ecriture — evite un `undefined` dans les tableaux. */
 const EMPTY_CLIENT_STATS: ClientStats = {
-  balance: computePartyBalance({ documentsBilled: 0, documentsPaid: 0, documentsRest: 0, oldDebts: [] }),
+  balance: EMPTY_CLIENT_ACCOUNT,
   total: 0, paid: 0, rest: 0, credit: 0,
   salesCount: 0, commandsCount: 0, paymentsCount: 0, oldDebtsCount: 0, refundsCount: 0,
 };
@@ -82,6 +81,7 @@ export default function ClientsPage() {
   } = useClientStore();
   const sales = useSalesStore((s) => s.sales);
   const commands = useCommandStore((s) => s.commands);
+  const deliveries = useCommandStore((s) => s.deliveries);
   const debts = useClientDebtStore((s) => s.debts);
   const settings = useSettingsStore((s) => s.settings);
 
@@ -109,51 +109,41 @@ export default function ClientsPage() {
    * seule fois par client, et `statsOf()` se contente de lire le resultat.
    */
   const statsByClient = useMemo(() => {
-    interface Bucket {
-      cs: typeof sales; cc: typeof commands; pays: number;
-      olds: typeof oldDebts; versements: number; refs: number;
-    }
-    const index = new Map<string, Bucket>();
-    const bucket = (id: string): Bucket => {
-      let b = index.get(id);
-      if (!b) { b = { cs: [], cc: [], pays: 0, olds: [], versements: 0, refs: 0 }; index.set(id, b); }
-      return b;
+    // Le compte de chaque client : ventes (caisse + bons de livraison) +
+    // anciennes dettes, moins son ACOMPTE (versements en trop + argent de ses
+    // commandes pas encore impute). Les commandes non livrees ne sont PAS une
+    // dette : elles sont rappelees a part.
+    const accounts = buildClientAccounts({ clients, sales, commands, deliveries, oldDebts });
+
+    const counts = new Map<string, { pays: number; olds: number; refs: number }>();
+    const count = (id: string) => {
+      let c = counts.get(id);
+      if (!c) { c = { pays: 0, olds: 0, refs: 0 }; counts.set(id, c); }
+      return c;
     };
-    const creditOf = new Map(clients.map((c) => [c.id, c.creditAmount ?? 0]));
-    clients.forEach((c) => bucket(c.id));
-    sales.forEach((x) => { if (x.clientId) bucket(x.clientId).cs.push(x); });
-    commands.forEach((c) => { if (c.clientId) bucket(c.clientId).cc.push(c); });
-    payments.forEach((x) => { bucket(x.partyId).pays += 1; });
-    oldDebts.forEach((d) => { bucket(d.partyId).olds.push(d); });
-    refunds.forEach((r) => { bucket(r.partyId).refs += 1; });
-    debts.forEach((d) => { bucket(d.clientId).versements += (d.versements ?? []).length; });
+    payments.forEach((x) => { count(x.partyId).pays += 1; });
+    oldDebts.forEach((d) => { count(d.partyId).olds += 1; });
+    refunds.forEach((r) => { count(r.partyId).refs += 1; });
+    debts.forEach((d) => { count(d.clientId).pays += (d.versements ?? []).length; });
 
     const out = new Map<string, ClientStats>();
-    index.forEach((b, id) => {
-      // Une commande deja transformee en bon(s) de livraison est deja facturee
-      // par ses ventes : on n'ajoute que la part qui n'est pas encore livree.
-      const netCmd = netCommandTotals(b.cc, b.cs);
-      const balance = computePartyBalance({
-        documentsBilled: b.cs.reduce((x, y) => x + y.finalAmount, 0) + netCmd.billed,
-        documentsPaid: b.cs.reduce((x, y) => x + y.paidAmount, 0) + netCmd.paid,
-        documentsRest: b.cs.reduce((x, y) => x + y.restAmount, 0) + netCmd.rest,
-        oldDebts: b.olds,
-        credit: creditOf.get(id) ?? 0,
-      });
+    accounts.forEach((balance, id) => {
+      const c = counts.get(id) ?? { pays: 0, olds: 0, refs: 0 };
       out.set(id, {
         balance,
-        total: balance.billed, paid: balance.paid, rest: balance.rest, credit: balance.credit,
-        salesCount: b.cs.length,
-        commandsCount: b.cc.length,
-        // Toutes les ecritures de versement du client, y compris celles passees
-        // sur une dette enregistree : c'est le compte affiche sur sa carte.
-        paymentsCount: b.pays + b.versements,
-        oldDebtsCount: b.olds.length,
-        refundsCount: b.refs,
+        // « Encaisse » = TOUT l'argent recu, acompte compris : facture − encaisse
+        // = solde, sur chaque ligne et chaque carte.
+        total: balance.billed, paid: balance.paid + balance.credit + balance.advance,
+        rest: balance.rest, credit: balance.credit,
+        salesCount: balance.salesCount,
+        commandsCount: balance.commandsCount,
+        paymentsCount: c.pays,
+        oldDebtsCount: c.olds,
+        refundsCount: c.refs,
       });
     });
     return out;
-  }, [clients, sales, commands, payments, oldDebts, refunds, debts]);
+  }, [clients, sales, commands, deliveries, payments, oldDebts, refunds, debts]);
 
   const statsOf = (clientId: string): ClientStats =>
     statsByClient.get(clientId) ?? EMPTY_CLIENT_STATS;
@@ -178,21 +168,19 @@ export default function ClientsPage() {
   );
 
   const globals = useMemo(() => {
-    const netAll = netCommandTotals(commands, sales);
-    const total =
-      sales.reduce((s, x) => s + x.finalAmount, 0) + netAll.billed
-      + oldDebts.reduce((s, x) => s + x.amount, 0);
-    const paid =
-      sales.reduce((s, x) => s + x.paidAmount, 0) + netAll.paid
-      + oldDebts.reduce((s, x) => s + x.paidAmount, 0);
-    const rest =
-      sales.reduce((s, x) => s + x.restAmount, 0) + netAll.rest
-      + oldDebts.reduce((s, x) => s + x.restAmount, 0);
-    const credit = clients.reduce((s, c) => s + Math.max(0, c.creditAmount ?? 0), 0);
-    const withDebt = clients.filter((c) => statsOf(c.id).balance.hasDebt).length;
-    return { total, paid, rest, credit, withDebt };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sales, commands, clients, oldDebts, statsByClient]);
+    const list = [...statsByClient.values()].map((x) => x.balance);
+    const net = sumAccounts(list);
+    return {
+      total: list.reduce((acc, x) => acc + x.billed, 0),
+      // tout l'argent recu, acomptes compris (comme la colonne « Encaisse »)
+      paid: list.reduce((acc, x) => acc + x.paid + x.credit + x.advance, 0),
+      // dette NETTE (acomptes deduits) et acomptes en faveur des clients
+      rest: net.debt,
+      credit: net.credit,
+      withDebt: net.debtors,
+      pending: list.reduce((acc, x) => acc + x.pendingCommands, 0),
+    };
+  }, [statsByClient]);
 
   const handleSubmit = async (data: Omit<Client, 'id'>) => {
     if (editing) {
@@ -255,7 +243,7 @@ export default function ClientsPage() {
         bankName: payment.bankName,
         totalDebt: st.total,
         totalPaid: st.paid,
-        restAmount: st.rest,
+        restAmount: Math.max(0, st.balance.net),
       },
       settings
     );
@@ -276,7 +264,7 @@ export default function ClientsPage() {
         onClick: () => { setEditOldDebt(null); setOldDebtFor(c); },
       },
       {
-        label: `Rendre l'excédent (${formatCurrency(st.credit)})`, icon: <Undo2 size={15} />,
+        label: `Rendre l'acompte (${formatCurrency(st.credit)})`, icon: <Undo2 size={15} />,
         hidden: st.credit <= 0 || !can('clients', 'pay'),
         onClick: () => setRefunding(c),
       },
@@ -320,6 +308,16 @@ export default function ClientsPage() {
       },
     },
     { key: 'total', label: 'Total facturé', align: 'right', render: (c) => formatCurrency(statsOf(c.id).total) },
+    {
+      key: 'credit', label: 'Acompte', align: 'right', hideOnMobile: true,
+      render: (c) => {
+        const bal = statsOf(c.id).balance;
+        const v = bal.credit + bal.advance;
+        return v > 0.004
+          ? <span className="font-semibold text-pistachio">{formatCurrency(v)}</span>
+          : <span className="text-text-muted">—</span>;
+      },
+    },
     {
       key: 'paid', label: 'Encaissé', align: 'right',
       render: (c) => <span className="text-pistachio">{formatCurrency(statsOf(c.id).paid)}</span>,
@@ -376,7 +374,7 @@ export default function ClientsPage() {
         <StatCard label="Chiffre d'affaires clients" value={globals.total} format="currency" icon={<Receipt size={22} />} index={0} accent="gold" />
         <StatCard label="Total encaissé" value={globals.paid} format="currency" icon={<CheckCircle2 size={22} />} index={1} accent="pistachio" />
         <StatCard label="Dettes clients" value={globals.rest} format="currency" icon={<TrendingDown size={22} />} index={2} accent="rose" />
-        <StatCard label="Avances à rendre" value={globals.credit} format="currency" icon={<PiggyBank size={22} />} index={3} accent="pistachio" />
+        <StatCard label="Acomptes des clients" value={globals.credit} format="currency" icon={<PiggyBank size={22} />} index={3} accent="pistachio" />
         <StatCard label="Clients endettés" value={globals.withDebt} icon={<AlertTriangle size={22} />} index={4} accent="caramel" />
       </div>
 
@@ -474,6 +472,22 @@ export default function ClientsPage() {
                       </span>
                       <span>{st.paymentsCount} versement(s) · {bal.paidPercent.toFixed(0)} %</span>
                     </div>
+                    {(bal.credit > 0.004 || bal.advance > 0.004) && (
+                      <div className="mt-2 flex items-center justify-between rounded-lg border border-pistachio/30 bg-pistachio/10 px-2.5 py-1.5 text-[11px]">
+                        <span className="flex items-center gap-1 font-semibold text-pistachio">
+                          <PiggyBank size={12} /> Acompte disponible
+                        </span>
+                        <span className="font-bold tabular text-pistachio">
+                          {formatCurrency(bal.credit + bal.advance)}
+                        </span>
+                      </div>
+                    )}
+                    {bal.pendingCommands > 0.004 && (
+                      <p className="mt-1.5 text-[10px] text-text-muted">
+                        {bal.pendingCommandsCount} commande(s) en cours · {formatCurrency(bal.pendingCommands)} restant à livrer
+                        (pas encore une dette)
+                      </p>
+                    )}
                   </div>
 
                   <div className="mt-auto space-y-2">
@@ -494,7 +508,7 @@ export default function ClientsPage() {
                         onClick={() => setRefunding(c)}
                         title="Rendre au client l'argent qu'il a versé en trop"
                       >
-                        <Undo2 size={16} /> Rendre l&rsquo;excédent ({formatCurrency(bal.credit)})
+                        <Undo2 size={16} /> Rendre l&rsquo;acompte ({formatCurrency(bal.credit)})
                       </Button>
                     )}
 
@@ -571,7 +585,8 @@ export default function ClientsPage() {
             clientName={versing.name}
             clientPhone={versing.phone}
             total={st.total}
-            paid={st.paid + st.credit}
+            paid={st.paid}
+            credit={st.credit + st.balance.advance}
             onSubmit={(amount, notes, paidAt, method) =>
               handleVersement(versing, amount, notes, paidAt, method)}
           />

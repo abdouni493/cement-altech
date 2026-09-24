@@ -114,6 +114,11 @@ export interface Purchase {
   totalAmount: number;
   paidAmount: number;
   restAmount: number;
+  /**
+   * Part du réglé qui vient du COMPTE du fournisseur (versements, trop-versé)
+   * et non d'un règlement porté par la facture — aucune écriture de caisse.
+   */
+  allocatedAmount?: number;
   payments: Payment[];
   createdBy?: string;
 }
@@ -224,6 +229,11 @@ export interface Sale {
   finalAmount: number;
   paidAmount: number;
   restAmount: number;
+  /**
+   * Part du payé qui vient du COMPTE du client (versements, acompte) et non
+   * d'un encaissement porté par la facture — aucune écriture de caisse.
+   */
+  allocatedAmount?: number;
   status: SaleStatus;
   payments: Payment[];
   createdBy?: string;
@@ -395,6 +405,8 @@ export interface CaisseTransaction {
   // Transaction category (independent list, managed in Caisse)
   categoryId?: string;
   categoryName?: string;
+  /** Document à l'origine de l'écriture (sale_payments, expenses…) — vide pour une saisie manuelle. */
+  refTable?: string;
   createdAt: string;
   createdBy?: string;
 }
@@ -565,6 +577,16 @@ export interface PartyCreditRefund {
   createdBy?: string;
 }
 
+
+/** Règlement encaissé sur une commande depuis l'écran « Commandes » (daté). */
+export interface CommandPayment {
+  id: string;
+  commandId: string;
+  amount: number;
+  date: string;          // YYYY-MM-DD
+  notes?: string;
+  createdAt?: string;
+}
 
 // ---------- Livraison partielle d'une commande ----------
 export interface CommandDeliveryItem {
