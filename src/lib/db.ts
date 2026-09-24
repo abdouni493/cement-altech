@@ -1189,6 +1189,9 @@ export const rpc = {
   applyCreditToPurchase: (purchaseId: string, amount?: number) =>
     call<number>('apply_credit_to_purchase', { p_purchase_id: purchaseId, p_amount: amount ?? null }),
   /** Impute l'acompte d'un tiers sur ses dettes restantes (la plus ancienne d'abord). */
+  /** Annule l'imputation de l'acompte sur une vente / un bon ou une commande. */
+  cancelCreditImputation: (kind: 'sale' | 'command', id: string) =>
+    call<number>('cancel_credit_imputation', { p_kind: kind, p_id: id }),
   rebalancePartyCredit: (partyType: PartyType, partyId: string) =>
     call<number>('rebalance_party_credit', { p_party_type: partyType, p_party_id: partyId }),
 

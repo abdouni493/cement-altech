@@ -68,6 +68,9 @@ interface Props {
 
 /** Ligne de l'onglet « Acompte & imputations ». */
 interface CreditUseRow {
+  /** Vente / bon (sales.allocated_amount) ou commande (commands.credit_applied). */
+  kind: 'sale' | 'command';
+  id: string;
   date: string;
   reference: string;
   label: string;
@@ -97,6 +100,7 @@ export function ClientHistoryScreen({
   const deletePayment = useClientStore((s) => s.deletePayment);
   const deleteOldDebt = useClientStore((s) => s.deleteOldDebt);
   const deleteRefund = useClientStore((s) => s.deleteRefund);
+  const cancelCreditImputation = useClientStore((s) => s.cancelCreditImputation);
 
   const sales = useSalesStore((s) => s.sales);
   const updateSale = useSalesStore((s) => s.updateSale);
@@ -155,6 +159,8 @@ export function ClientHistoryScreen({
       .forEach((s) => {
         const d = s.deliveryId ? deliveries.find((x) => x.id === s.deliveryId) : undefined;
         rows.push({
+          kind: 'sale',
+          id: s.id,
           date: s.date,
           reference: d?.reference ?? s.reference,
           label: d ? `Bon de livraison ${d.reference}` : `Vente ${s.reference}`,
@@ -166,6 +172,8 @@ export function ClientHistoryScreen({
       .filter((c) => c.clientId === client.id && (c.creditApplied ?? 0) > 0.004)
       .forEach((c) =>
         rows.push({
+          kind: 'command',
+          id: c.id,
           date: c.createdAt.slice(0, 10),
           reference: c.reference,
           label: `Acompte de la commande ${c.reference}`,
@@ -554,6 +562,43 @@ export function ClientHistoryScreen({
     },
   ];
 
+  /** Onglet « Acompte & imputations » : voir le document, annuler l'imputation. */
+  const creditUseActions = (r: CreditUseRow): ActionItem[] => {
+    const sale = r.kind === 'sale' ? sales.find((x) => x.id === r.id) : undefined;
+    const delivery = sale?.deliveryId ? history.deliveries.concat(history.historicalDeliveries)
+      .find((h) => h.delivery.id === sale.deliveryId) : undefined;
+    const command = r.kind === 'command' ? commands.find((x) => x.id === r.id) : undefined;
+    return [
+      {
+        label: 'Voir le detail', icon: <Eye size={15} />,
+        onClick: () => {
+          if (delivery) setViewDelivery(delivery);
+          else if (sale) setViewSale(sale);
+          else if (command) setViewCommand(command);
+        },
+      },
+      {
+        label: 'Voir la facture', icon: <Eye size={15} />, hidden: !delivery || !sale,
+        onClick: () => sale && setViewSale(sale),
+      },
+      {
+        label: 'Supprimer', icon: <Trash2 size={15} />, danger: true,
+        hidden: !can('clients', 'delete') && !can('clients', 'edit'),
+        onClick: () =>
+          ask(
+            "Supprimer l'imputation",
+            `${formatCurrency(r.amount)} ne paieront plus « ${r.label} » : le montant revient dans l'ACOMPTE `
+              + "du client et le document retrouve son reste du. Aucune ecriture de caisse (l'argent y est "
+              + 'entre avec le versement) ; la dette nette du client ne change pas.',
+            async () => {
+              const back = await cancelCreditImputation(r.kind, r.id);
+              toast.success(`Imputation supprimee — ${formatCurrency(back)} rendus a l'acompte du client`);
+            }
+          ),
+      },
+    ];
+  };
+
   const oldDebtColumns: DataColumn<PartyOldDebt>[] = [
     { key: 'date', label: 'Date', render: (d) => formatDate(d.date, language) },
     { key: 'desc', label: 'Description', render: (d) => <span className="font-semibold">{d.description || '—'}</span> },
@@ -845,6 +890,7 @@ export function ClientHistoryScreen({
           render: (r: CreditUseRow) => <span className="font-bold text-pistachio">{money(r.amount)}</span>,
         },
       ] as DataColumn<never>[],
+      actions: creditUseActions as unknown as (row: never, i: number) => ActionItem[],
       stats: [
         { label: 'Acompte disponible', value: money(balance.credit), tone: 'pos', icon: <PiggyBank size={12} /> },
         { label: 'Acompte sur commandes', value: money(balance.advance), tone: 'pos' },

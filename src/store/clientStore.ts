@@ -57,6 +57,12 @@ interface ClientState {
   applyCreditToCommand: (commandId: string, amount?: number) => Promise<number>;
   /** Impute l'avance du client sur ses dettes restantes (la plus ancienne d'abord). */
   rebalanceCredit: (clientId: string) => Promise<number>;
+  /**
+   * Supprime une imputation de l'acompte : la part d'une vente / d'un bon (ou
+   * l'acompte d'une commande) payee par le compte du client revient dans son
+   * ACOMPTE, et le document retrouve son reste du.
+   */
+  cancelCreditImputation: (kind: 'sale' | 'command', id: string) => Promise<number>;
 }
 
 /**
@@ -221,6 +227,13 @@ export const useClientStore = create<ClientState>()((set, get) => ({
     set(await reloadLedger());
     await refreshClientDebt();
     return Number(used) || 0;
+  },
+
+  cancelCreditImputation: async (kind, id) => {
+    const back = await save<number>('clients.credit.cancel', () => rpc.cancelCreditImputation(kind, id));
+    set(await reloadLedger());
+    await refreshClientDebt();
+    return Number(back) || 0;
   },
 
   rebalanceCredit: async (clientId) => {
