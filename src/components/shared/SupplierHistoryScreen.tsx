@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   HandCoins, History, Undo2, Eye, Pencil, Printer, Trash2, Wallet, Coins,
   Package, TrendingUp, PiggyBank,
@@ -24,6 +24,7 @@ import { printInvoice } from '@/lib/print';
 import { printPaymentReceipt } from '@/lib/documents';
 import { printListDocument } from '@/lib/statementPrint';
 import { PrintTitleDialog, type PrintTitleRequest } from './PrintTitleDialog';
+import { VersementChecklist, type VersementItem } from './VersementChecklist';
 import { EntryEditor, type EntryRequest } from './entries/EntryEditor';
 import type {
   Supplier, PartyOldDebt, PartyPayment, Purchase, PartyCreditRefund,
@@ -83,6 +84,10 @@ export function SupplierHistoryScreen({
   const [viewPurchase, setViewPurchase] = useState<Purchase | null>(null);
   const [editPayment, setEditPayment] = useState<PartyPayment | null>(null);
   const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
+  /** Reglements masques de la liste imprimee (toujours comptes dans le total). */
+  const [hiddenPay, setHiddenPay] = useState<string[]>([]);
+  const hiddenPayRef = useRef<string[]>([]);
+  hiddenPayRef.current = hiddenPay;
   const [entry, setEntry] = useState<EntryRequest | null>(null);
   const [confirm, setConfirm] = useState<
     { title: string; message?: string; run: () => Promise<void> } | null
@@ -159,14 +164,32 @@ export function SupplierHistoryScreen({
     columns: { label: string; align?: 'left' | 'center' | 'right'; width?: string }[],
     rows: (string | number)[][],
     totalLabel?: string,
-    totalValue?: string
-  ) =>
+    totalValue?: string,
+    /** Liste de reglements : une entree par ligne, a cocher avant l'impression. */
+    items?: VersementItem[]
+  ) => {
+    if (items) { hiddenPayRef.current = []; setHiddenPay([]); }
     setTitleRequest({
       defaultTitle: title.toUpperCase(),
       scope: 'list',
       dialogTitle: `Imprimer — ${title}`,
-      print: ({ title: chosen, endText }) => runPrintList(chosen, columns, rows, totalLabel, totalValue, endText),
+      extra: items?.length
+        ? () => (
+          <VersementChecklist
+            title="Règlements affichés sur le document"
+            items={items}
+            hidden={hiddenPayRef.current}
+            onChange={(next) => { hiddenPayRef.current = next; setHiddenPay(next); }}
+          />
+        )
+        : undefined,
+      print: ({ title: chosen, endText }) => {
+        const hidden = hiddenPayRef.current;
+        const kept = items ? rows.filter((_, i) => !hidden.includes(items[i]?.id ?? '')) : rows;
+        runPrintList(chosen, columns, kept, totalLabel, totalValue, endText);
+      },
     });
+  };
 
   const runPrintList = (
     title: string,
@@ -401,7 +424,8 @@ export function SupplierHistoryScreen({
             formatCurrency(p.amount),
           ]),
           'Total regle',
-          formatCurrency(sum(list.map((p) => p.amount)))
+          formatCurrency(sum(list.map((p) => p.amount))),
+          list.map((p, i) => ({ id: `${i}-${p.id}`, date: p.date, label: p.origin, amount: p.amount }))
         );
       },
     },
