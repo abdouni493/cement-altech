@@ -143,6 +143,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         tvaRate: c.tvaRate,
         docTitle: c.docTitle,
         periodPrefix: c.periodPrefix,
+        endText: c.endText,
       },
       settings
     );

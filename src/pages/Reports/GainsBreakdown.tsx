@@ -86,10 +86,10 @@ export function GainsBreakdown({ from, to }: { from: string; to: string }) {
       periodSuffix: periodSuffix(from, to),
       scope: 'report',
       dialogTitle: 'Imprimer le calcul des gains',
-      print: ({ title, periodPrefix }) => printNow(title, periodPrefix),
+      print: ({ title, periodPrefix, endText }) => printNow(title, periodPrefix, endText),
     });
 
-  const printNow = (docTitle: string, prefix: string) => {
+  const printNow = (docTitle: string, prefix: string, endText = '') => {
     const line = (label: string, value: number, strong = false): DocRow =>
       ({ cells: [label.toUpperCase(), m(value)], variant: strong ? 'subtotal' : 'normal' });
     const cols = [
@@ -99,6 +99,7 @@ export function GainsBreakdown({ from, to }: { from: string; to: string }) {
     printListDocument(
       {
         title: docTitle,
+        endText,
         docDate: to,
         metaLines: [`${prefix} ${periodSuffix(from, to)}`],
         tables: [

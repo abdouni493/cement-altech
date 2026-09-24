@@ -250,6 +250,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         extraTables: extraTables(c),
         docTitle: c.docTitle,
         periodPrefix: c.periodPrefix,
+        endText: c.endText,
       },
       settings
     );

@@ -102,6 +102,8 @@ export interface DocData {
   footNotes?: string[];
   /** Observations encadrées. */
   observations?: string;
+  /** Texte libre saisi a l'impression, imprime tout en bas du document. */
+  endText?: string;
   /**
    * Cartouches de signature. Deux entrées ⇒ la 1re à GAUCHE (« LE CLIENT ») et
    * la 2de à DROITE (« SIGNATURE »), comme sur le modèle papier.
@@ -247,6 +249,7 @@ const CSS = `
   .foot { display: flex; justify-content: space-between; align-items: flex-end; gap: 22px; margin-top: 24px; break-inside: avoid; }
   .foot .col { min-width: 165px; }
   .foot .col.right { text-align: right; }
+  .endtext { margin-top: 18px; padding-top: 8px; border-top: 1px dashed #999; font-size: 13px; white-space: pre-wrap; }
   .foot .notes { font-size: 13px; font-weight: 700; text-transform: uppercase; line-height: 1.8; margin-bottom: 14px; }
   .foot .sign { display: inline-block; font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: .6px; color: ${BRAND.goldDark}; border-top: 2px solid ${BRAND.gold}; padding-top: 5px; margin-top: 34px; min-width: 150px; text-align: center; }
 
@@ -410,6 +413,7 @@ export function printOfficialDocument(data: DocData, store: StoreSettings) {
         </div>
         <div class="col right"><div class="sign">${esc(rightSign)}</div></div>
       </div>
+      ${data.endText?.trim() ? `<div class="endtext">${esc(data.endText.trim())}</div>` : ''}
       ${store.socialMedia ? `<div class="tag">${esc(store.socialMedia)}</div>` : ''}
     </div>
     <script>window.onload=function(){setTimeout(function(){window.print();},350);};<\/script>

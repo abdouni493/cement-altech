@@ -165,7 +165,7 @@ export function SupplierHistoryScreen({
       defaultTitle: title.toUpperCase(),
       scope: 'list',
       dialogTitle: `Imprimer — ${title}`,
-      print: ({ title: chosen }) => runPrintList(chosen, columns, rows, totalLabel, totalValue),
+      print: ({ title: chosen, endText }) => runPrintList(chosen, columns, rows, totalLabel, totalValue, endText),
     });
 
   const runPrintList = (
@@ -173,11 +173,13 @@ export function SupplierHistoryScreen({
     columns: { label: string; align?: 'left' | 'center' | 'right'; width?: string }[],
     rows: (string | number)[][],
     totalLabel?: string,
-    totalValue?: string
+    totalValue?: string,
+    endText = ''
   ) =>
     printListDocument(
       {
         title,
+        endText,
         docDate: todayISO(),
         partyLabel: 'FOURNISSEUR',
         partyName: supplier.name,

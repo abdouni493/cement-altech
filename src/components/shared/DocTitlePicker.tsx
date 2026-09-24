@@ -19,10 +19,12 @@ export interface DocTitleChoice {
   title: string;
   periodMode: 'same' | 'custom';
   periodText: string;
+  /** Texte libre imprime a la fin du document. */
+  endText: string;
 }
 
 export function initialDocTitleChoice(defaultTitle: string, defaultPeriodPrefix?: string): DocTitleChoice {
-  return { title: defaultTitle, periodMode: 'custom', periodText: defaultPeriodPrefix ?? defaultTitle };
+  return { title: defaultTitle, periodMode: 'custom', periodText: defaultPeriodPrefix ?? defaultTitle, endText: '' };
 }
 
 /** Titre imprime dans l'en-tete. */
@@ -61,7 +63,7 @@ export function DocTitlePicker({
   const select = (title: string) => {
     onChange(
       isDefault(title)
-        ? { title, periodMode: 'custom', periodText: defaultPeriodPrefix ?? title }
+        ? { ...value, title, periodMode: 'custom', periodText: defaultPeriodPrefix ?? title }
         : { ...value, title, periodMode: 'same' }
     );
   };
@@ -181,6 +183,19 @@ export function DocTitlePicker({
             </div>
           </div>
         )}
+
+        <div className="space-y-1.5 border-t border-gold/15 pt-3">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-text-muted">
+            Texte à la fin du document (facultatif)
+          </p>
+          <textarea
+            rows={2}
+            value={value.endText}
+            onChange={(e) => onChange({ ...value, endText: e.target.value })}
+            placeholder="Ex. Merci de régler le reste avant le 30/09/2026."
+            className="w-full rounded-lg border-2 border-[--border-input] bg-[--surface-input] px-3 py-2 text-sm text-text-primary focus:border-gold focus:outline-none focus:ring-2 focus:ring-gold/30"
+          />
+        </div>
 
         <div className="rounded-xl border border-dashed border-gold/30 bg-vanilla/60 px-3 py-2 text-center">
           <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">Aperçu</p>

@@ -55,6 +55,8 @@ export interface StatementPrintOptions {
   docTitle?: string;
   /** Texte choisi devant les dates de la periode (sinon celui par defaut). */
   periodPrefix?: string;
+  /** Texte libre imprime a la fin du document. */
+  endText?: string;
 }
 
 /** Titre par defaut d'un compte rendu / bon de livraison de periode. */
@@ -325,6 +327,7 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
             .sort((a, b) => a.date.localeCompare(b.date))
             .map(creditLine)
         : [],
+      endText: o.endText,
       signatures: [isClient ? 'Le client' : 'Le fournisseur', 'Signature'],
       fileName: `${o.mode === 'deliveries' ? 'Livraisons' : 'Compte_Rendu'}_${o.party.name.replace(/\s+/g, '_')}`,
     },
@@ -355,6 +358,8 @@ export interface ListDocumentData {
   footNotes?: string[];
   signatures?: string[];
   fileName: string;
+  /** Texte libre imprime a la fin du document. */
+  endText?: string;
 }
 
 /**
@@ -380,6 +385,7 @@ export function printListDocument(data: ListDocumentData, store: StoreSettings) 
         note: t.note,
       })),
       footNotes: data.footNotes,
+      endText: data.endText,
       signatures: data.signatures ?? ['Le responsable', 'Signature'],
       fileName: data.fileName,
     },

@@ -114,16 +114,17 @@ export function DebtsOverview() {
       periodSuffix: `AU ${formatDate(todayISO())}`,
       scope: 'report',
       dialogTitle: 'Imprimer la liste des dettes',
-      print: ({ title, periodPrefix }) => printListNow(title, periodPrefix),
+      print: ({ title, periodPrefix, endText }) => printListNow(title, periodPrefix, endText),
     });
   };
 
-  const printListNow = (docTitle: string, prefix: string) => {
+  const printListNow = (docTitle: string, prefix: string, endText = '') => {
     if (!open) return;
     const isClient = open === 'clients';
     printListDocument(
       {
         title: docTitle,
+        endText,
         docDate: todayISO(),
         metaLines: [`${prefix} AU ${formatDate(todayISO())}`],
         tables: [

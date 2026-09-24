@@ -11,6 +11,8 @@ import {
 export interface PrintTitles {
   title: string;
   periodPrefix: string;
+  /** Texte libre imprime a la fin du document. */
+  endText: string;
 }
 
 /** Une demande d'impression en attente du choix du titre. */
@@ -59,6 +61,7 @@ export function PrintTitleDialog({ request, onClose }: { request: PrintTitleRequ
               const titles = {
                 title: resolvedDocTitle(choice, request.defaultTitle),
                 periodPrefix: resolvedPeriodPrefix(choice, fallbackPrefix),
+                endText: choice.endText.trim(),
               };
               onClose();
               request.print(titles);

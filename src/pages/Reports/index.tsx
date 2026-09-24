@@ -1254,15 +1254,16 @@ export default function ReportsPage() {
       periodSuffix: period ? periodSuffix(period.from, period.to) : undefined,
       scope: 'report',
       dialogTitle: `Imprimer — ${part.label}`,
-      print: (titles) => printPartNow(part, titles.title, titles.periodPrefix),
+      print: (titles) => printPartNow(part, titles.title, titles.periodPrefix, titles.endText),
     });
 
-  const printPartNow = (part: ReportPart, docTitle: string, prefix: string) => {
+  const printPartNow = (part: ReportPart, docTitle: string, prefix: string, endText = '') => {
     askPriorThen([part.key], (include) => {
       const p2 = withPrior(part, include);
       printListDocument(
         {
           title: docTitle,
+          endText,
           docDate: period?.to || todayISO(),
           metaLines: metaLinesFor(prefix),
           tables: [
@@ -1299,6 +1300,7 @@ export default function ReportsPage() {
     printListDocument(
       {
         title: resolvedDocTitle(generalTitle, 'RAPPORT GENERAL'),
+        endText: generalTitle.endText.trim(),
         docDate: period?.to || todayISO(),
         metaLines: metaLinesFor(resolvedPeriodPrefix(generalTitle, 'PERIODE')),
         tables: picked.map((p) => ({

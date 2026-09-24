@@ -239,14 +239,15 @@ export function ClientHistoryScreen({
       defaultTitle: h.delivery.isHistorical ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON',
       scope: 'delivery',
       dialogTitle: `Imprimer le bon ${h.delivery.reference}`,
-      print: ({ title }) => runPrintDelivery(h, title),
+      print: ({ title, endText }) => runPrintDelivery(h, title, endText),
     });
 
-  const runPrintDelivery = (h: HistoryDelivery, docTitle: string) => {
+  const runPrintDelivery = (h: HistoryDelivery, docTitle: string, endText = '') => {
     const { delivery: d, command: c } = h;
     printDeliveryNote(
       {
         docTitle,
+        endText,
         reference: d.reference,
         commandReference: c?.reference ?? '',
         bonNumber: c?.bonNumber,
@@ -327,7 +328,7 @@ export function ClientHistoryScreen({
       defaultTitle: title.toUpperCase(),
       scope: 'list',
       dialogTitle: `Imprimer — ${title}`,
-      print: ({ title: chosen }) => runPrintList(chosen, columns, rows, totalLabel, totalValue),
+      print: ({ title: chosen, endText }) => runPrintList(chosen, columns, rows, totalLabel, totalValue, endText),
     });
 
   const runPrintList = (
@@ -335,11 +336,13 @@ export function ClientHistoryScreen({
     columns: { label: string; align?: 'left' | 'center' | 'right'; width?: string }[],
     rows: (string | number)[][],
     totalLabel?: string,
-    totalValue?: string
+    totalValue?: string,
+    endText = ''
   ) =>
     printListDocument(
       {
         title,
+        endText,
         docDate: todayISO(),
         partyLabel: 'DOIT',
         partyName: client.name,

@@ -492,13 +492,14 @@ export default function CommandsPage() {
       defaultTitle: (delivery.isHistorical ?? cmd.isHistorical) ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON',
       scope: 'delivery',
       dialogTitle: `Imprimer le bon ${delivery.reference}`,
-      print: ({ title }) => runPrintDelivery(cmd, delivery, title),
+      print: ({ title, endText }) => runPrintDelivery(cmd, delivery, title, endText),
     });
 
-  const runPrintDelivery = (cmd: Command, delivery: CommandDelivery, docTitle: string) => {
+  const runPrintDelivery = (cmd: Command, delivery: CommandDelivery, docTitle: string, endText = '') => {
     printDeliveryNote(
       {
         docTitle,
+        endText,
         reference: delivery.reference,
         commandReference: cmd.reference,
         bonNumber: cmd.bonNumber,

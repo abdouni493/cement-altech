@@ -45,6 +45,8 @@ export interface StatementPrintChoice {
   docTitle?: string;
   /** Texte choisi devant les dates de la periode. */
   periodPrefix?: string;
+  /** Texte libre imprime a la fin du document. */
+  endText?: string;
 }
 
 export interface StatementPrintPart {
@@ -277,6 +279,7 @@ export function StatementPrintDialog({
             ...choice,
             docTitle: resolvedDocTitle(titleChoice, defaultDocTitle),
             periodPrefix: resolvedPeriodPrefix(titleChoice, defaultPeriodPrefix),
+            endText: titleChoice.endText.trim(),
           })}>
             <Printer size={16} /> {printLabel}
           </Button>
