@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   TrendingUp, FileText, Printer, Wallet, ShoppingCart, Banknote, Package,
@@ -35,6 +35,7 @@ import {
   DocTitlePicker, initialDocTitleChoice, resolvedDocTitle, resolvedPeriodPrefix, type DocTitleChoice,
 } from '@/components/shared/DocTitlePicker';
 import { PrintTitleDialog, type PrintTitleRequest } from '@/components/shared/PrintTitleDialog';
+import { VersementChecklist } from '@/components/shared/VersementChecklist';
 import { EntryEditor, type EntryRequest, type EntryTarget } from '@/components/shared/entries/EntryEditor';
 import { EntryActions } from '@/components/shared/entries/EntryActions';
 import type { HistoryPayment } from '@/lib/partyHistory';
@@ -113,6 +114,12 @@ export default function ReportsPage() {
   const [active, setActive] = useState('sales');
   const [printOpen, setPrintOpen] = useState(false);
   const [checked, setChecked] = useState<string[]>([]);
+  /** Versements masques a l'impression (toujours comptes dans les totaux). */
+  const [hiddenPay, setHiddenPay] = useState<string[]>([]);
+  // la fenetre d'impression d'une partie lit toujours le choix courant
+  const hiddenPayRef = useRef<string[]>([]);
+  hiddenPayRef.current = hiddenPay;
+  const setHiddenPayAndRef = (next: string[]) => { hiddenPayRef.current = next; setHiddenPay(next); };
   const [generalTitle, setGeneralTitle] = useState<DocTitleChoice>(() =>
     initialDocTitleChoice('RAPPORT GENERAL', 'PERIODE'));
   const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
@@ -406,6 +413,9 @@ export default function ReportsPage() {
         { label: 'Type', align: 'center' }, { label: 'Mode' }, { label: 'Montant', align: 'right' },
       ],
       actions: clientPaymentRows.map((p) => paymentTarget(p, 'client')),
+      versementItems: clientPaymentRows.map((p, i) => ({
+        id: `c-${i}-${p.id}`, date: p.date, label: `${p.clientName} — ${p.origin}`, amount: p.amount,
+      })),
       rows: clientPaymentRows.map((p) => [
         <span key="c" className="font-semibold">{p.clientName}</span>,
         formatDateTime(p.date, language),
@@ -757,6 +767,9 @@ export default function ReportsPage() {
         { label: 'Type', align: 'center' }, { label: 'Mode' }, { label: 'Montant', align: 'right' },
       ],
       actions: supplierPaymentRows.map((p) => paymentTarget(p, 'supplier')),
+      versementItems: supplierPaymentRows.map((p, i) => ({
+        id: `s-${i}-${p.id}`, date: p.date, label: `${p.supplierName} — ${p.origin}`, amount: p.amount,
+      })),
       rows: supplierPaymentRows.map((p) => [
         <span key="s" className="font-semibold">{p.supplierName}</span>,
         formatDateTime(p.date, language), p.origin,
@@ -1247,8 +1260,19 @@ export default function ReportsPage() {
     });
   };
 
+  /** Lignes imprimees d'une partie, sans les versements decoches. */
+  const visibleRows = (part: ReportPart, hidden = hiddenPay): DocRow[] =>
+    part.versementItems
+      ? part.printRows.filter((_, i) => !hidden.includes(part.versementItems![i]?.id ?? ''))
+      : part.printRows;
+
   const printPart = (part: ReportPart) =>
     setTitleRequest({
+      extra: part.versementItems?.length
+        ? () => (
+          <VersementChecklist items={part.versementItems!} hidden={hiddenPayRef.current} onChange={setHiddenPayAndRef} />
+        )
+        : undefined,
       defaultTitle: part.label.toUpperCase(),
       defaultPeriodPrefix: 'PERIODE',
       periodSuffix: period ? periodSuffix(period.from, period.to) : undefined,
@@ -1269,7 +1293,7 @@ export default function ReportsPage() {
           tables: [
             {
               columns: p2.printColumns,
-              rows: p2.printRows,
+              rows: visibleRows(p2, hiddenPayRef.current),
               totals: p2.printTotalLabel
                 ? [{ label: p2.printTotalLabel, value: p2.printTotalValue ?? '', strong: true }]
                 : undefined,
@@ -1306,7 +1330,7 @@ export default function ReportsPage() {
         tables: picked.map((p) => ({
           title: p.label.toUpperCase(),
           columns: p.printColumns,
-          rows: p.printRows,
+          rows: visibleRows(p),
           totals: p.printTotalLabel
             ? [{ label: p.printTotalLabel, value: p.printTotalValue ?? '', strong: true }]
             : undefined,
@@ -1627,6 +1651,18 @@ export default function ReportsPage() {
               </div>
             );
           })}
+
+          {parts
+            .filter((p) => checked.includes(p.key) && p.versementItems?.length)
+            .map((p) => (
+              <VersementChecklist
+                key={p.key}
+                title={`${p.label} affichés sur le document`}
+                items={p.versementItems!}
+                hidden={hiddenPay}
+                onChange={setHiddenPay}
+              />
+            ))}
 
           <DocTitlePicker
             value={generalTitle}

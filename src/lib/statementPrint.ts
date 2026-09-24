@@ -57,6 +57,8 @@ export interface StatementPrintOptions {
   periodPrefix?: string;
   /** Texte libre imprime a la fin du document. */
   endText?: string;
+  /** Versements masques de la liste (toujours comptes dans les totaux). */
+  hiddenVersements?: string[];
 }
 
 /** Titre par defaut d'un compte rendu / bon de livraison de periode. */
@@ -324,6 +326,7 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
       // detailles (ils restent compris dans « Total versements »).
       footNotes: o.includeVersements
         ? versementsOnly(slice.credits)
+            .filter((c) => !(o.hiddenVersements ?? []).includes(c.id))
             .sort((a, b) => a.date.localeCompare(b.date))
             .map(creditLine)
         : [],

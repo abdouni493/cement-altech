@@ -144,6 +144,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         docTitle: c.docTitle,
         periodPrefix: c.periodPrefix,
         endText: c.endText,
+        hiddenVersements: c.hiddenVersements,
       },
       settings
     );
@@ -438,6 +439,10 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
               defaultDocTitle={defaultStatementTitle('supplier', 'statement')}
               defaultPeriodPrefix={defaultStatementPeriodPrefix('statement')}
               periodSuffix={period ? periodSuffix(period.from, period.to) : undefined}
+              versementItems={data.all.credits
+                .filter((c) => c.kind === 'payment')
+                .sort((a, b) => a.date.localeCompare(b.date))
+                .map((c) => ({ id: c.id, date: c.date, label: `${c.label}${c.method ? ` — ${c.method}` : ''}`, amount: c.amount }))}
             />
           )}
 

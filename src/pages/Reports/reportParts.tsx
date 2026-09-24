@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { DocColumn, DocRow } from '@/lib/officialDoc';
 import type { EntryTarget } from '@/components/shared/entries/EntryEditor';
+import type { VersementItem } from '@/components/shared/VersementChecklist';
 
 /* ============================================================================
  *  LES PARTIES DU RAPPORT GENERAL
@@ -41,6 +42,11 @@ export interface ReportPart {
    * et « Modifier ». Absent pour les parties purement informatives.
    */
   actions?: (EntryTarget | null)[];
+  /**
+   * Parties « versements » : un element par ligne imprimee (meme ordre que
+   * `printRows`) — l'operateur peut masquer une ligne a l'impression.
+   */
+  versementItems?: VersementItem[];
   stats: ReportStat[];
   count: number;
   /** Total imprime dans la liste a cocher. */

@@ -10,6 +10,7 @@ import type { StatementTvaMode } from '@/lib/statementPrint';
 import {
   DocTitlePicker, initialDocTitleChoice, resolvedDocTitle, resolvedPeriodPrefix, type DocTitleChoice,
 } from './DocTitlePicker';
+import { VersementChecklist, type VersementItem } from './VersementChecklist';
 
 /* ============================================================================
  *  AVANT D'IMPRIMER UN COMPTE RENDU / UN BON DE LIVRAISON DE PERIODE
@@ -47,6 +48,8 @@ export interface StatementPrintChoice {
   periodPrefix?: string;
   /** Texte libre imprime a la fin du document. */
   endText?: string;
+  /** Versements decoches : masques de la liste imprimee, toujours comptes. */
+  hiddenVersements?: string[];
 }
 
 export interface StatementPrintPart {
@@ -93,8 +96,10 @@ function writeProductsPref(kind: string, on: boolean) {
 export function StatementPrintDialog({
   open, onClose, onPrint, parts, kind, preview, note,
   title = 'Impression du compte rendu', printLabel = 'Imprimer',
-  defaultDocTitle, defaultPeriodPrefix, periodSuffix,
+  defaultDocTitle, defaultPeriodPrefix, periodSuffix, versementItems = [],
 }: {
+  /** Versements de la periode, listes en fin de document (a cocher). */
+  versementItems?: VersementItem[];
   open: boolean;
   onClose: () => void;
   onPrint: (choice: StatementPrintChoice) => void;
@@ -112,6 +117,7 @@ export function StatementPrintDialog({
   periodSuffix?: string;
 }) {
   const [choice, setChoice] = useState<StatementPrintChoice>(EMPTY_CHOICE);
+  const [hiddenVersements, setHiddenVersements] = useState<string[]>([]);
   const [titleChoice, setTitleChoice] = useState<DocTitleChoice>(() =>
     initialDocTitleChoice(defaultDocTitle, defaultPeriodPrefix));
 
@@ -127,6 +133,7 @@ export function StatementPrintDialog({
     if (pref !== null && parts.some((p) => p.key === 'products')) next.products = pref;
     setChoice(next);
     setTitleChoice(initialDocTitleChoice(defaultDocTitle, defaultPeriodPrefix));
+    setHiddenVersements([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -198,6 +205,10 @@ export function StatementPrintDialog({
             );
           })}
         </section>
+
+        {choice.versements && (
+          <VersementChecklist items={versementItems} hidden={hiddenVersements} onChange={setHiddenVersements} />
+        )}
 
         <DocTitlePicker
           value={titleChoice}
@@ -280,6 +291,7 @@ export function StatementPrintDialog({
             docTitle: resolvedDocTitle(titleChoice, defaultDocTitle),
             periodPrefix: resolvedPeriodPrefix(titleChoice, defaultPeriodPrefix),
             endText: titleChoice.endText.trim(),
+            hiddenVersements,
           })}>
             <Printer size={16} /> {printLabel}
           </Button>

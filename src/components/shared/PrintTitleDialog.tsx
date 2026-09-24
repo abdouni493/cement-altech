@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Printer } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -23,6 +23,8 @@ export interface PrintTitleRequest {
   periodSuffix?: string;
   scope: DocTitleScope;
   dialogTitle?: string;
+  /** Contenu supplementaire affiche au-dessus du choix du titre. */
+  extra?: () => ReactNode;
   print: (titles: PrintTitles) => void;
 }
 
@@ -44,6 +46,7 @@ export function PrintTitleDialog({ request, onClose }: { request: PrintTitleRequ
   return (
     <Modal open={!!request} onClose={onClose} title={request.dialogTitle ?? 'Imprimer'} size="md">
       <div className="space-y-4">
+        {request.extra?.()}
         <DocTitlePicker
           value={choice}
           onChange={setChoice}
