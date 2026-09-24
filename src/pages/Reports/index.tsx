@@ -30,7 +30,11 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { formatCurrency, formatDate, formatDateTime, todayISO, paymentMethodLabel } from '@/lib/utils';
 import { commandTtc, netCommandTotals } from '@/lib/commandBilling';
 import { buildClientHistory, buildSupplierHistory, withinPeriod } from '@/lib/partyHistory';
-import { printListDocument } from '@/lib/statementPrint';
+import { printListDocument, periodSuffix } from '@/lib/statementPrint';
+import {
+  DocTitlePicker, initialDocTitleChoice, resolvedDocTitle, resolvedPeriodPrefix, type DocTitleChoice,
+} from '@/components/shared/DocTitlePicker';
+import { PrintTitleDialog, type PrintTitleRequest } from '@/components/shared/PrintTitleDialog';
 import { panelVariants, EASE } from '@/lib/animations';
 import { cn } from '@/lib/utils';
 import { groupByParty, type ReportPart, type ReportStat } from './reportParts';
@@ -106,6 +110,9 @@ export default function ReportsPage() {
   const [active, setActive] = useState('sales');
   const [printOpen, setPrintOpen] = useState(false);
   const [checked, setChecked] = useState<string[]>([]);
+  const [generalTitle, setGeneralTitle] = useState<DocTitleChoice>(() =>
+    initialDocTitleChoice('RAPPORT GENERAL', 'PERIODE'));
+  const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
   /** Anciennes dettes datees AVANT la periode : on demande avant d'imprimer. */
   const [oldDebtAsk, setOldDebtAsk] = useState<
     { clients: PartyOldDebt[]; suppliers: PartyOldDebt[]; run: (include: boolean) => void } | null
@@ -1148,9 +1155,8 @@ export default function ReportsPage() {
   const current = parts.find((p) => p.key === active) ?? visibleParts[0];
 
   /* ---------------------------------------------------------- impression */
-  const metaLines = period
-    ? [`PERIODE DU ${formatDate(period.from)} AU ${formatDate(period.to)}`]
-    : [];
+  /** Ligne de periode, avec le texte choisi devant les dates. */
+  const metaLinesFor = (prefix = 'PERIODE') => (period ? [`${prefix} ${periodSuffix(period.from, period.to)}`] : []);
 
   /** Anciennes dettes (avec un reste) datees AVANT la periode choisie. */
   const priorOldDebts = useMemo(() => {
@@ -1202,14 +1208,24 @@ export default function ReportsPage() {
     });
   };
 
-  const printPart = (part: ReportPart) => {
+  const printPart = (part: ReportPart) =>
+    setTitleRequest({
+      defaultTitle: part.label.toUpperCase(),
+      defaultPeriodPrefix: 'PERIODE',
+      periodSuffix: period ? periodSuffix(period.from, period.to) : undefined,
+      scope: 'report',
+      dialogTitle: `Imprimer — ${part.label}`,
+      print: (titles) => printPartNow(part, titles.title, titles.periodPrefix),
+    });
+
+  const printPartNow = (part: ReportPart, docTitle: string, prefix: string) => {
     askPriorThen([part.key], (include) => {
       const p2 = withPrior(part, include);
       printListDocument(
         {
-          title: p2.label,
+          title: docTitle,
           docDate: period?.to || todayISO(),
-          metaLines,
+          metaLines: metaLinesFor(prefix),
           tables: [
             {
               columns: p2.printColumns,
@@ -1243,9 +1259,9 @@ export default function ReportsPage() {
     const picked = parts.filter((p) => checked.includes(p.key)).map((p) => withPrior(p, includePrior));
     printListDocument(
       {
-        title: 'Rapport general',
+        title: resolvedDocTitle(generalTitle, 'RAPPORT GENERAL'),
         docDate: period?.to || todayISO(),
-        metaLines,
+        metaLines: metaLinesFor(resolvedPeriodPrefix(generalTitle, 'PERIODE')),
         tables: picked.map((p) => ({
           title: p.label.toUpperCase(),
           columns: p.printColumns,
@@ -1561,6 +1577,15 @@ export default function ReportsPage() {
             );
           })}
 
+          <DocTitlePicker
+            value={generalTitle}
+            onChange={setGeneralTitle}
+            defaultTitle="RAPPORT GENERAL"
+            defaultPeriodPrefix="PERIODE"
+            periodSuffix={period ? periodSuffix(period.from, period.to) : undefined}
+            scope="report"
+          />
+
           <p className="rounded-xl border border-gold/20 bg-vanilla/40 px-3 py-2 text-[11px] text-text-muted">
             Le document sort sur le <b>modèle du bon de livraison</b> : un tableau par partie, avec sa
             colonne <b>DATE</b>, sa colonne <b>DÉSIGNATION</b> et ses totaux accrochés à droite.
@@ -1575,6 +1600,8 @@ export default function ReportsPage() {
           </div>
         </div>
       </Modal>
+
+      <PrintTitleDialog request={titleRequest} onClose={() => setTitleRequest(null)} />
     </div>
   );
 }

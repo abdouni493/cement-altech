@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import { purgeLegacyStorage } from './lib/legacyStorage';
+import { installLiveNames } from './lib/liveNames';
 
 // Self-hosted brand fonts (bundled locally — work fully offline, identical design)
 import '@fontsource/playfair-display/400.css';
@@ -23,6 +24,9 @@ import './index.css';
 
 // drops the demo data left in the browser by the previous versions
 purgeLegacyStorage();
+
+// un produit renomme s'affiche et s'imprime partout sous son nouveau nom
+installLiveNames();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

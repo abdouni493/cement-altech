@@ -7,6 +7,9 @@ import { Button } from '@/components/ui/Button';
 import { formatCurrency, DEFAULT_TVA_RATE } from '@/lib/utils';
 import { cn } from '@/lib/utils';
 import type { StatementTvaMode } from '@/lib/statementPrint';
+import {
+  DocTitlePicker, initialDocTitleChoice, resolvedDocTitle, resolvedPeriodPrefix, type DocTitleChoice,
+} from './DocTitlePicker';
 
 /* ============================================================================
  *  AVANT D'IMPRIMER UN COMPTE RENDU / UN BON DE LIVRAISON DE PERIODE
@@ -38,6 +41,10 @@ export interface StatementPrintChoice {
   adjustments: boolean;
   tvaMode: StatementTvaMode;
   tvaRate: number;
+  /** Titre choisi pour l'en-tete du document. */
+  docTitle?: string;
+  /** Texte choisi devant les dates de la periode. */
+  periodPrefix?: string;
 }
 
 export interface StatementPrintPart {
@@ -84,6 +91,7 @@ function writeProductsPref(kind: string, on: boolean) {
 export function StatementPrintDialog({
   open, onClose, onPrint, parts, kind, preview, note,
   title = 'Impression du compte rendu', printLabel = 'Imprimer',
+  defaultDocTitle, defaultPeriodPrefix, periodSuffix,
 }: {
   open: boolean;
   onClose: () => void;
@@ -94,8 +102,16 @@ export function StatementPrintDialog({
   note?: string;
   title?: string;
   printLabel?: string;
+  /** Titre imprime par defaut — ex. « COMPTE RENDU CLIENT ». */
+  defaultDocTitle: string;
+  /** Texte d'origine devant les dates — ex. « COMPTE RENDU ». */
+  defaultPeriodPrefix: string;
+  /** « DU 01/09/2026 AU 25/09/2026 ». */
+  periodSuffix?: string;
 }) {
   const [choice, setChoice] = useState<StatementPrintChoice>(EMPTY_CHOICE);
+  const [titleChoice, setTitleChoice] = useState<DocTitleChoice>(() =>
+    initialDocTitleChoice(defaultDocTitle, defaultPeriodPrefix));
 
   // Chaque impression repart des valeurs par defaut ; seul le choix
   // « marchandises » est memorise (il depend des habitudes de l'entreprise).
@@ -108,6 +124,7 @@ export function StatementPrintDialog({
     const pref = readProductsPref(kind);
     if (pref !== null && parts.some((p) => p.key === 'products')) next.products = pref;
     setChoice(next);
+    setTitleChoice(initialDocTitleChoice(defaultDocTitle, defaultPeriodPrefix));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -180,6 +197,15 @@ export function StatementPrintDialog({
           })}
         </section>
 
+        <DocTitlePicker
+          value={titleChoice}
+          onChange={setTitleChoice}
+          defaultTitle={defaultDocTitle}
+          defaultPeriodPrefix={defaultPeriodPrefix}
+          periodSuffix={periodSuffix}
+          scope={kind === 'client' && defaultDocTitle.startsWith('BON') ? 'delivery' : 'statement'}
+        />
+
         <section className="space-y-2.5">
           <h4 className="flex items-center gap-2 text-sm font-bold text-gold-dark">
             <Percent size={16} /> T.V.A
@@ -247,7 +273,11 @@ export function StatementPrintDialog({
 
         <div className="flex gap-2 border-t border-gold/15 pt-4">
           <Button variant="secondary" className="flex-1" onClick={onClose}>Annuler</Button>
-          <Button variant="gold" className="flex-1 font-bold" disabled={nothingInTable} onClick={() => onPrint(choice)}>
+          <Button variant="gold" className="flex-1 font-bold" disabled={nothingInTable} onClick={() => onPrint({
+            ...choice,
+            docTitle: resolvedDocTitle(titleChoice, defaultDocTitle),
+            periodPrefix: resolvedPeriodPrefix(titleChoice, defaultPeriodPrefix),
+          })}>
             <Printer size={16} /> {printLabel}
           </Button>
         </div>

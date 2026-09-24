@@ -51,6 +51,26 @@ export interface StatementPrintOptions {
   tvaRate: number;
   /** Tableaux d'information (commandes en cours, annulations...). */
   extraTables?: DocTable[];
+  /** Titre choisi a l'impression (sinon le titre par defaut). */
+  docTitle?: string;
+  /** Texte choisi devant les dates de la periode (sinon celui par defaut). */
+  periodPrefix?: string;
+}
+
+/** Titre par defaut d'un compte rendu / bon de livraison de periode. */
+export function defaultStatementTitle(kind: 'client' | 'supplier', mode: 'statement' | 'deliveries'): string {
+  if (mode === 'deliveries') return 'BON DE LIVRAISON';
+  return kind === 'client' ? 'COMPTE RENDU CLIENT' : 'COMPTE RENDU FOURNISSEUR';
+}
+
+/** Texte par defaut devant les dates : « COMPTE RENDU » DU ... AU ... */
+export function defaultStatementPeriodPrefix(mode: 'statement' | 'deliveries'): string {
+  return mode === 'deliveries' ? 'LIVRAISON' : 'COMPTE RENDU';
+}
+
+/** « DU 01/09/2026 AU 25/09/2026 » */
+export function periodSuffix(from: string, to: string): string {
+  return `DU ${formatDate(from)} AU ${formatDate(to)}`;
 }
 
 const qty = (n: number): string => {
@@ -280,17 +300,16 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
 
   (o.extraTables ?? []).forEach((x) => tables.push(x));
 
-  const period = `${formatDate(slice.from)} AU ${formatDate(slice.to)}`;
+  const docTitle = (o.docTitle?.trim() || defaultStatementTitle(o.kind, o.mode)).toUpperCase();
+  const prefix = (o.periodPrefix?.trim() || defaultStatementPeriodPrefix(o.mode)).toUpperCase();
   printOfficialDocument(
     {
-      title: o.mode === 'deliveries'
-        ? 'BON DE LIVRAISON'
-        : isClient ? 'COMPTE RENDU CLIENT' : 'COMPTE RENDU FOURNISSEUR',
+      title: docTitle,
       docDate: slice.to,
       doitLabel: isClient ? 'DOIT' : 'FOURNISSEUR',
       doitName: o.party.name,
       doitLines: fiscalLines(o.party),
-      metaLines: [o.mode === 'deliveries' ? `LIVRAISON DU ${period}` : `COMPTE RENDU DU ${period}`],
+      metaLines: [`${prefix} ${periodSuffix(slice.from, slice.to)}`],
       tables,
       // Les versements ne forment plus un tableau : ils sont LISTES en fin de
       // document, chacun avec sa date.

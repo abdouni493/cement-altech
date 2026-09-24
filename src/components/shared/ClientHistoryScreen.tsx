@@ -15,6 +15,7 @@ import {
 } from './PartyHistoryModal';
 import { EditSaleModal } from './EditSaleModal';
 import { EditPaymentModal } from './EditPaymentModal';
+import { PrintTitleDialog, type PrintTitleRequest } from './PrintTitleDialog';
 import { useClientStore } from '@/store/clientStore';
 import { useSalesStore } from '@/store/salesStore';
 import { useCommandStore, deliveryStatus } from '@/store/commandStore';
@@ -116,6 +117,7 @@ export function ClientHistoryScreen({
   const [viewCommand, setViewCommand] = useState<Command | null>(null);
   const [viewDelivery, setViewDelivery] = useState<HistoryDelivery | null>(null);
   const [editPayment, setEditPayment] = useState<PartyPayment | null>(null);
+  const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
   const [confirm, setConfirm] = useState<
     { title: string; message?: string; run: () => Promise<void> } | null
   >(null);
@@ -229,10 +231,19 @@ export function ClientHistoryScreen({
       settings
     );
 
-  const printDelivery = (h: HistoryDelivery) => {
+  const printDelivery = (h: HistoryDelivery) =>
+    setTitleRequest({
+      defaultTitle: h.delivery.isHistorical ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON',
+      scope: 'delivery',
+      dialogTitle: `Imprimer le bon ${h.delivery.reference}`,
+      print: ({ title }) => runPrintDelivery(h, title),
+    });
+
+  const runPrintDelivery = (h: HistoryDelivery, docTitle: string) => {
     const { delivery: d, command: c } = h;
     printDeliveryNote(
       {
+        docTitle,
         reference: d.reference,
         commandReference: c?.reference ?? '',
         bonNumber: c?.bonNumber,
@@ -303,6 +314,20 @@ export function ClientHistoryScreen({
 
   /** Impression d'une liste sur le papier du bon de livraison. */
   const printList = (
+    title: string,
+    columns: { label: string; align?: 'left' | 'center' | 'right'; width?: string }[],
+    rows: (string | number)[][],
+    totalLabel?: string,
+    totalValue?: string
+  ) =>
+    setTitleRequest({
+      defaultTitle: title.toUpperCase(),
+      scope: 'list',
+      dialogTitle: `Imprimer — ${title}`,
+      print: ({ title: chosen }) => runPrintList(chosen, columns, rows, totalLabel, totalValue),
+    });
+
+  const runPrintList = (
     title: string,
     columns: { label: string; align?: 'left' | 'center' | 'right'; width?: string }[],
     rows: (string | number)[][],
@@ -1179,6 +1204,8 @@ export function ClientHistoryScreen({
           setEditPayment(null);
         }}
       />
+
+      <PrintTitleDialog request={titleRequest} onClose={() => setTitleRequest(null)} />
 
       <ConfirmDialog
         open={!!confirm}

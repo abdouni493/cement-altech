@@ -24,7 +24,10 @@ import { withinPeriod } from '@/lib/partyHistory';
 import {
   buildClientLedger, sliceLedger, ledgerRows, type DebitKind, type LedgerSlice,
 } from '@/lib/ledger';
-import { printPartyStatement, statementTotals, dayBefore } from '@/lib/statementPrint';
+import {
+  printPartyStatement, statementTotals, dayBefore,
+  defaultStatementTitle, defaultStatementPeriodPrefix, periodSuffix,
+} from '@/lib/statementPrint';
 import type { DocTable } from '@/lib/officialDoc';
 import { panelVariants, EASE } from '@/lib/animations';
 import { cn } from '@/lib/utils';
@@ -241,6 +244,8 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         tvaMode: c.tvaMode,
         tvaRate: c.tvaRate,
         extraTables: extraTables(c),
+        docTitle: c.docTitle,
+        periodPrefix: c.periodPrefix,
       },
       settings
     );
@@ -628,6 +633,9 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                 ? `Bon de livraisons de la période — ${client.name}`
                 : `Imprimer le compte rendu — ${client.name}`}
               printLabel={printMode === 'deliveries' ? 'Imprimer le bon de livraisons' : 'Imprimer le compte rendu'}
+              defaultDocTitle={defaultStatementTitle('client', printMode ?? 'statement')}
+              defaultPeriodPrefix={defaultStatementPeriodPrefix(printMode ?? 'statement')}
+              periodSuffix={period ? periodSuffix(period.from, period.to) : undefined}
               note={printMode === 'deliveries' && data.salesList.length
                 ? 'Les ventes de caisse ne figurent pas sur le bon de livraisons : si des versements du client les ont réglées, le reste imprimé peut différer du solde du compte.'
                 : undefined}

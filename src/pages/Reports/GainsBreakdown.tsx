@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   TrendingUp, TrendingDown, Printer, Receipt, Factory, Banknote, HardHat, Wallet, Info,
@@ -17,7 +17,8 @@ import { useCommandStore } from '@/store/commandStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { computeGains, type GainsBreakdown as Breakdown } from '@/lib/finance';
-import { printListDocument } from '@/lib/statementPrint';
+import { printListDocument, periodSuffix } from '@/lib/statementPrint';
+import { PrintTitleDialog, type PrintTitleRequest } from '@/components/shared/PrintTitleDialog';
 import type { DocRow } from '@/lib/officialDoc';
 import { cardVariants } from '@/lib/animations';
 import { cn } from '@/lib/utils';
@@ -54,6 +55,7 @@ export function GainsBreakdown({ from, to }: { from: string; to: string }) {
   const transactions = useCaisseStore((s) => s.transactions);
   const deliveries = useCommandStore((s) => s.deliveries);
   const settings = useSettingsStore((s) => s.settings);
+  const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
 
   const valid = !!from && !!to && from <= to;
   const g = useMemo<Breakdown | null>(
@@ -77,7 +79,17 @@ export function GainsBreakdown({ from, to }: { from: string; to: string }) {
   const m = formatCurrency;
   const pct = (v: number) => `${v.toFixed(1)} %`;
 
-  const print = () => {
+  const print = () =>
+    setTitleRequest({
+      defaultTitle: 'CALCUL DES GAINS ET DES DEPENSES',
+      defaultPeriodPrefix: 'PERIODE',
+      periodSuffix: periodSuffix(from, to),
+      scope: 'report',
+      dialogTitle: 'Imprimer le calcul des gains',
+      print: ({ title, periodPrefix }) => printNow(title, periodPrefix),
+    });
+
+  const printNow = (docTitle: string, prefix: string) => {
     const line = (label: string, value: number, strong = false): DocRow =>
       ({ cells: [label.toUpperCase(), m(value)], variant: strong ? 'subtotal' : 'normal' });
     const cols = [
@@ -86,9 +98,9 @@ export function GainsBreakdown({ from, to }: { from: string; to: string }) {
     ];
     printListDocument(
       {
-        title: 'Calcul des gains et des depenses',
+        title: docTitle,
         docDate: to,
-        metaLines: [`PERIODE DU ${formatDate(from)} AU ${formatDate(to)}`],
+        metaLines: [`${prefix} ${periodSuffix(from, to)}`],
         tables: [
           {
             title: "Chiffre d'affaires",
@@ -266,6 +278,8 @@ export function GainsBreakdown({ from, to }: { from: string; to: string }) {
           <Printer size={14} /> Imprimer le calcul
         </Button>
       </div>
+
+      <PrintTitleDialog request={titleRequest} onClose={() => setTitleRequest(null)} />
     </div>
   );
 }

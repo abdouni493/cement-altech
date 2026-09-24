@@ -20,6 +20,7 @@ import {
   type ClientAccount, type SupplierAccount,
 } from '@/lib/accounts';
 import { printListDocument } from '@/lib/statementPrint';
+import { PrintTitleDialog, type PrintTitleRequest } from '@/components/shared/PrintTitleDialog';
 import { toast } from '@/components/ui/Toast';
 import { cardVariants } from '@/lib/animations';
 import { cn } from '@/lib/utils';
@@ -63,6 +64,7 @@ export function DebtsOverview() {
   const [filter, setFilter] = useState<Filter>('debt');
   const [sort, setSort] = useState<'amount' | 'name'>('amount');
   const [paying, setPaying] = useState<{ tab: Tab; row: Row } | null>(null);
+  const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
 
   const clientAccounts = useMemo(
     () => buildClientAccounts({ clients, sales, commands, deliveries, oldDebts: clientOldDebts }),
@@ -106,11 +108,24 @@ export function DebtsOverview() {
   const printList = () => {
     if (!open) return;
     const isClient = open === 'clients';
+    setTitleRequest({
+      defaultTitle: isClient ? 'DETTES DES CLIENTS' : 'DETTES ENVERS LES FOURNISSEURS',
+      defaultPeriodPrefix: 'SITUATION',
+      periodSuffix: `AU ${formatDate(todayISO())}`,
+      scope: 'report',
+      dialogTitle: 'Imprimer la liste des dettes',
+      print: ({ title, periodPrefix }) => printListNow(title, periodPrefix),
+    });
+  };
+
+  const printListNow = (docTitle: string, prefix: string) => {
+    if (!open) return;
+    const isClient = open === 'clients';
     printListDocument(
       {
-        title: isClient ? 'Dettes des clients' : 'Dettes envers les fournisseurs',
+        title: docTitle,
         docDate: todayISO(),
-        metaLines: [`SITUATION AU ${formatDate(todayISO())}`],
+        metaLines: [`${prefix} AU ${formatDate(todayISO())}`],
         tables: [
           {
             columns: [
@@ -350,6 +365,8 @@ export function DebtsOverview() {
           onSubmit={submitPayment}
         />
       )}
+
+      <PrintTitleDialog request={titleRequest} onClose={() => setTitleRequest(null)} />
     </>
   );
 }

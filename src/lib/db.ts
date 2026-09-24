@@ -658,6 +658,18 @@ export const db = {
     update: async (id: string, p: Partial<Product>) => toProduct(await update('products', id, fromProduct(p))),
     remove: (id: string) => remove('products', id),
   },
+  // titres personnalises proposes a l'impression
+  documentTitles: {
+    list: async (): Promise<{ id: string; title: string; scope: string }[]> =>
+      (await select<any>('document_titles', '*', 'created_at')).map((r) => ({
+        id: r.id, title: r.title, scope: r.scope ?? 'statement',
+      })),
+    create: async (title: string, scope: string) => {
+      const r = await insert<any>('document_titles', { title, scope });
+      return { id: r.id as string, title: r.title as string, scope: (r.scope ?? scope) as string };
+    },
+    remove: (id: string) => remove('document_titles', id),
+  },
   marques: {
     list: async (): Promise<Marque[]> => (await select<any>('marques')).map(simpleName),
     create: async (name: string) => simpleName(await insert('marques', { name })),

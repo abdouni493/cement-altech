@@ -21,7 +21,10 @@ import { supplierAccountOf } from '@/lib/accounts';
 import {
   buildSupplierLedger, sliceLedger, ledgerRows, type DebitKind, type LedgerSlice,
 } from '@/lib/ledger';
-import { printPartyStatement, statementTotals, dayBefore } from '@/lib/statementPrint';
+import {
+  printPartyStatement, statementTotals, dayBefore,
+  defaultStatementTitle, defaultStatementPeriodPrefix, periodSuffix,
+} from '@/lib/statementPrint';
 import { panelVariants, EASE } from '@/lib/animations';
 import { cn } from '@/lib/utils';
 import type { Supplier } from '@/types';
@@ -134,6 +137,8 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         includeProducts: c.products,
         tvaMode: c.tvaMode,
         tvaRate: c.tvaRate,
+        docTitle: c.docTitle,
+        periodPrefix: c.periodPrefix,
       },
       settings
     );
@@ -417,6 +422,9 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
               preview={preview}
               title={`Imprimer le compte rendu — ${supplier.name}`}
               printLabel="Imprimer le compte rendu"
+              defaultDocTitle={defaultStatementTitle('supplier', 'statement')}
+              defaultPeriodPrefix={defaultStatementPeriodPrefix('statement')}
+              periodSuffix={period ? periodSuffix(period.from, period.to) : undefined}
             />
           )}
 

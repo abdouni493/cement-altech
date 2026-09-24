@@ -23,6 +23,7 @@ import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel, todayIS
 import { printInvoice } from '@/lib/print';
 import { printPaymentReceipt } from '@/lib/documents';
 import { printListDocument } from '@/lib/statementPrint';
+import { PrintTitleDialog, type PrintTitleRequest } from './PrintTitleDialog';
 import type {
   Supplier, PartyOldDebt, PartyPayment, Purchase, PartyCreditRefund,
 } from '@/types';
@@ -80,6 +81,7 @@ export function SupplierHistoryScreen({
 
   const [viewPurchase, setViewPurchase] = useState<Purchase | null>(null);
   const [editPayment, setEditPayment] = useState<PartyPayment | null>(null);
+  const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
   const [confirm, setConfirm] = useState<
     { title: string; message?: string; run: () => Promise<void> } | null
   >(null);
@@ -151,6 +153,20 @@ export function SupplierHistoryScreen({
     );
 
   const printList = (
+    title: string,
+    columns: { label: string; align?: 'left' | 'center' | 'right'; width?: string }[],
+    rows: (string | number)[][],
+    totalLabel?: string,
+    totalValue?: string
+  ) =>
+    setTitleRequest({
+      defaultTitle: title.toUpperCase(),
+      scope: 'list',
+      dialogTitle: `Imprimer — ${title}`,
+      print: ({ title: chosen }) => runPrintList(chosen, columns, rows, totalLabel, totalValue),
+    });
+
+  const runPrintList = (
     title: string,
     columns: { label: string; align?: 'left' | 'center' | 'right'; width?: string }[],
     rows: (string | number)[][],
@@ -589,6 +605,8 @@ export function SupplierHistoryScreen({
           setEditPayment(null);
         }}
       />
+
+      <PrintTitleDialog request={titleRequest} onClose={() => setTitleRequest(null)} />
 
       <ConfirmDialog
         open={!!confirm}

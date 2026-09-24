@@ -37,6 +37,7 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime, todayISO, DEFAULT_TVA_RATE } from '@/lib/utils';
 import { commandTtc, deliverySalesOf } from '@/lib/commandBilling';
 import { printCommandOrder, printDeliveryNote } from '@/lib/documents';
+import { PrintTitleDialog, type PrintTitleRequest } from '@/components/shared/PrintTitleDialog';
 import { cardVariants, EASE } from '@/lib/animations';
 import type { Client, CommandDelivery } from '@/types';
 
@@ -483,9 +484,21 @@ export default function CommandsPage() {
     };
   };
 
-  const doPrintDelivery = (cmd: Command, delivery: CommandDelivery) => {
+  const [titleRequest, setTitleRequest] = useState<PrintTitleRequest | null>(null);
+
+  // Avant d'imprimer un bon de livraison, l'operateur choisit son titre.
+  const doPrintDelivery = (cmd: Command, delivery: CommandDelivery) =>
+    setTitleRequest({
+      defaultTitle: (delivery.isHistorical ?? cmd.isHistorical) ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON',
+      scope: 'delivery',
+      dialogTitle: `Imprimer le bon ${delivery.reference}`,
+      print: ({ title }) => runPrintDelivery(cmd, delivery, title),
+    });
+
+  const runPrintDelivery = (cmd: Command, delivery: CommandDelivery, docTitle: string) => {
     printDeliveryNote(
       {
+        docTitle,
         reference: delivery.reference,
         commandReference: cmd.reference,
         bonNumber: cmd.bonNumber,
@@ -1943,6 +1956,8 @@ export default function CommandsPage() {
           </div>
         </div>
       </Modal>
+
+      <PrintTitleDialog request={titleRequest} onClose={() => setTitleRequest(null)} />
     </div>
   );
 }

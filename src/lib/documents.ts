@@ -226,6 +226,8 @@ export interface DeliveryNoteData {
   driverPlate?: string;
   /** Ancienne livraison (commande ancienne). */
   historical?: boolean;
+  /** Titre choisi a l'impression (sinon « BON DE LIVRAISON »). */
+  docTitle?: string;
   lines: DeliveryNoteLine[];
   /** TVA propre à CE bon — masquée sur le document quand elle est désactivée. */
   tvaEnabled?: boolean;
@@ -278,7 +280,7 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
 
   printOfficialDocument(
     {
-      title: data.historical ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON',
+      title: (data.docTitle?.trim() || (data.historical ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON')).toUpperCase(),
       docDate: data.deliveredAt,
       doitName: data.clientName,
       metaLines: [`N° BL : ${data.reference}`],
