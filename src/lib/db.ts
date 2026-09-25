@@ -85,10 +85,36 @@ async function update<T>(table: string, id: string, row: Record<string, any>): P
   return data as T;
 }
 
-async function remove(table: string, id: string): Promise<void> {
+/**
+ * Bouton « Supprimer » : passe par `recycle_delete` pour que la ligne arrive
+ * dans la corbeille (Paramètres › Corbeille). Tant que
+ * `altech_production_update_corbeille.sql` n'est pas exécuté, suppression directe.
+ */
+export async function remove(table: string, id: string): Promise<void> {
+  const { error: rpcError } = await supabase.rpc('recycle_delete', { p_table: table, p_id: id });
+  if (!rpcError) return;
+  if (!isMissingSchema(rpcError.message) && !/PGRST202|Could not find the function/i.test(rpcError.message)) {
+    throw new Error(`[${table}] ${rpcError.message}`);
+  }
   const { error } = await supabase.from(table).delete().eq('id', id);
   if (error) throw new Error(`[${table}] ${error.message}`);
 }
+
+export interface RecycleRow {
+  id: number;
+  tx_id: number;
+  table_name: string;
+  row_id: string | null;
+  data: Record<string, any>;
+  deleted_at: string;
+  deleted_by_name: string;
+}
+
+/** Corbeille : suppressions restaurables. */
+export const recycleBin = {
+  list: () => call<RecycleRow[]>('recycle_bin_list'),
+  restore: (txId: number) => call<number>('recycle_restore', { p_tx_id: txId }),
+};
 
 async function call<T>(fn: string, args: Record<string, any> = {}): Promise<T> {
   const { data, error } = await supabase.rpc(fn, args);

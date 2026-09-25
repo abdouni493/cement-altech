@@ -3,7 +3,7 @@ import type {
   Worker, Role, Acompte, Absence, WorkerPaymentRecord, WorkerPermissions, WorkerOvertime,
 } from '@/types';
 import { supabase } from '@/lib/supabase';
-import { db, rpc } from '@/lib/db';
+import { db, rpc, remove as removeRow } from '@/lib/db';
 import { save } from '@/lib/persist';
 
 /** Decimal hours between "fin du travail" and "fin des heures supplémentaires". */
@@ -124,10 +124,7 @@ export const useWorkerStore = create<WorkerState>()((set, get) => {
     },
 
     deleteAcompte: async (workerId, id) => {
-      await save('workers.acompte.delete', async () => {
-        const { error } = await supabase.from('worker_acomptes').delete().eq('id', id);
-        if (error) throw new Error(error.message);
-      });
+      await save('workers.acompte.delete', () => removeRow('worker_acomptes', id));
       await reload();
     },
 
@@ -142,10 +139,7 @@ export const useWorkerStore = create<WorkerState>()((set, get) => {
     },
 
     deleteAbsence: async (_workerId, id) => {
-      await save('workers.absence.delete', async () => {
-        const { error } = await supabase.from('worker_absences').delete().eq('id', id);
-        if (error) throw new Error(error.message);
-      });
+      await save('workers.absence.delete', () => removeRow('worker_absences', id));
       await reload();
     },
 
@@ -157,10 +151,7 @@ export const useWorkerStore = create<WorkerState>()((set, get) => {
     },
 
     deletePayment: async (_workerId, id) => {
-      await save('workers.payment.delete', async () => {
-        const { error } = await supabase.from('worker_payments').delete().eq('id', id);
-        if (error) throw new Error(error.message);
-      });
+      await save('workers.payment.delete', () => removeRow('worker_payments', id));
       await reload();
     },
 

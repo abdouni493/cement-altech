@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Settings as SettingsIcon, UserCog, Database, Upload, Download, Save, AlertTriangle, Trash2, FlaskConical } from 'lucide-react';
+import { Settings as SettingsIcon, UserCog, Database, Upload, Download, Save, AlertTriangle, FlaskConical } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Tabs } from '@/components/ui/Tabs';
 import { Card } from '@/components/ui/Card';
@@ -10,6 +10,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { downloadJSON, todayISO } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
+import { RecycleBin } from './RecycleBin';
 
 const STORE_KEYS = [
   'altech-auth', 'altech-settings', 'altech-stock', 'altech-suppliers',
@@ -18,8 +19,6 @@ const STORE_KEYS = [
   'altech-workers', 'altech-expenses', 'altech-caisse', 'altech-caisse-reports',
 ];
 
-// Keys that hold business data — wiped on reset, but the admin account/settings are kept.
-const DATA_KEYS = STORE_KEYS.filter((k) => k !== 'altech-auth' && k !== 'altech-settings');
 
 export default function SettingsPage() {
   const { t } = useLanguage();
@@ -74,18 +73,11 @@ export default function SettingsPage() {
     reader.readAsText(file);
   };
 
-  const handleReset = () => {
-    if (!window.confirm('Effacer toutes les données (stock, ventes, achats, clients, etc.) ? Votre compte et les informations du magasin seront conservés. Cette action est irréversible.')) return;
-    DATA_KEYS.forEach((k) => localStorage.removeItem(k));
-    toast.success('Données effacées — rechargement...');
-    setTimeout(() => window.location.reload(), 1000);
-  };
-
   return (
     <div>
       <PageHeader title={t('settings')} icon={<SettingsIcon size={24} />} />
       <Tabs className="mb-6" active={tab} onChange={setTab}
-        tabs={[{ id: 'store', label: t('storeInfo') }, { id: 'account', label: t('myAccount') }, { id: 'database', label: t('database') }]} />
+        tabs={[{ id: 'store', label: t('storeInfo') }, { id: 'account', label: t('myAccount') }, { id: 'database', label: t('database') }, { id: 'recycle', label: 'Corbeille' }]} />
 
       {tab === 'store' && (
         <Card index={0}>
@@ -176,14 +168,10 @@ export default function SettingsPage() {
             <input ref={fileRef} type="file" accept="application/json" className="hidden" onChange={handleRestore} />
             <Button variant="danger" onClick={() => fileRef.current?.click()}><Upload size={16} /> {t('selectFile')}</Button>
           </Card>
-          <Card index={2} className="border-rose-deep/20">
-            <div className="flex items-center gap-2 mb-3 text-rose-deep"><Trash2 size={20} /><h3 className="font-display font-semibold text-text-primary">Réinitialiser</h3></div>
-            <p className="text-sm text-text-muted mb-2">Effacer toutes les données métier (stock, ventes, achats…)</p>
-            <p className="text-xs text-rose-deep flex items-center gap-1 mb-4"><AlertTriangle size={14} /> Conserve votre compte et le magasin</p>
-            <Button variant="danger" onClick={handleReset}><Trash2 size={16} /> Tout effacer</Button>
-          </Card>
         </div>
       )}
+
+      {tab === 'recycle' && <RecycleBin />}
     </div>
   );
 }
