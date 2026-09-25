@@ -2,7 +2,7 @@ import type {
   Sale, Purchase, PartyPayment, PartyOldDebt, PartyCreditRefund, CommandDelivery,
 } from '@/types';
 import type { Command } from '@/store/commandStore';
-import { paymentMethodLabel } from './utils';
+import { dayOf, paymentMethodLabel } from './utils';
 
 /* ============================================================================
  *  RELEVE DE COMPTE D'UN TIERS  —  OPERATIONS ET ARGENT, DATES
@@ -94,7 +94,8 @@ export interface PartyLedger {
   credits: LedgerCredit[];
 }
 
-const day = (v?: string) => (v || '').slice(0, 10);
+/** Jour LOCAL d'une date ou d'un horodatage (voir `dayOf`). */
+const day = (v?: string) => dayOf(v);
 const r2 = (n: number) => Math.round((n || 0) * 100) / 100;
 const byDate = <T extends { date: string }>(a: T, b: T) => a.date.localeCompare(b.date);
 

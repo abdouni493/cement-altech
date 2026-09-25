@@ -1194,6 +1194,9 @@ export const rpc = {
     call<number>('cancel_credit_imputation', { p_kind: kind, p_id: id }),
   rebalancePartyCredit: (partyType: PartyType, partyId: string) =>
     call<number>('rebalance_party_credit', { p_party_type: partyType, p_party_id: partyId }),
+  /** « Recalculer le compte » : commandes, bons, ventes et imputations du client reconstruits. */
+  rebuildClientAccount: (clientId: string) =>
+    call<{ reimpute?: boolean } | null>('rebuild_client_account', { p_client_id: clientId }),
 
   // /commands — livraisons partielles
   createCommandDelivery: (payload: Record<string, any>) =>

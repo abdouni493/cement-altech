@@ -63,6 +63,12 @@ interface ClientState {
    * ACOMPTE, et le document retrouve son reste du.
    */
   cancelCreditImputation: (kind: 'sale' | 'command', id: string) => Promise<number>;
+  /**
+   * RECALCULER LE COMPTE : chaque commande, bon de livraison, vente et
+   * imputation du client est reconstruit a partir de ses documents et de
+   * l'argent reellement recu. Renvoie true si ses versements ont ete re-imputes.
+   */
+  rebuildAccount: (clientId: string) => Promise<boolean>;
 }
 
 /**
@@ -234,6 +240,13 @@ export const useClientStore = create<ClientState>()((set, get) => ({
     set(await reloadLedger());
     await refreshClientDebt();
     return Number(back) || 0;
+  },
+
+  rebuildAccount: async (clientId) => {
+    const res = await save('clients.rebuild', () => rpc.rebuildClientAccount(clientId));
+    set({ payments: await db.clientPayments.list(), ...(await reloadLedger()) });
+    await refreshClientDebt();
+    return !!res?.reimpute;
   },
 
   rebalanceCredit: async (clientId) => {

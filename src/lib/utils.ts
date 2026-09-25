@@ -57,6 +57,21 @@ export function localISODate(d: Date = new Date()): string {
 }
 
 /**
+ * Jour (`YYYY-MM-DD`) d'une valeur venue de la base, en heure LOCALE.
+ *
+ * Une date seule (`2026-07-19`) est rendue telle quelle. Un horodatage
+ * (`2026-07-18T12:06:00+00:00`) est converti dans le fuseau du poste : couper
+ * la chaine rangeait sinon un bon de livraison saisi le 19/07 au 18/07 dans
+ * les comptes rendus, alors que l'ecran l'affiche au 19/07.
+ */
+export function dayOf(value?: string | null): string {
+  if (!value) return '';
+  if (value.length <= 10) return value;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? value.slice(0, 10) : localISODate(d);
+}
+
+/**
  * Date du jour, en heure LOCALE.
  * `toISOString()` donne la date UTC : sur un poste en avance sur l'UTC, chaque
  * document saisi le matin tombait la veille — un décalage d'un jour dans les

@@ -3,6 +3,7 @@ import type {
   CommandDelivery, CommandAdjustment,
 } from '@/types';
 import type { Command } from '@/store/commandStore';
+import { dayOf } from './utils';
 
 /* ============================================================================
  *  HISTORIQUE COMPLET D'UN TIERS  —  SOURCE UNIQUE DE VERITE
@@ -324,7 +325,7 @@ export function buildSupplierHistory(input: SupplierHistoryInput): SupplierHisto
 /** `date` tombe-t-elle dans [from, to] (bornes incluses, vides = illimitees) ? */
 export function withinPeriod(date: string | undefined, from?: string, to?: string): boolean {
   if (!date) return !from && !to;
-  const d = date.slice(0, 10);
+  const d = dayOf(date);
   if (from && d < from) return false;
   if (to && d > to) return false;
   return true;

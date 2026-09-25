@@ -133,6 +133,21 @@ async function refreshDeliveries(): Promise<void> {
   }
 }
 
+/**
+ * Modifier ou supprimer une vente peut rendre au client de l'argent venu de
+ * son compte (acompte) : sa fiche et la caisse sont relues.
+ */
+async function refreshAccounts(): Promise<void> {
+  try {
+    const [{ useClientStore }, { useCaisseStore }] = await Promise.all([
+      import('./clientStore'), import('./caisseStore'),
+    ]);
+    await Promise.all([useClientStore.getState().load(), useCaisseStore.getState().load()]);
+  } catch {
+    /* relus au prochain passage sur l'ecran */
+  }
+}
+
 /** True when the database has not received the POS/production update yet. */
 function isMissingFunction(message: string): boolean {
   return /PGRST202|Could not find the function|does not exist|schema cache/i.test(message);
@@ -475,7 +490,7 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
       })
     );
     set({ sales: await db.sales.list() });
-    if (wasDelivery) await refreshDeliveries();
+    await Promise.all([refreshAccounts(), ...(wasDelivery ? [refreshDeliveries()] : [])]);
   },
 
   updateSaleLines: async (id, lines, data) => {
@@ -505,6 +520,7 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
       useStockStore.getState().load(),
       useComptoirStore.getState().load(),
       useCaisseStore.getState().load(),
+      refreshAccounts(),
     ]).catch(() => undefined);
   },
 
@@ -521,6 +537,9 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
     set({ sales: get().sales.filter((s) => s.id !== id) });
     // Supprimer la facture d'une livraison supprime le bon : les matieres
     // reviennent en stock et la commande repasse en « non livree ».
-    if (wasDelivery) await Promise.all([refreshDeliveries(), useStockStore.getState().load()]);
+    await Promise.all([
+      refreshAccounts(),
+      ...(wasDelivery ? [refreshDeliveries(), useStockStore.getState().load()] : []),
+    ]);
   },
 }));

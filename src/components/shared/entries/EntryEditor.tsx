@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Pencil } from 'lucide-react';
+import { ClipboardEdit, Pencil } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Input, Textarea } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -10,7 +10,7 @@ import { DeliveryModal } from '@/pages/Clients/DeliveryModal';
 import { CreatePurchase } from '@/pages/Purchase/CreatePurchase';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useSalesStore } from '@/store/salesStore';
-import { useCommandStore, type Command, type DeliveryDriver, type DeliveryPayment } from '@/store/commandStore';
+import { useCommandStore, type DeliveryDriver, type DeliveryPayment } from '@/store/commandStore';
 import { usePurchaseStore } from '@/store/purchaseStore';
 import { useClientStore } from '@/store/clientStore';
 import { useSupplierStore } from '@/store/supplierStore';
@@ -18,6 +18,7 @@ import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from '
 import type { LedgerSource } from '@/lib/ledger';
 import type { CommandDeliveryItem, PartyPayment, PartyType, PaymentMethodDetails } from '@/types';
 import { SaleFullEditModal } from './SaleFullEditModal';
+import { CommandEditModal } from './CommandEditModal';
 
 /* ============================================================================
  *  VOIR / MODIFIER UNE LIGNE DU RELEVE
@@ -77,20 +78,47 @@ export function targetFromLedger(src: LedgerSource, party: PartyType): EntryTarg
   }
 }
 
-/** Ce type de ligne peut-il etre modifie ? (la commande seule se voit) */
+/** Ce type de ligne peut-il etre modifie ? Toutes le sont, commande comprise. */
 export function isEditable(t: EntryTarget | null): boolean {
-  return !!t && t.kind !== 'command';
+  return !!t;
+}
+
+/**
+ * Commande a l'origine d'une ligne : le bon de livraison ou sa facture (pour
+ * en corriger le PRIX unitaire, qui appartient a la commande).
+ */
+function commandOfTarget(t: EntryTarget): string | null {
+  const { sales } = useSalesStore.getState();
+  const { deliveries } = useCommandStore.getState();
+  if (t.kind === 'delivery') return deliveries.find((d) => d.id === t.id)?.commandId ?? null;
+  if (t.kind === 'sale') {
+    const s = sales.find((x) => x.id === t.id);
+    if (!s?.deliveryId) return null;
+    return deliveries.find((d) => d.id === s.deliveryId)?.commandId ?? s.commandId ?? null;
+  }
+  return null;
 }
 
 /* -------------------------------------------------------------------------- */
 
 export function EntryEditor({ request, onClose }: { request: EntryRequest | null; onClose: () => void }) {
   const [mode, setMode] = useState<'view' | 'edit'>('view');
-  useEffect(() => { if (request) setMode(request.mode); }, [request]);
+  /** Commande ouverte depuis un bon de livraison (« Modifier la commande »). */
+  const [commandId, setCommandId] = useState<string | null>(null);
+  useEffect(() => { if (request) { setMode(request.mode); setCommandId(null); } }, [request]);
   if (!request) return null;
   const { target } = request;
+  if (commandId) return <EntryEdit target={{ kind: 'command', id: commandId }} onClose={onClose} />;
+  const parentCommand = commandOfTarget(target);
   return mode === 'view'
-    ? <EntryView target={target} onClose={onClose} onEdit={isEditable(target) ? () => setMode('edit') : undefined} />
+    ? (
+      <EntryView
+        target={target}
+        onClose={onClose}
+        onEdit={isEditable(target) ? () => setMode('edit') : undefined}
+        onEditCommand={parentCommand ? () => setCommandId(parentCommand) : undefined}
+      />
+    )
     : <EntryEdit target={target} onClose={onClose} />;
 }
 
@@ -105,7 +133,15 @@ interface ViewData {
   module: 'clients' | 'suppliers' | 'purchase';
 }
 
-function EntryView({ target, onClose, onEdit }: { target: EntryTarget; onClose: () => void; onEdit?: () => void }) {
+function EntryView({
+  target, onClose, onEdit, onEditCommand,
+}: {
+  target: EntryTarget;
+  onClose: () => void;
+  onEdit?: () => void;
+  /** Bon de livraison / sa facture : ouvrir la commande (prix, quantites). */
+  onEditCommand?: () => void;
+}) {
   const { can } = usePermissions();
   const sales = useSalesStore((s) => s.sales);
   const { commands, deliveries } = useCommandStore();
@@ -340,6 +376,11 @@ function EntryView({ target, onClose, onEdit }: { target: EntryTarget; onClose: 
 
           <div className="flex gap-2 border-t border-gold/15 pt-4">
             <Button variant="secondary" className="flex-1" onClick={onClose}>Fermer</Button>
+            {onEditCommand && can('clients', 'edit') && (
+              <Button variant="secondary" className="flex-1" onClick={onEditCommand}>
+                <ClipboardEdit size={15} /> Modifier la commande (prix)
+              </Button>
+            )}
             {onEdit && can(data.module, 'edit') && (
               <Button variant="gold" className="flex-1 font-bold" onClick={onEdit}>
                 <Pencil size={15} /> Modifier
@@ -358,7 +399,7 @@ function EntryEdit({ target, onClose }: { target: EntryTarget; onClose: () => vo
   const sales = useSalesStore((s) => s.sales);
   const updateSale = useSalesStore((s) => s.updateSale);
   const updateSaleLines = useSalesStore((s) => s.updateSaleLines);
-  const { commands, deliveries, updateDelivery, updateCommand, updateCommandPayment } = useCommandStore();
+  const { commands, deliveries, updateDelivery, updateCommandPayment } = useCommandStore();
   const purchases = usePurchaseStore((s) => s.purchases);
   const client = useClientStore();
   const supplier = useSupplierStore();
@@ -511,36 +552,14 @@ function EntryEdit({ target, onClose }: { target: EntryTarget; onClose: () => vo
     );
   }
 
-  if (target.kind === 'advance') {
-    const cmd = commands.find((c) => c.id === target.commandId);
+  /* ---- commande (et son acompte) : tout se modifie, lignes comprises ---- */
+  if (target.kind === 'advance' || target.kind === 'command') {
+    const cmd = commands.find((c) => c.id === (target.kind === 'advance' ? target.commandId : target.id));
     if (!cmd) return <Missing onClose={onClose} />;
-    return (
-      <AmountDateModal
-        title={`Modifier l'acompte — ${cmd.reference}`}
-        amount={cmd.advancePaid}
-        date={cmd.createdAt.slice(0, 10)}
-        dateLocked
-        allowZero
-        onClose={onClose}
-        onSave={async (amount) => {
-          await updateCommand(cmd.id, commandHeader(cmd, { advancePaid: amount }));
-          done("Acompte modifié — la commande, ses bons et la caisse ont été recalculés");
-        }}
-      />
-    );
+    return <CommandEditModal command={cmd} onClose={onClose} />;
   }
 
   return <Missing onClose={onClose} />;
-}
-
-/** En-tete complet d'une commande (sans ses lignes) pour `updateCommand`. */
-function commandHeader(c: Command, patch: Partial<Command>): Partial<Command> {
-  return {
-    clientId: c.clientId, clientName: c.clientName, clientPhone: c.clientPhone,
-    receiveDate: c.receiveDate, receiveHour: c.receiveHour, receiveMinute: c.receiveMinute,
-    totalAmount: c.totalAmount, notes: c.notes, tvaEnabled: c.tvaEnabled, tvaRate: c.tvaRate,
-    advancePaid: c.advancePaid, ...patch,
-  };
 }
 
 function Missing({ onClose }: { onClose: () => void }) {

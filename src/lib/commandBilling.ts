@@ -34,6 +34,30 @@ export interface CommandNet {
 
 const ZERO: CommandNet = { billed: 0, paid: 0, rest: 0 };
 
+/** Valeur H.T d'une ligne de commande : quantite ENCORE ATTENDUE x prix (comme la base). */
+export function lineTotal(quantity: number, unitPrice: number, cancelled = 0): number {
+  return Math.round(Math.max(0, (quantity || 0) - (cancelled || 0)) * (unitPrice || 0) * 100) / 100;
+}
+
+/**
+ * Valeur T.T.C de ce qui reste A LIVRER sur une commande.
+ *
+ * Elle se calcule sur les QUANTITES restantes, jamais par « total commande −
+ * factures » : un prix modifie ou un total arrondi laissait sinon un faux
+ * « 7,00 DA restant a livrer » sur une commande livree en entier.
+ */
+export function commandPendingValue(cmd: Command): number {
+  const rate = cmd.tvaEnabled ? (cmd.tvaRate ?? 0) : 0;
+  const delivered = cmd.items.reduce((s, it) => s + (it.deliveredQuantity ?? 0), 0);
+  // rien de livre : c'est le net a payer de la commande (total ajuste compris)
+  if (delivered <= 0.0001) return commandTtc(cmd);
+  const ht = cmd.items.reduce((s, it) => {
+    const left = Math.max(0, it.quantity - (it.cancelledQuantity ?? 0) - (it.deliveredQuantity ?? 0));
+    return s + left * (it.unitPrice || 0);
+  }, 0);
+  return Math.round(ht * (1 + rate / 100) * 100) / 100;
+}
+
 /** Total TTC d'une commande — retombe sur le HT si la base n'a pas la colonne. */
 export function commandTtc(cmd: Command): number {
   return cmd.totalTtc && cmd.totalTtc > 0 ? cmd.totalTtc : cmd.totalAmount;
@@ -112,7 +136,7 @@ export function clientCommandSummary(
   commands.forEach((cmd) => {
     if (cmd.status === 'cancelled') return;
     advance += commandAdvanceAvailable(cmd, deliveries);
-    const left = netCommand(cmd, sales).billed;
+    const left = commandPendingValue(cmd);
     if (left > 0.005) {
       pending += left;
       pendingCount += 1;

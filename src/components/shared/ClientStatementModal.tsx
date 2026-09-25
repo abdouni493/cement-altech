@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  FileBarChart, Printer, ShoppingBag, Coins, ClipboardList, RotateCcw, Package,
-  PiggyBank, Truck, ScissorsSquare, LayoutGrid, BookOpenText,
+  FileBarChart, Printer, ShoppingBag, Coins, ClipboardList, Package,
+  PiggyBank, Truck, ScissorsSquare, LayoutGrid, BookOpenText, RefreshCw,
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
+import { toast } from '@/components/ui/Toast';
+import { usePermissions } from '@/hooks/usePermissions';
 import { PeriodPicker, firstDayOfMonth } from './PeriodReport';
 import {
   StatementPrintDialog, type StatementPrintChoice, type StatementPrintPart,
@@ -84,6 +86,25 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
   /** Ligne du releve ouverte en consultation / modification. */
   const [entry, setEntry] = useState<EntryRequest | null>(null);
   const [printMode, setPrintMode] = useState<PrintMode | null>(null);
+  const [rebuilding, setRebuilding] = useState(false);
+  const { can } = usePermissions();
+  const rebuildAccount = useClientStore((s) => s.rebuildAccount);
+
+  /** « Recalculer le compte » : la base reconstruit tout, les ecrans suivent. */
+  const handleRebuild = async () => {
+    if (!client) return;
+    setRebuilding(true);
+    try {
+      const reimputed = await rebuildAccount(client.id);
+      toast.success(reimputed
+        ? 'Compte recalculé — les versements du client ont été ré-imputés'
+        : 'Compte recalculé — commandes, bons et factures à jour');
+    } catch {
+      /* message deja affiche */
+    } finally {
+      setRebuilding(false);
+    }
+  };
   const [priorAsk, setPriorAsk] = useState<
     { mode: PrintMode; choice: StatementPrintChoice; slice: LedgerSlice } | null
   >(null);
@@ -92,7 +113,8 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     if (!client) return;
     setFrom(firstDayOfMonth());
     setTo(todayISO());
-    setPeriod(null);
+    // le compte rendu s'affiche DES L'OUVERTURE, sur le mois en cours
+    setPeriod({ from: firstDayOfMonth(), to: todayISO() });
     setPart('releve');
     setPrintMode(null);
     setPriorAsk(null);
@@ -353,8 +375,13 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
           <PeriodPicker
             from={from}
             to={to}
-            onChange={(f, t) => { setFrom(f); setTo(t); setPeriod(null); }}
+            onChange={(f, t) => {
+              setFrom(f); setTo(t);
+              // chaque changement de date met le compte rendu a jour aussitot
+              setPeriod(f && t && f <= t ? { from: f, to: t } : null);
+            }}
             onGenerate={() => setPeriod({ from, to })}
+            label="Actualiser le compte rendu"
           />
 
           {!data ? (
@@ -373,9 +400,16 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   <p className="text-xs text-text-muted">{periodLabel}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="secondary" onClick={() => setPeriod(null)}>
-                    <RotateCcw size={14} /> Changer la période
-                  </Button>
+                  {can('clients', 'edit') && (
+                    <Button
+                      size="sm" variant="secondary" disabled={rebuilding}
+                      title="Reconstruit les commandes, bons de livraison, factures et imputations de ce client à partir de l'argent réellement reçu"
+                      onClick={handleRebuild}
+                    >
+                      <RefreshCw size={14} className={rebuilding ? 'animate-spin' : undefined} />
+                      {rebuilding ? 'Recalcul…' : 'Recalculer le compte'}
+                    </Button>
+                  )}
                   <Button size="sm" variant="secondary" onClick={() => setPrintMode('deliveries')}>
                     <Truck size={14} /> Bon de livraisons (période)
                   </Button>
@@ -574,11 +608,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                           st.ordered, st.delivered, st.cancelled,
                           money(commandTtc(c)),
                           money((c.advancePaid ?? 0) + (c.extraPaid ?? 0) + (c.creditApplied ?? 0)),
-                          <EntryActions
-                            key="act"
-                            target={(c.advancePaid ?? 0) > 0 ? { kind: 'advance', commandId: c.id } : { kind: 'command', id: c.id }}
-                            onOpen={setEntry}
-                          />,
+                          <EntryActions key="act" target={{ kind: 'command', id: c.id }} onOpen={setEntry} />,
                         ];
                       })}
                       empty="Aucune commande sur cette période"
@@ -604,7 +634,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                   {part === 'adjustments' && (
                     <Section
                       title="Annulations et augmentations de commande"
-                      head={['Date', 'Commande', 'Opération', 'Produits', 'Quantité', 'Valeur H.T', 'Motif']}
+                      head={['Date', 'Commande', 'Opération', 'Produits', 'Quantité', 'Valeur H.T', 'Motif', 'Actions']}
                       rows={data.adjustmentsList.map((a) => [
                         formatDate(a.date, language),
                         a.commandReference ?? '—',
@@ -617,6 +647,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
                           {a.type === 'cancel' ? '−' : '+'}{money(a.totalAmount)}
                         </span>,
                         a.reason || '—',
+                        <EntryActions key="act" target={{ kind: 'command', id: a.commandId }} onOpen={setEntry} />,
                       ])}
                       empty="Aucune annulation ni augmentation sur cette période"
                     />

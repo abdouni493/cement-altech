@@ -35,7 +35,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime, todayISO, DEFAULT_TVA_RATE } from '@/lib/utils';
-import { commandTtc, deliverySalesOf } from '@/lib/commandBilling';
+import { commandTtc, deliverySalesOf, lineTotal } from '@/lib/commandBilling';
 import { printCommandOrder, printDeliveryNote } from '@/lib/documents';
 import { PrintTitleDialog, type PrintTitleRequest } from '@/components/shared/PrintTitleDialog';
 import { cardVariants, EASE } from '@/lib/animations';
@@ -268,6 +268,7 @@ export default function CommandsPage() {
    * de sa jumelle dans la base, sur le bon de commande et dans les livraisons.
    */
   const handleAddRecipeLine = (ft: (typeof ficheTechnics)[0]) => {
+    setCustomTotal(null);
     setSelectedItems((items) => [
       ...items,
       {
@@ -285,20 +286,33 @@ export default function CommandsPage() {
   };
 
   /** Duplique une ligne pour saisir le meme produit a un autre prix. */
-  const handleDuplicateItem = (index: number) =>
+  const handleDuplicateItem = (index: number) => {
+    setCustomTotal(null);
     setSelectedItems((items) => {
       const copy = [...items];
       const src = copy[index];
       copy.splice(index + 1, 0, { ...src, id: undefined, deliveredQuantity: 0, cancelledQuantity: 0 });
       return copy.map((it, i) => ({ ...it, position: i }));
     });
+  };
 
-  const handleUpdateItemQty = (index: number, qty: number) =>
-    setSelectedItems(selectedItems.map((it, i) => (i === index ? { ...it, quantity: qty, totalPrice: qty * it.unitPrice } : it)));
-  const handleUpdateItemPrice = (index: number, price: number) =>
-    setSelectedItems(selectedItems.map((it, i) => (i === index ? { ...it, unitPrice: price, totalPrice: it.quantity * price } : it)));
-  const handleRemoveItem = (index: number) =>
+  /*
+   * Changer une quantite ou un prix INVALIDE le total ajuste a la main : sinon
+   * l'ancien total repartait avec la commande — les bons de livraison etaient
+   * revalorises au nouveau prix mais la carte gardait l'ancien montant.
+   */
+  const handleUpdateItemQty = (index: number, qty: number) => {
+    setCustomTotal(null);
+    setSelectedItems(selectedItems.map((it, i) => (i === index ? { ...it, quantity: qty, totalPrice: lineTotal(qty, it.unitPrice, it.cancelledQuantity) } : it)));
+  };
+  const handleUpdateItemPrice = (index: number, price: number) => {
+    setCustomTotal(null);
+    setSelectedItems(selectedItems.map((it, i) => (i === index ? { ...it, unitPrice: price, totalPrice: lineTotal(it.quantity, price, it.cancelledQuantity) } : it)));
+  };
+  const handleRemoveItem = (index: number) => {
+    setCustomTotal(null);
     setSelectedItems(selectedItems.filter((_, i) => i !== index).map((it, i) => ({ ...it, position: i })));
+  };
 
   const computedTotalSum = selectedItems.reduce((sum, item) => sum + item.totalPrice, 0);
   const finalTotalAmount = customTotal !== null ? customTotal : computedTotalSum;
@@ -344,7 +358,11 @@ export default function CommandsPage() {
     // L'acompte de la commande — et NON tout ce qui a ete paye (acompte +
     // reglements + encaissements des livraisons) : en re-enregistrant la
     // commande, ce total devenait l'acompte et entrait une seconde fois en caisse.
-    setCustomTotal(cmd.totalAmount); setVersement(cmd.advancePaid ?? 0);
+    // « Ajuster le total » n'est pre-rempli QUE si le total avait vraiment ete
+    // ajuste a la main ; sinon il suit les lignes (prix / quantites modifies).
+    const linesSum = cmd.items.reduce((s, it) => s + lineTotal(it.quantity, it.unitPrice, it.cancelledQuantity), 0);
+    setCustomTotal(Math.abs(cmd.totalAmount - linesSum) > 0.004 ? cmd.totalAmount : null);
+    setVersement(cmd.advancePaid ?? 0);
     setTvaEnabled(!!cmd.tvaEnabled); setTvaRate(cmd.tvaRate || DEFAULT_TVA_RATE);
     setBonNumber(cmd.bonNumber || '');
     setCreatedDate(cmd.createdAt.slice(0, 10)); setOriginalCreatedDate(cmd.createdAt.slice(0, 10));
@@ -387,7 +405,9 @@ export default function CommandsPage() {
         driverPlate: driverPlate.trim() || undefined,
         receiveDate, receiveHour, receiveMinute,
         items: selectedItems.map((it, i) => ({ ...it, position: i })),
-        totalAmount: finalTotalAmount,
+        // en modification, un total NON ajuste n'est pas envoye : la base le
+        // recalcule des lignes (annulations deduites)
+        totalAmount: editingId && customTotal === null ? undefined : finalTotalAmount,
         tvaEnabled,
         tvaRate: tvaEnabled ? tvaRate : 0,
         advancePaid: versement,
@@ -404,7 +424,7 @@ export default function CommandsPage() {
         const updated = useCommandStore.getState().commands.find((c) => c.id === editingId);
         if (updated) setPrintPrompt({ kind: 'command', cmd: updated });
       } else {
-        const newCmd = await addCommand(cmdData);
+        const newCmd = await addCommand({ ...cmdData, totalAmount: finalTotalAmount });
         let saved = newCmd;
         if (newCmd && formCreditUsed > 0.004) {
           try {
@@ -1393,9 +1413,9 @@ export default function CommandsPage() {
               <div className="flex items-start gap-2 rounded-xl border border-caramel/40 bg-caramel/10 px-3 py-2.5 text-xs text-caramel">
                 <AlertTriangle size={15} className="shrink-0 mt-0.5" />
                 <span>
-                  Cette commande a déjà été livrée : la liste des produits ne peut plus être
-                  modifiée (les quantités livrées y sont rattachées). Vous pouvez toujours
-                  changer la date de livraison prévue et le total.
+                  Cette commande a déjà des bons de livraison : vous pouvez modifier les prix et
+                  les quantités (jamais sous la quantité déjà livrée). À l&rsquo;enregistrement, les
+                  bons, leurs factures, le reste dû et le compte du client sont recalculés.
                 </span>
               </div>
             )}

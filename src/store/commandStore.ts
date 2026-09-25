@@ -242,6 +242,23 @@ const tvaPayload = (p?: DeliveryPayment) =>
 const reloadSales = () =>
   useSalesStore.getState().load().catch(() => undefined);
 
+/**
+ * Le compte du client suit chaque modification : l'acompte (argent libere par
+ * un bon ou un prix en baisse), ses anciennes dettes et la caisse sont relus.
+ * Sans cela, la carte et le compte rendu gardaient les anciens montants.
+ * Import dynamique : `clientStore` importe deja ce module.
+ */
+const reloadAccounts = async () => {
+  try {
+    const [{ useClientStore }, { useCaisseStore }] = await Promise.all([
+      import('./clientStore'), import('./caisseStore'),
+    ]);
+    await Promise.all([useClientStore.getState().load(), useCaisseStore.getState().load()]);
+  } catch {
+    /* relus au prochain passage sur l'ecran */
+  }
+};
+
 export const useCommandStore = create<CommandState>()((set, get) => ({
   commands: [],
   deliveries: [],
@@ -308,7 +325,8 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
       receive_date: data.receiveDate || null,
       receive_hour: data.receiveHour,
       receive_minute: data.receiveMinute,
-      total_amount: data.totalAmount,
+      // sans total, la base le recalcule des lignes (annulations deduites)
+      ...(data.totalAmount !== undefined ? { total_amount: data.totalAmount } : {}),
       notes: data.notes ?? null,
       ...(data.tvaEnabled !== undefined
         ? { tva_enabled: data.tvaEnabled, tva_rate: data.tvaEnabled ? (data.tvaRate ?? 19) : 0 }
@@ -346,7 +364,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     // fiche du client doivent repartir des valeurs recalculees par la base.
     const [commands, deliveries, adjustments] = await Promise.all([
       db.commands.list(), db.commandDeliveries.list(), db.commandAdjustments.list(),
-      reloadSales(), reloadStock(),
+      reloadSales(), reloadStock(), reloadAccounts(),
     ]);
     set({ commands, deliveries, adjustments });
     return linesKept;
@@ -354,16 +372,20 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
 
   payDebt: async (commandId, amount, date) => {
     await save('commands.pay', () => rpc.payCommand(commandId, amount, date));
-    set({ commands: await db.commands.list() });
+    // le reglement descend sur les bons : leurs factures changent aussi
+    const [commands, deliveries] = await Promise.all([
+      db.commands.list(), db.commandDeliveries.list(), reloadSales(), reloadAccounts(),
+    ]);
+    set({ commands, deliveries });
   },
 
   updateCommandPayment: async (id, amount, date, notes) => {
     await save('commands.payment.update', () => rpc.updateCommandPayment(id, amount, date, notes));
-    const { useCaisseStore } = await import('./caisseStore');
-    const [commands] = await Promise.all([
-      db.commands.list(), useCaisseStore.getState().load().catch(() => undefined),
+    // l'argent de la commande est re-reparti sur ses bons (factures comprises)
+    const [commands, deliveries] = await Promise.all([
+      db.commands.list(), db.commandDeliveries.list(), reloadSales(), reloadAccounts(),
     ]);
-    set({ commands });
+    set({ commands, deliveries });
   },
 
   updateStatus: async (commandId, status) => {
@@ -388,7 +410,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     );
     const [commands, deliveries, adjustments] = await Promise.all([
       db.commands.list(), db.commandDeliveries.list(), db.commandAdjustments.list(),
-      reloadSales(), reloadStock(),
+      reloadSales(), reloadStock(), reloadAccounts(),
     ]);
     set({ commands, deliveries, adjustments });
     return adjustments.find((a) => a.id === row?.id);
@@ -410,7 +432,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     );
     const [commands, deliveries, adjustments] = await Promise.all([
       db.commands.list(), db.commandDeliveries.list(), db.commandAdjustments.list(),
-      reloadSales(), reloadStock(),
+      reloadSales(), reloadStock(), reloadAccounts(),
     ]);
     set({ commands, deliveries, adjustments });
     return adjustments.find((a) => a.id === row?.id);
@@ -420,7 +442,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     await save('commands.adjustment.delete', () => rpc.deleteCommandAdjustment(id));
     const [commands, deliveries, adjustments] = await Promise.all([
       db.commands.list(), db.commandDeliveries.list(), db.commandAdjustments.list(),
-      reloadSales(), reloadStock(),
+      reloadSales(), reloadStock(), reloadAccounts(),
     ]);
     set({ commands, deliveries, adjustments });
   },
@@ -437,7 +459,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
       adjustments: get().adjustments.filter((a) => a.commandId !== id),
     });
     // ses livraisons partent en cascade : leurs matières reviennent au stock
-    if (hadDeliveries) await Promise.all([reloadStock(), reloadSales()]);
+    await Promise.all([reloadAccounts(), ...(hadDeliveries ? [reloadStock(), reloadSales()] : [])]);
   },
 
   addDelivery: async (commandId, items, deliveredAt, notes = '', driver, payment) => {
@@ -459,7 +481,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     // stock » doit repartir des quantités réelles de la base.
     const [commands, deliveries, adjustments] = await Promise.all([
       db.commands.list(), db.commandDeliveries.list(), db.commandAdjustments.list(),
-      reloadStock(), reloadSales(),
+      reloadStock(), reloadSales(), reloadAccounts(),
     ]);
     set({ commands, deliveries, adjustments });
     return deliveries.find((d) => d.id === row.id) as CommandDelivery;
@@ -482,7 +504,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     // les quantités déduites ont été recalculées côté serveur
     const [commands, deliveries, adjustments] = await Promise.all([
       db.commands.list(), db.commandDeliveries.list(), db.commandAdjustments.list(),
-      reloadStock(), reloadSales(),
+      reloadStock(), reloadSales(), reloadAccounts(),
     ]);
     set({ commands, deliveries, adjustments });
   },
@@ -492,7 +514,7 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
     // supprimer une livraison remet les matières en stock
     const [commands, deliveries, adjustments] = await Promise.all([
       db.commands.list(), db.commandDeliveries.list(), db.commandAdjustments.list(),
-      reloadStock(), reloadSales(),
+      reloadStock(), reloadSales(), reloadAccounts(),
     ]);
     set({ commands, deliveries, adjustments });
   },
