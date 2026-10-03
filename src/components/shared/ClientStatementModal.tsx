@@ -200,6 +200,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     return sliceLedger(data.ledger, period.from, period.to, {
       debitKinds: kinds,
       includeCommandMoney: kinds.includes('delivery'),
+      excludeIds: c.excludedDocs,
     });
   };
 
@@ -687,6 +688,16 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
               defaultDocTitle={defaultStatementTitle('client', printMode ?? 'statement')}
               defaultPeriodPrefix={defaultStatementPeriodPrefix(printMode ?? 'statement')}
               periodSuffix={period ? periodSuffix(period.from, period.to) : undefined}
+              documentItems={[
+                ...data.deliveriesList.map((d) => ({
+                  id: d.id, part: 'deliveries' as const, date: d.date, reference: d.reference,
+                  label: d.lines.map((l) => l.designation).join(', '), location: d.location, amount: d.amount,
+                })),
+                ...(printMode === 'deliveries' ? [] : data.salesList.map((d) => ({
+                  id: d.id, part: 'sales' as const, date: d.date, reference: d.reference,
+                  label: d.lines.map((l) => l.designation).join(', '), location: d.location, amount: d.amount,
+                }))),
+              ]}
               versementItems={data.all.credits
                 .filter((c) => c.kind === 'payment')
                 .sort((a, b) => a.date.localeCompare(b.date))

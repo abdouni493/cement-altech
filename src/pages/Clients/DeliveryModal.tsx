@@ -11,6 +11,8 @@ import { formatCurrency, DEFAULT_TVA_RATE } from '@/lib/utils';
 import { stockRequirementsForDelivery } from '@/lib/ficheStock';
 import { useFicheTechnicStore } from '@/store/ficheTechnicStore';
 import { useStockStore } from '@/store/stockStore';
+import { useCommandStore } from '@/store/commandStore';
+import { lineTotal } from '@/lib/commandBilling';
 import { toast } from '@/components/ui/Toast';
 import type { Command, DeliveryDriver, DeliveryPayment } from '@/store/commandStore';
 import type { CommandDelivery, CommandDeliveryItem } from '@/types';
@@ -64,7 +66,10 @@ export function DeliveryModal({
 }: DeliveryModalProps) {
   const ficheTechnics = useFicheTechnicStore((s) => s.ficheTechnics);
   const products = useStockStore((s) => s.products);
+  const updateCommand = useCommandStore((s) => s.updateCommand);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
+  /** Prix unitaire de chaque ligne — modifiable ; un prix change met a jour la commande. */
+  const [prices, setPrices] = useState<Record<string, number>>({});
   const [deliveredAt, setDeliveredAt] = useState(nowLocal());
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
@@ -103,6 +108,9 @@ export function DeliveryModal({
       }
     });
     setQuantities(init);
+    const pr: Record<string, number> = {};
+    command.items.forEach((it, idx) => { pr[it.id || String(idx)] = it.unitPrice || 0; });
+    setPrices(pr);
     setDeliveredAt(editing ? toLocal(editing.deliveredAt) : nowLocal());
     setNotes(editing?.notes ?? '');
 
@@ -166,9 +174,10 @@ export function DeliveryModal({
       const expected = Math.max(0, it.quantity - (it.cancelledQuantity ?? 0));
       const maxNow = Math.max(0, expected - base);
       const remaining = Math.max(0, expected - base - now);
-      return { key, item: it, base, now, maxNow, remaining };
+      const price = Number(prices[key] ?? it.unitPrice ?? 0);
+      return { key, item: it, base, now, maxNow, remaining, price };
     });
-  }, [command, quantities, editing]);
+  }, [command, quantities, prices, editing]);
 
   /**
    * Matières premières qui vont réellement quitter « Gestion de stock » quand
@@ -195,8 +204,9 @@ export function DeliveryModal({
   const totalRemaining = rows.reduce((s, r) => s + r.remaining, 0);
   const totalNow = rows.reduce((s, r) => s + r.now, 0);
   /** Valeur marchande de la livraison en cours — reprise sur le bon imprimé. */
-  const amountNow = rows.reduce((s, r) => s + r.now * (r.item.unitPrice || 0), 0);
-  const amountRemaining = rows.reduce((s, r) => s + r.remaining * (r.item.unitPrice || 0), 0);
+  const amountNow = rows.reduce((s, r) => s + r.now * r.price, 0);
+  const amountRemaining = rows.reduce((s, r) => s + r.remaining * r.price, 0);
+  const pricesChanged = rows.some((r) => Math.abs(r.price - (r.item.unitPrice || 0)) > 0.0001);
 
   /* ------------------------------------------------------------------------
    *  LA LIVRAISON EST UNE VENTE : valeur HT → TVA → net à payer → reste dû.
@@ -233,6 +243,24 @@ export function DeliveryModal({
     }
     setSaving(true);
     try {
+      // Prix modifies : ils appartiennent a la commande. On la met a jour
+      // d'abord — la base recalcule alors tous ses bons, factures, la dette
+      // du client, la caisse et les rapports.
+      if (pricesChanged) {
+        await updateCommand(command.id, {
+          clientId: command.clientId,
+          clientName: command.clientName,
+          clientPhone: command.clientPhone,
+          notes: command.notes,
+          receiveDate: command.receiveDate,
+          receiveHour: command.receiveHour,
+          receiveMinute: command.receiveMinute,
+          items: command.items.map((it, idx) => {
+            const price = Math.max(0, Number(prices[it.id || String(idx)] ?? it.unitPrice ?? 0));
+            return { ...it, unitPrice: price, totalPrice: lineTotal(it.quantity, price) };
+          }),
+        });
+      }
       const items: CommandDeliveryItem[] = rows
         .filter((r) => r.now > 0)
         .map((r) => ({
@@ -401,11 +429,19 @@ export function DeliveryModal({
                           <Badge variant="success">Complet</Badge>
                         )}
                       </td>
-                      <td className="px-3 py-2 text-right tabular text-text-muted">
-                        {formatCurrency(r.item.unitPrice || 0)}
+                      <td className="px-3 py-2 text-right">
+                        <input
+                          type="number" step="any" min={0}
+                          value={r.price}
+                          title="Prix unitaire — le modifier met à jour la commande et tous ses bons"
+                          onChange={(e) =>
+                            setPrices((p) => ({ ...p, [r.key]: Math.max(0, Number(e.target.value)) }))
+                          }
+                          className="w-28 h-9 rounded-lg border-2 border-[--border-input] bg-[--surface-input] px-2 text-right text-sm tabular font-semibold text-text-primary focus:outline-none focus:ring-2 focus:ring-gold/30 focus:border-gold"
+                        />
                       </td>
                       <td className="px-3 py-2 text-right tabular font-bold text-gold-dark">
-                        {formatCurrency(r.now * (r.item.unitPrice || 0))}
+                        {formatCurrency(r.now * r.price)}
                       </td>
                     </tr>
                   );
@@ -426,6 +462,14 @@ export function DeliveryModal({
               </tfoot>
             </table>
           </div>
+
+          {pricesChanged && (
+            <p className="flex items-start gap-2 rounded-xl border border-caramel/40 bg-caramel/10 px-3 py-2 text-xs font-semibold text-caramel">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+              Prix modifié : la commande {command.reference} et tous ses bons de livraison, factures, la dette du
+              client et la caisse seront recalculés à l'enregistrement.
+            </p>
+          )}
 
           {/* ---- Matières premières déduites du stock par cette livraison ---- */}
           {!isHistorical && (

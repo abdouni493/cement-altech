@@ -11,6 +11,7 @@ import {
   DocTitlePicker, initialDocTitleChoice, resolvedDocTitle, resolvedPeriodPrefix, type DocTitleChoice,
 } from './DocTitlePicker';
 import { VersementChecklist, type VersementItem } from './VersementChecklist';
+import { DocumentChecklist, type DocumentItem } from './DocumentChecklist';
 
 /* ============================================================================
  *  AVANT D'IMPRIMER UN COMPTE RENDU / UN BON DE LIVRAISON DE PERIODE
@@ -50,6 +51,8 @@ export interface StatementPrintChoice {
   endText?: string;
   /** Versements decoches : masques de la liste imprimee, toujours comptes. */
   hiddenVersements?: string[];
+  /** Documents (bons, factures) decoches : absents du tableau et des totaux. */
+  excludedDocs?: string[];
 }
 
 export interface StatementPrintPart {
@@ -96,8 +99,10 @@ function writeProductsPref(kind: string, on: boolean) {
 export function StatementPrintDialog({
   open, onClose, onPrint, parts, kind, preview, note,
   title = 'Impression du compte rendu', printLabel = 'Imprimer',
-  defaultDocTitle, defaultPeriodPrefix, periodSuffix, versementItems = [],
+  defaultDocTitle, defaultPeriodPrefix, periodSuffix, versementItems = [], documentItems = [],
 }: {
+  /** Documents de la periode, a cocher un par un ou par adresse. */
+  documentItems?: DocumentItem[];
   /** Versements de la periode, listes en fin de document (a cocher). */
   versementItems?: VersementItem[];
   open: boolean;
@@ -118,6 +123,7 @@ export function StatementPrintDialog({
 }) {
   const [choice, setChoice] = useState<StatementPrintChoice>(EMPTY_CHOICE);
   const [hiddenVersements, setHiddenVersements] = useState<string[]>([]);
+  const [excludedDocs, setExcludedDocs] = useState<string[]>([]);
   const [titleChoice, setTitleChoice] = useState<DocTitleChoice>(() =>
     initialDocTitleChoice(defaultDocTitle, defaultPeriodPrefix));
 
@@ -134,6 +140,7 @@ export function StatementPrintDialog({
     setChoice(next);
     setTitleChoice(initialDocTitleChoice(defaultDocTitle, defaultPeriodPrefix));
     setHiddenVersements([]);
+    setExcludedDocs([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -146,8 +153,12 @@ export function StatementPrintDialog({
     });
   };
 
-  const totals = useMemo(() => (preview ? preview(choice) : null), [preview, choice]);
-  const nothingInTable = !parts.some((p) => p.group === 'table' && choice[p.key]);
+  // seuls les documents des types coches sont proposes a la selection
+  const docs = documentItems.filter((d) => choice[d.part]);
+  const effective = useMemo(() => ({ ...choice, excludedDocs }), [choice, excludedDocs]);
+  const totals = useMemo(() => (preview ? preview(effective) : null), [preview, effective]);
+  const nothingInTable = !parts.some((p) => p.group === 'table' && choice[p.key])
+    || (docs.length > 0 && docs.every((d) => excludedDocs.includes(d.id)));
 
   const groups: { key: StatementPrintPart['group']; label: string; icon: JSX.Element }[] = [
     { key: 'table', label: 'Tableau des operations', icon: <Table2 size={15} /> },
@@ -205,6 +216,8 @@ export function StatementPrintDialog({
             );
           })}
         </section>
+
+        <DocumentChecklist items={docs} excluded={excludedDocs} onChange={setExcludedDocs} />
 
         {choice.versements && (
           <VersementChecklist items={versementItems} hidden={hiddenVersements} onChange={setHiddenVersements} />
@@ -292,6 +305,7 @@ export function StatementPrintDialog({
             periodPrefix: resolvedPeriodPrefix(titleChoice, defaultPeriodPrefix),
             endText: titleChoice.endText.trim(),
             hiddenVersements,
+            excludedDocs,
           })}>
             <Printer size={16} /> {printLabel}
           </Button>

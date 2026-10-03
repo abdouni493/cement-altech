@@ -350,6 +350,12 @@ export interface LedgerFilter {
    * l'argent des commandes seulement si les bons de livraison le sont.
    */
   includeCommandMoney?: boolean;
+  /**
+   * Documents de la periode ecartes a l'impression (bons, factures decoches
+   * ou d'une autre adresse) : ils sortent du tableau, et l'argent encaisse
+   * sur eux sort des versements.
+   */
+  excludeIds?: string[];
 }
 
 export interface LedgerSlice {
@@ -389,8 +395,9 @@ export function sliceLedger(ledger: PartyLedger, from: string, to: string, filte
 
   const priorDebits = debits.filter((d) => before(d.date));
   const priorCredits = credits.filter((c) => before(c.date));
-  const pDebits = debits.filter((d) => inside(d.date));
-  const pCredits = credits.filter((c) => inside(c.date));
+  const excluded = new Set(filter.excludeIds ?? []);
+  const pDebits = debits.filter((d) => inside(d.date) && !excluded.has(d.id));
+  const pCredits = credits.filter((c) => inside(c.date) && !(c.debitId && excluded.has(c.debitId)));
 
   const sum = (a: number[]) => r2(a.reduce((x, y) => x + y, 0));
   const priorDebitsTotal = sum(priorDebits.map((d) => d.amount));
