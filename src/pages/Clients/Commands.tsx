@@ -171,6 +171,7 @@ export default function CommandsPage() {
         c.clientName.toLowerCase().includes(q) ||
         c.reference.toLowerCase().includes(q) ||
         (c.bonNumber || '').toLowerCase().includes(q) ||
+        (c.clientAddress || '').toLowerCase().includes(q) ||
         (c.clientPhone ? c.clientPhone.includes(search) : false);
 
       const d = deliveryStatus(c);
@@ -884,7 +885,7 @@ export default function CommandsPage() {
         <div className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
             <div className="md:col-span-2">
-              <SearchBar value={search} onChange={setSearch} placeholder="Rechercher par client, téléphone, référence ou n° bon de commande…" />
+              <SearchBar value={search} onChange={setSearch} placeholder="Rechercher par client, téléphone, adresse, référence ou n° bon…" />
             </div>
             <select
               value={statusFilter}
