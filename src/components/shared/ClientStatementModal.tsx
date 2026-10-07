@@ -33,6 +33,9 @@ import {
   defaultStatementTitle, defaultStatementPeriodPrefix, periodSuffix,
 } from '@/lib/statementPrint';
 import type { DocTable } from '@/lib/officialDoc';
+import { buildClientHistory } from '@/lib/partyHistory';
+import { clientHistoryPrintParts } from '@/lib/historyPrintTables';
+import { useClientDebtStore } from '@/store/clientDebtStore';
 import { panelVariants, EASE } from '@/lib/animations';
 import { cn } from '@/lib/utils';
 import type { Client } from '@/types';
@@ -78,6 +81,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
   const deliveries = useCommandStore((s) => s.deliveries);
   const adjustments = useCommandStore((s) => s.adjustments);
   const settings = useSettingsStore((s) => s.settings);
+  const debts = useClientDebtStore((s) => s.debts);
 
   const [from, setFrom] = useState(firstDayOfMonth());
   const [to, setTo] = useState(todayISO());
@@ -171,7 +175,31 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     const account = clientAccountOf(client.id, { clients: clientRows, sales, commands, deliveries, oldDebts });
     const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 
+    // les onglets de l'historique du client, a joindre au compte rendu imprime
+    const history = buildClientHistory({
+      clientId: client.id, sales, commands, deliveries, payments, oldDebts, refunds, debts, adjustments,
+    });
+    const creditUses = [
+      ...sales
+        .filter((s) => s.clientId === client.id && (s.allocatedAmount ?? 0) > 0.004)
+        .map((s) => {
+          const d = s.deliveryId ? deliveries.find((x) => x.id === s.deliveryId) : undefined;
+          return {
+            date: s.date, label: d ? `Bon de livraison ${d.reference}` : `Vente ${s.reference}`,
+            documentTotal: s.finalAmount, amount: s.allocatedAmount ?? 0,
+          };
+        }),
+      ...myCommands
+        .filter((c) => (c.creditApplied ?? 0) > 0.004)
+        .map((c) => ({
+          date: c.createdAt.slice(0, 10), label: `Acompte de la commande ${c.reference}`,
+          documentTotal: commandTtc(c), amount: c.creditApplied ?? 0,
+        })),
+    ];
+    const historyParts = clientHistoryPrintParts(history, creditUses, f, t);
+
     return {
+      historyParts,
       ledger, all, deliveriesList, salesList, oldDebtsList, commandsList, adjustmentsList,
       pendingLines, products, account,
       rows: ledgerRows(all, all.priorBalance),
@@ -179,7 +207,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
       salesTotal: sum(salesList.map((d) => d.amount)),
       oldDebtsTotal: sum(oldDebtsList.map((d) => d.amount)),
     };
-  }, [client, period, sales, commands, deliveries, payments, oldDebts, refunds, clientRows, adjustments]);
+  }, [client, period, sales, commands, deliveries, payments, oldDebts, refunds, clientRows, adjustments, debts]);
 
   const periodLabel = period
     ? `Du ${formatDate(period.from, language)} au ${formatDate(period.to, language)}`
@@ -250,6 +278,9 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         })),
       });
     }
+    data.historyParts
+      .filter((h) => (c.historyKeys ?? []).includes(h.key))
+      .forEach((h) => tables.push(h.table));
     return tables;
   };
 
@@ -688,6 +719,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
               defaultDocTitle={defaultStatementTitle('client', printMode ?? 'statement')}
               defaultPeriodPrefix={defaultStatementPeriodPrefix(printMode ?? 'statement')}
               periodSuffix={period ? periodSuffix(period.from, period.to) : undefined}
+              historyParts={data.historyParts}
               documentItems={[
                 ...data.deliveriesList.map((d) => ({
                   id: d.id, part: 'deliveries' as const, date: d.date, reference: d.reference,

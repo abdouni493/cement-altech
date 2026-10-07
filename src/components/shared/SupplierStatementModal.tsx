@@ -27,6 +27,8 @@ import {
   printPartyStatement, statementTotals, dayBefore,
   defaultStatementTitle, defaultStatementPeriodPrefix, periodSuffix,
 } from '@/lib/statementPrint';
+import { buildSupplierHistory } from '@/lib/partyHistory';
+import { supplierHistoryPrintParts } from '@/lib/historyPrintTables';
 import { panelVariants, EASE } from '@/lib/animations';
 import { cn } from '@/lib/utils';
 import type { Supplier } from '@/types';
@@ -105,7 +107,12 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
     const products = [...grouped.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
     const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
 
+    const historyParts = supplierHistoryPrintParts(
+      buildSupplierHistory({ supplierId: supplier.id, purchases, payments, oldDebts, refunds }), f, t,
+    );
+
     return {
+      historyParts,
       ledger, all, purchasesList, oldDebtsList, products,
       rows: ledgerRows(all, all.priorBalance),
       account: supplierAccountOf(supplier.id, { suppliers: supplierRows, purchases, oldDebts }),
@@ -145,6 +152,9 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         periodPrefix: c.periodPrefix,
         endText: c.endText,
         hiddenVersements: c.hiddenVersements,
+        extraTables: data
+          ? data.historyParts.filter((h) => (c.historyKeys ?? []).includes(h.key)).map((h) => h.table)
+          : [],
       },
       settings
     );
@@ -433,6 +443,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
               onPrint={onPrintChoice}
               kind="supplier"
               parts={printParts}
+              historyParts={data.historyParts}
               preview={preview}
               title={`Imprimer le compte rendu — ${supplier.name}`}
               printLabel="Imprimer le compte rendu"

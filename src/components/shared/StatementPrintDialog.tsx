@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Printer, Percent, ListChecks, CheckSquare, Square, Lock, Info, Table2, Coins, LayoutList,
+  Printer, Percent, ListChecks, CheckSquare, Square, Lock, Info, Table2, Coins, LayoutList, History,
 } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
@@ -53,6 +53,16 @@ export interface StatementPrintChoice {
   hiddenVersements?: string[];
   /** Documents (bons, factures) decoches : absents du tableau et des totaux. */
   excludedDocs?: string[];
+  /** Parties de l'historique cochees (tableaux d'information en fin de document). */
+  historyKeys?: string[];
+}
+
+/** Un onglet de l'historique du tiers, imprimable avec le compte rendu. */
+export interface StatementHistoryPart {
+  key: string;
+  label: string;
+  count: number;
+  total?: string;
 }
 
 export interface StatementPrintPart {
@@ -99,8 +109,10 @@ function writeProductsPref(kind: string, on: boolean) {
 export function StatementPrintDialog({
   open, onClose, onPrint, parts, kind, preview, note,
   title = 'Impression du compte rendu', printLabel = 'Imprimer',
-  defaultDocTitle, defaultPeriodPrefix, periodSuffix, versementItems = [], documentItems = [],
+  defaultDocTitle, defaultPeriodPrefix, periodSuffix, versementItems = [], documentItems = [], historyParts = [],
 }: {
+  /** Onglets de l'historique du tiers, a cocher pour les joindre au document. */
+  historyParts?: StatementHistoryPart[];
   /** Documents de la periode, a cocher un par un ou par adresse. */
   documentItems?: DocumentItem[];
   /** Versements de la periode, listes en fin de document (a cocher). */
@@ -124,6 +136,7 @@ export function StatementPrintDialog({
   const [choice, setChoice] = useState<StatementPrintChoice>(EMPTY_CHOICE);
   const [hiddenVersements, setHiddenVersements] = useState<string[]>([]);
   const [excludedDocs, setExcludedDocs] = useState<string[]>([]);
+  const [historyKeys, setHistoryKeys] = useState<string[]>([]);
   const [titleChoice, setTitleChoice] = useState<DocTitleChoice>(() =>
     initialDocTitleChoice(defaultDocTitle, defaultPeriodPrefix));
 
@@ -141,6 +154,7 @@ export function StatementPrintDialog({
     setTitleChoice(initialDocTitleChoice(defaultDocTitle, defaultPeriodPrefix));
     setHiddenVersements([]);
     setExcludedDocs([]);
+    setHistoryKeys([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -216,6 +230,54 @@ export function StatementPrintDialog({
             );
           })}
         </section>
+
+        {historyParts.length > 0 && (
+          <section className="space-y-1.5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-text-muted">
+                <History size={15} /> Historique {kind === 'client' ? 'du client' : 'du fournisseur'} (période)
+              </p>
+              <span className="flex gap-2 text-[11px] font-semibold">
+                <button type="button" className="text-gold-dark hover:underline"
+                  onClick={() => setHistoryKeys(historyParts.filter((h) => h.count > 0).map((h) => h.key))}>
+                  Tout cocher
+                </button>
+                <button type="button" className="text-text-muted hover:underline" onClick={() => setHistoryKeys([])}>
+                  Aucun
+                </button>
+              </span>
+            </div>
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {historyParts.map((h) => {
+                const on = historyKeys.includes(h.key);
+                return (
+                  <button
+                    key={h.key}
+                    type="button"
+                    onClick={() => setHistoryKeys((k) => (on ? k.filter((x) => x !== h.key) : [...k, h.key]))}
+                    className={cn(
+                      'flex items-start justify-between gap-2 rounded-xl border px-3 py-2 text-left transition-colors',
+                      on ? 'border-gold/50 bg-gold/10' : 'border-gold/15 bg-vanilla/30 hover:bg-gold/5'
+                    )}
+                  >
+                    <span className="flex min-w-0 items-start gap-2">
+                      {on ? <CheckSquare size={16} className="mt-0.5 shrink-0 text-gold-dark" />
+                        : <Square size={16} className="mt-0.5 shrink-0 text-text-muted" />}
+                      <span className="text-[13px] font-semibold text-text-primary">
+                        {h.label}
+                        <span className="ml-1 text-[11px] font-normal text-text-muted">({h.count})</span>
+                      </span>
+                    </span>
+                    {h.total && <span className="shrink-0 text-[11px] font-bold tabular text-gold-dark">{h.total}</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-text-muted">
+              Chaque partie cochée est imprimée en tableau à la fin du compte rendu (information : le total et le reste ne changent pas).
+            </p>
+          </section>
+        )}
 
         <DocumentChecklist items={docs} excluded={excludedDocs} onChange={setExcludedDocs} />
 
@@ -306,6 +368,7 @@ export function StatementPrintDialog({
             endText: titleChoice.endText.trim(),
             hiddenVersements,
             excludedDocs,
+            historyKeys,
           })}>
             <Printer size={16} /> {printLabel}
           </Button>
