@@ -34,7 +34,7 @@ import {
 } from '@/lib/statementPrint';
 import type { DocTable } from '@/lib/officialDoc';
 import { buildClientHistory } from '@/lib/partyHistory';
-import { clientHistoryPrintParts } from '@/lib/historyPrintTables';
+import { clientHistoryPrintParts, selectedHistoryTables } from '@/lib/historyPrintTables';
 import { useClientDebtStore } from '@/store/clientDebtStore';
 import { panelVariants, EASE } from '@/lib/animations';
 import { cn } from '@/lib/utils';
@@ -278,9 +278,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         })),
       });
     }
-    data.historyParts
-      .filter((h) => (c.historyKeys ?? []).includes(h.key))
-      .forEach((h) => tables.push(h.table));
+    tables.push(...selectedHistoryTables(data.historyParts, c.historyKeys));
     return tables;
   };
 

@@ -21,6 +21,38 @@ export interface HistoryPrintPart {
   count: number;
   total?: string;
   table: DocTable;
+  /** Variantes « payes » / « non payes » (livraisons, commandes). */
+  paidVariants?: { paid: HistoryPrintPart; unpaid: HistoryPrintPart };
+}
+
+/** Les tableaux a joindre selon les cles cochees (« h:deliveries », « h:deliveries:paid », « ...:unpaid »). */
+export function selectedHistoryTables(parts: HistoryPrintPart[], keys: string[] = []): DocTable[] {
+  const out: DocTable[] = [];
+  parts.forEach((h) => {
+    if (keys.includes(h.key)) out.push(h.table);
+    else if (h.paidVariants && keys.includes(`${h.key}:paid`)) out.push(h.paidVariants.paid.table);
+    else if (h.paidVariants && keys.includes(`${h.key}:unpaid`)) out.push(h.paidVariants.unpaid.table);
+  });
+  return out;
+}
+
+const deliveryIsPaid = (h: HistoryDelivery) => {
+  const d = h.delivery;
+  const rest = d.restAmount ?? ((d.totalTtc ?? h.amountHt) - (d.paidAmount ?? 0));
+  return rest <= 0.004;
+};
+const commandIsPaid = (c: Command) => commandTtc(c) - (c.paidAmount ?? 0) <= 0.004;
+
+function withPaidVariants<T>(
+  list: T[], isPaid: (x: T) => boolean, build: (l: T[], suffix: string) => HistoryPrintPart,
+): HistoryPrintPart {
+  return {
+    ...build(list, ''),
+    paidVariants: {
+      paid: build(list.filter(isPaid), ' (payes)'),
+      unpaid: build(list.filter((x) => !isPaid(x)), ' (non payes)'),
+    },
+  };
 }
 
 export interface CreditUsePrintRow {
@@ -171,13 +203,17 @@ export function clientHistoryPrintParts(
   const adjustments = h.adjustments.filter((a) => inP(a.date));
   return [
     part('h:sales', 'Ventes', saleCols, saleRows(sales), 'Total des ventes', sum(sales.map((s) => s.finalAmount))),
-    part('h:commands', 'Commandes', commandCols, commandRows(commands), 'Total des commandes', sum(commands.map(commandTtc))),
-    part('h:deliveries', 'Livraisons', deliveryCols, deliveryRows(deliveries), 'Total livre H.T', sum(deliveries.map((x) => x.amountHt))),
+    withPaidVariants(commands, commandIsPaid, (l, sfx) =>
+      part('h:commands', `Commandes${sfx}`, commandCols, commandRows(l), 'Total des commandes', sum(l.map(commandTtc)))),
+    withPaidVariants(deliveries, deliveryIsPaid, (l, sfx) =>
+      part('h:deliveries', `Livraisons${sfx}`, deliveryCols, deliveryRows(l), 'Total livre H.T', sum(l.map((x) => x.amountHt)))),
     part('h:payments', 'Versements', paymentCols, paymentRows(payments), 'Total verse', sum(payments.map((p) => p.amount))),
     part('h:credit', 'Acompte & imputations', creditCols, creditRows(credit), 'Total impute', sum(credit.map((r) => r.amount))),
     part('h:oldSales', 'Anciennes ventes', saleCols, saleRows(oldSales), 'Total', sum(oldSales.map((s) => s.finalAmount))),
-    part('h:oldCommands', 'Anciennes commandes', commandCols, commandRows(oldCommands), 'Total', sum(oldCommands.map(commandTtc))),
-    part('h:oldDeliveries', 'Anciennes livraisons', deliveryCols, deliveryRows(oldDeliveries), 'Total H.T', sum(oldDeliveries.map((x) => x.amountHt))),
+    withPaidVariants(oldCommands, commandIsPaid, (l, sfx) =>
+      part('h:oldCommands', `Anciennes commandes${sfx}`, commandCols, commandRows(l), 'Total', sum(l.map(commandTtc)))),
+    withPaidVariants(oldDeliveries, deliveryIsPaid, (l, sfx) =>
+      part('h:oldDeliveries', `Anciennes livraisons${sfx}`, deliveryCols, deliveryRows(l), 'Total H.T', sum(l.map((x) => x.amountHt)))),
     part('h:oldDebts', 'Anciennes dettes', oldDebtCols, oldDebtRows(oldDebts), 'Total reste du', sum(oldDebts.map((d) => d.restAmount))),
     part('h:refunds', 'Excedents rendus', refundCols, refundRows(refunds, 'Excedent rendu'), 'Total rendu', sum(refunds.map((r) => r.amount))),
     part('h:adjustments', 'Annulations / augmentations', adjustmentCols, adjustmentRows(adjustments)),

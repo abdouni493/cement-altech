@@ -28,7 +28,7 @@ import {
   defaultStatementTitle, defaultStatementPeriodPrefix, periodSuffix,
 } from '@/lib/statementPrint';
 import { buildSupplierHistory } from '@/lib/partyHistory';
-import { supplierHistoryPrintParts } from '@/lib/historyPrintTables';
+import { supplierHistoryPrintParts, selectedHistoryTables } from '@/lib/historyPrintTables';
 import { panelVariants, EASE } from '@/lib/animations';
 import { cn } from '@/lib/utils';
 import type { Supplier } from '@/types';
@@ -153,7 +153,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         endText: c.endText,
         hiddenVersements: c.hiddenVersements,
         extraTables: data
-          ? data.historyParts.filter((h) => (c.historyKeys ?? []).includes(h.key)).map((h) => h.table)
+          ? selectedHistoryTables(data.historyParts, c.historyKeys)
           : [],
       },
       settings

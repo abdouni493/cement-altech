@@ -63,7 +63,16 @@ export interface StatementHistoryPart {
   label: string;
   count: number;
   total?: string;
+  /** Variantes payes / non payes : un choix Tous / Payes / Non payes s'affiche. */
+  paidVariants?: { paid: { count: number; total?: string }; unpaid: { count: number; total?: string } };
 }
+
+type PaidFilter = 'all' | 'paid' | 'unpaid';
+const PAID_FILTERS: { key: PaidFilter; label: string }[] = [
+  { key: 'all', label: 'Tous' },
+  { key: 'paid', label: 'Payés' },
+  { key: 'unpaid', label: 'Non payés' },
+];
 
 export interface StatementPrintPart {
   key: StatementPartKey;
@@ -137,6 +146,7 @@ export function StatementPrintDialog({
   const [hiddenVersements, setHiddenVersements] = useState<string[]>([]);
   const [excludedDocs, setExcludedDocs] = useState<string[]>([]);
   const [historyKeys, setHistoryKeys] = useState<string[]>([]);
+  const [paidFilters, setPaidFilters] = useState<Record<string, PaidFilter>>({});
   const [titleChoice, setTitleChoice] = useState<DocTitleChoice>(() =>
     initialDocTitleChoice(defaultDocTitle, defaultPeriodPrefix));
 
@@ -155,6 +165,7 @@ export function StatementPrintDialog({
     setHiddenVersements([]);
     setExcludedDocs([]);
     setHistoryKeys([]);
+    setPaidFilters({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -250,26 +261,54 @@ export function StatementPrintDialog({
             <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
               {historyParts.map((h) => {
                 const on = historyKeys.includes(h.key);
+                const filter = paidFilters[h.key] ?? 'all';
+                const shown = filter === 'all' || !h.paidVariants ? h : h.paidVariants[filter];
                 return (
-                  <button
+                  <div
                     key={h.key}
-                    type="button"
-                    onClick={() => setHistoryKeys((k) => (on ? k.filter((x) => x !== h.key) : [...k, h.key]))}
                     className={cn(
-                      'flex items-start justify-between gap-2 rounded-xl border px-3 py-2 text-left transition-colors',
+                      'rounded-xl border transition-colors',
                       on ? 'border-gold/50 bg-gold/10' : 'border-gold/15 bg-vanilla/30 hover:bg-gold/5'
                     )}
                   >
-                    <span className="flex min-w-0 items-start gap-2">
-                      {on ? <CheckSquare size={16} className="mt-0.5 shrink-0 text-gold-dark" />
-                        : <Square size={16} className="mt-0.5 shrink-0 text-text-muted" />}
-                      <span className="text-[13px] font-semibold text-text-primary">
-                        {h.label}
-                        <span className="ml-1 text-[11px] font-normal text-text-muted">({h.count})</span>
+                    <button
+                      type="button"
+                      onClick={() => setHistoryKeys((k) => (on ? k.filter((x) => x !== h.key) : [...k, h.key]))}
+                      className="flex w-full items-start justify-between gap-2 px-3 py-2 text-left"
+                    >
+                      <span className="flex min-w-0 items-start gap-2">
+                        {on ? <CheckSquare size={16} className="mt-0.5 shrink-0 text-gold-dark" />
+                          : <Square size={16} className="mt-0.5 shrink-0 text-text-muted" />}
+                        <span className="text-[13px] font-semibold text-text-primary">
+                          {h.label}
+                          <span className="ml-1 text-[11px] font-normal text-text-muted">({shown.count})</span>
+                        </span>
                       </span>
-                    </span>
-                    {h.total && <span className="shrink-0 text-[11px] font-bold tabular text-gold-dark">{h.total}</span>}
-                  </button>
+                      {shown.total && <span className="shrink-0 text-[11px] font-bold tabular text-gold-dark">{shown.total}</span>}
+                    </button>
+                    {on && h.paidVariants && (
+                      <div className="flex gap-1 px-3 pb-2">
+                        {PAID_FILTERS.map((f) => (
+                          <button
+                            key={f.key}
+                            type="button"
+                            onClick={() => setPaidFilters((m) => ({ ...m, [h.key]: f.key }))}
+                            className={cn(
+                              'flex-1 rounded-lg border px-2 py-1 text-[11px] font-semibold transition-colors',
+                              filter === f.key
+                                ? 'border-gold bg-gold text-white'
+                                : 'border-gold/25 bg-vanilla/50 text-text-secondary hover:bg-gold/10'
+                            )}
+                          >
+                            {f.label}
+                            {f.key !== 'all' && h.paidVariants && (
+                              <span className="ml-1 opacity-75">({h.paidVariants[f.key].count})</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -368,7 +407,7 @@ export function StatementPrintDialog({
             endText: titleChoice.endText.trim(),
             hiddenVersements,
             excludedDocs,
-            historyKeys,
+            historyKeys: historyKeys.map((k) => (paidFilters[k] && paidFilters[k] !== 'all' ? `${k}:${paidFilters[k]}` : k)),
           })}>
             <Printer size={16} /> {printLabel}
           </Button>
