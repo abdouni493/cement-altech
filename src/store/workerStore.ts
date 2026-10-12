@@ -16,6 +16,11 @@ export function overtimeHours(
   return Math.max(0, (end - start) / 60);
 }
 
+/** False when the overtime was entered as a plain number of hours (no start / end time). */
+export function hasTimes(o: Pick<WorkerOvertime, 'workEndHour' | 'workEndMinute' | 'overtimeEndHour' | 'overtimeEndMinute'>) {
+  return !(o.workEndHour === 0 && o.workEndMinute === 0 && o.overtimeEndHour === 0 && o.overtimeEndMinute === 0);
+}
+
 interface WorkerState {
   workers: Worker[];
   roles: Role[];
@@ -27,16 +32,26 @@ interface WorkerState {
   deleteRole: (id: string) => Promise<void>;
   setPermissions: (workerId: string, perms: WorkerPermissions) => Promise<void>;
   addAcompte: (workerId: string, adv: Omit<Acompte, 'id'>) => Promise<void>;
+  updateAcompte: (id: string, data: Partial<Omit<Acompte, 'id'>>) => Promise<void>;
   deleteAcompte: (workerId: string, id: string) => Promise<void>;
   addAbsence: (workerId: string, abs: Omit<Absence, 'id'>) => Promise<void>;
+  updateAbsence: (id: string, data: Partial<Omit<Absence, 'id'>>) => Promise<void>;
   deleteAbsence: (workerId: string, id: string) => Promise<void>;
   addPayment: (workerId: string, p: Omit<WorkerPaymentRecord, 'id'>) => Promise<void>;
+  updatePayment: (id: string, data: Partial<Omit<WorkerPaymentRecord, 'id' | 'kind'>>) => Promise<void>;
   deletePayment: (workerId: string, id: string) => Promise<void>;
   // ---- heures supplémentaires ----
   addOvertime: (data: Omit<WorkerOvertime, 'id' | 'isPaid'>) => Promise<void>;
   updateOvertime: (id: string, data: Partial<WorkerOvertime>) => Promise<void>;
   deleteOvertime: (workerId: string, id: string) => Promise<void>;
   payOvertimes: (workerId: string, ids: string[], date?: string, description?: string) => Promise<void>;
+}
+
+/** Plain row update on one of the worker HR tables. */
+async function updateRow(table: string, id: string, patch: Record<string, unknown>) {
+  const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+  const { error } = await supabase.from(table).update(clean).eq('id', id);
+  if (error) throw new Error(`[${table}] ${error.message}`);
 }
 
 const overtimePayload = (d: Partial<WorkerOvertime>) => ({
@@ -123,6 +138,13 @@ export const useWorkerStore = create<WorkerState>()((set, get) => {
       await reload();
     },
 
+    updateAcompte: async (id, d) => {
+      await save('workers.acompte.update', () =>
+        updateRow('worker_acomptes', id, { date: d.date, amount: d.amount, description: d.description })
+      );
+      await reload();
+    },
+
     deleteAcompte: async (workerId, id) => {
       await save('workers.acompte.delete', () => removeRow('worker_acomptes', id));
       await reload();
@@ -138,6 +160,13 @@ export const useWorkerStore = create<WorkerState>()((set, get) => {
       await reload();
     },
 
+    updateAbsence: async (id, d) => {
+      await save('workers.absence.update', () =>
+        updateRow('worker_absences', id, { date: d.date, cost: d.cost, description: d.description })
+      );
+      await reload();
+    },
+
     deleteAbsence: async (_workerId, id) => {
       await save('workers.absence.delete', () => removeRow('worker_absences', id));
       await reload();
@@ -146,6 +175,15 @@ export const useWorkerStore = create<WorkerState>()((set, get) => {
     addPayment: async (workerId, p) => {
       await save('workers.payment', () =>
         rpc.payWorkerSalary(workerId, p.amount, p.period, p.date, p.description)
+      );
+      await reload();
+    },
+
+    updatePayment: async (id, d) => {
+      await save('workers.payment.update', () =>
+        updateRow('worker_payments', id, {
+          date: d.date, amount: d.amount, period: d.period, description: d.description,
+        })
       );
       await reload();
     },

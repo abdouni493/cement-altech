@@ -7,6 +7,7 @@ import { useLanguage } from '@/hooks/useLanguage';
 import { formatCurrency, formatDate, todayISO } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 import type { Worker } from '@/types';
+import { EntryActions } from './WorkerEntryEditor';
 
 export function WorkerAbsence({ worker }: { worker: Worker }) {
   const { t, language } = useLanguage();
@@ -40,9 +41,9 @@ export function WorkerAbsence({ worker }: { worker: Worker }) {
         <h4 className="text-sm font-semibold text-text-secondary mb-2">{t('history')}</h4>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-vanilla/60"><tr><th className="text-left px-3 py-2">{t('date')}</th><th className="text-left px-3 py-2">{t('description')}</th><th className="text-right px-3 py-2">{t('cost')}</th></tr></thead>
+            <thead className="bg-vanilla/60"><tr><th className="text-left px-3 py-2">{t('date')}</th><th className="text-left px-3 py-2">{t('description')}</th><th className="text-right px-3 py-2">{t('cost')}</th><th className="text-right px-3 py-2">Actions</th></tr></thead>
             <tbody>{current.absences.map((a) => (
-              <tr key={a.id} className="border-t border-gold/10"><td className="px-3 py-2">{formatDate(a.date, language)}</td><td className="px-3 py-2 text-text-muted">{a.description}</td><td className="px-3 py-2 text-right tabular text-rose-deep font-medium">{formatCurrency(a.cost)}</td></tr>
+              <tr key={a.id} className="border-t border-gold/10"><td className="px-3 py-2">{formatDate(a.date, language)}</td><td className="px-3 py-2 text-text-muted">{a.description}</td><td className="px-3 py-2 text-right tabular text-rose-deep font-medium">{formatCurrency(a.cost)}</td><td className="px-3 py-2"><EntryActions entry={{ kind: 'absence', workerId: current.id, row: a }} /></td></tr>
             ))}</tbody>
           </table>
           {current.absences.length === 0 && <p className="text-center text-text-muted py-4">{t('noData')}</p>}

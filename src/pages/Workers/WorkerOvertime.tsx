@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { useWorkerStore, overtimeHours } from '@/store/workerStore';
+import { useWorkerStore, overtimeHours, hasTimes } from '@/store/workerStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { formatCurrency, formatDate, todayISO } from '@/lib/utils';
 import { printOvertimeReceipt } from '@/lib/documents';
@@ -23,10 +23,10 @@ function parseTime(v: string): { h: number; m: number } {
 /**
  * Heures supplémentaires d'un employé.
  *
- * L'utilisateur saisit l'heure de fin du travail normal et l'heure de fin des
- * heures supplémentaires : la durée puis le montant à payer sont calculés
- * automatiquement (durée × taux horaire), avec possibilité de corriger le
- * total à la main.
+ * Par défaut l'utilisateur saisit le nombre total d'heures et le prix d'une
+ * heure : le montant est calculé automatiquement (heures × prix). En option,
+ * il peut saisir l'heure de début et de fin pour calculer la durée. Le total
+ * reste modifiable à la main.
  */
 export function WorkerOvertime({ worker }: { worker: Worker }) {
   const workers = useWorkerStore((s) => s.workers);
@@ -40,6 +40,8 @@ export function WorkerOvertime({ worker }: { worker: Worker }) {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [date, setDate] = useState(todayISO());
+  const [useTimes, setUseTimes] = useState(false);
+  const [manualHours, setManualHours] = useState<number>(0);
   const [workEnd, setWorkEnd] = useState('17:00');
   const [overtimeEnd, setOvertimeEnd] = useState('20:00');
   const [rate, setRate] = useState<number>(0);
@@ -51,7 +53,7 @@ export function WorkerOvertime({ worker }: { worker: Worker }) {
 
   const a = parseTime(workEnd);
   const b = parseTime(overtimeEnd);
-  const hours = overtimeHours(a.h, a.m, b.h, b.m);
+  const hours = useTimes ? overtimeHours(a.h, a.m, b.h, b.m) : Math.max(0, Number(manualHours) || 0);
   const computedAmount = Math.round(hours * (Number(rate) || 0) * 100) / 100;
   const effectiveAmount = amountEdited ? Number(amount) || 0 : computedAmount;
 
@@ -67,13 +69,15 @@ export function WorkerOvertime({ worker }: { worker: Worker }) {
   }, [overtimes]);
 
   const resetForm = () => {
-    setEditingId(null); setDate(todayISO()); setWorkEnd('17:00'); setOvertimeEnd('20:00');
+    setEditingId(null); setDate(todayISO()); setUseTimes(false); setManualHours(0); setWorkEnd('17:00'); setOvertimeEnd('20:00');
     setRate(0); setAmount(0); setAmountEdited(false); setDescription('');
   };
 
   const startEdit = (o: Overtime) => {
     setEditingId(o.id);
     setDate(o.date);
+    setUseTimes(hasTimes(o));
+    setManualHours(o.hours);
     setWorkEnd(`${pad(o.workEndHour)}:${pad(o.workEndMinute)}`);
     setOvertimeEnd(`${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}`);
     setRate(o.hourlyRate);
@@ -83,15 +87,20 @@ export function WorkerOvertime({ worker }: { worker: Worker }) {
   };
 
   const handleSave = async () => {
-    if (hours <= 0) { toast.error("La fin des heures supplémentaires doit être après la fin du travail"); return; }
+    if (hours <= 0) {
+      toast.error(useTimes
+        ? "L'heure de fin doit être après l'heure de début"
+        : "Saisissez le nombre d'heures supplémentaires");
+      return;
+    }
     if (effectiveAmount <= 0) { toast.error('Le montant à payer doit être supérieur à 0'); return; }
     setSaving(true);
     try {
       const payload = {
         workerId: worker.id,
         date,
-        workEndHour: a.h, workEndMinute: a.m,
-        overtimeEndHour: b.h, overtimeEndMinute: b.m,
+        workEndHour: useTimes ? a.h : 0, workEndMinute: useTimes ? a.m : 0,
+        overtimeEndHour: useTimes ? b.h : 0, overtimeEndMinute: useTimes ? b.m : 0,
         hours: Math.round(hours * 100) / 100,
         hourlyRate: Number(rate) || 0,
         amount: effectiveAmount,
@@ -120,8 +129,8 @@ export function WorkerOvertime({ worker }: { worker: Worker }) {
         amount: o.amount,
         lines: [{
           date: o.date,
-          from: `${pad(o.workEndHour)}:${pad(o.workEndMinute)}`,
-          to: `${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}`,
+          from: hasTimes(o) ? `${pad(o.workEndHour)}:${pad(o.workEndMinute)}` : '—',
+          to: hasTimes(o) ? `${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}` : '—',
           hours: o.hours,
           rate: o.hourlyRate,
           amount: o.amount,
@@ -151,21 +160,47 @@ export function WorkerOvertime({ worker }: { worker: Worker }) {
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Input label="Date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-          <Input
-            label="Heure de fin du travail" type="time"
-            value={workEnd} onChange={(e) => setWorkEnd(e.target.value)}
-          />
-          <Input
-            label="Heure de fin des heures sup." type="time"
-            value={overtimeEnd} onChange={(e) => setOvertimeEnd(e.target.value)}
-          />
+          <label className="sm:col-span-2 flex items-center gap-2 self-end pb-2.5 text-xs text-text-secondary cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="accent-gold"
+              checked={useTimes}
+              onChange={(e) => {
+                setUseTimes(e.target.checked);
+                if (!e.target.checked) setManualHours(Math.round(hours * 100) / 100);
+                setAmountEdited(false);
+              }}
+            />
+            Calculer la durée à partir d'une heure de début et de fin (optionnel)
+          </label>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="rounded-xl border border-gold/15 bg-gradient-card px-3.5 py-2.5">
-            <p className="text-[10px] uppercase tracking-wide text-text-muted">Durée calculée</p>
-            <p className="text-lg font-bold tabular text-gold-dark">{hours.toFixed(2)} h</p>
+        {useTimes && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
+              label="Heure de début" type="time"
+              value={workEnd} onChange={(e) => { setWorkEnd(e.target.value); setAmountEdited(false); }}
+            />
+            <Input
+              label="Heure de fin" type="time"
+              value={overtimeEnd} onChange={(e) => { setOvertimeEnd(e.target.value); setAmountEdited(false); }}
+            />
           </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {useTimes ? (
+            <div className="rounded-xl border border-gold/15 bg-gradient-card px-3.5 py-2.5">
+              <p className="text-[10px] uppercase tracking-wide text-text-muted">Durée calculée</p>
+              <p className="text-lg font-bold tabular text-gold-dark">{hours.toFixed(2)} h</p>
+            </div>
+          ) : (
+            <Input
+              label="Nombre total d'heures" type="number" step="any" min={0}
+              value={manualHours}
+              onChange={(e) => { setManualHours(Number(e.target.value)); setAmountEdited(false); }}
+            />
+          )}
           <Input
             label="Prix d'une heure (DA)" type="number" step="any" min={0}
             value={rate}
@@ -238,7 +273,7 @@ export function WorkerOvertime({ worker }: { worker: Worker }) {
                   <tr key={o.id} className="border-t border-gold/10">
                     <td className="px-3 py-2 text-xs">{formatDate(o.date)}</td>
                     <td className="px-3 py-2 text-center text-xs tabular">
-                      {pad(o.workEndHour)}:{pad(o.workEndMinute)} → {pad(o.overtimeEndHour)}:{pad(o.overtimeEndMinute)}
+                      {hasTimes(o) ? `${pad(o.workEndHour)}:${pad(o.workEndMinute)} → ${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}` : '—'}
                     </td>
                     <td className="px-3 py-2 text-center tabular font-semibold">{o.hours.toFixed(2)} h</td>
                     <td className="px-3 py-2 text-right tabular text-text-muted">{formatCurrency(o.hourlyRate)}</td>

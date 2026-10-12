@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { Checkbox } from '@/components/ui/Switch';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
-import { useWorkerStore } from '@/store/workerStore';
+import { useWorkerStore, hasTimes } from '@/store/workerStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { formatCurrency, formatDate, todayISO } from '@/lib/utils';
@@ -87,8 +87,8 @@ export function WorkerPayment({ worker, onClose }: { worker: Worker; onClose: ()
           amount: snapshot.reduce((s, o) => s + o.amount, 0),
           lines: snapshot.map((o) => ({
             date: o.date,
-            from: `${pad(o.workEndHour)}:${pad(o.workEndMinute)}`,
-            to: `${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}`,
+            from: (hasTimes(o) ? `${pad(o.workEndHour)}:${pad(o.workEndMinute)}` : '—'),
+            to: (hasTimes(o) ? `${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}` : '—'),
             hours: o.hours,
             rate: o.hourlyRate,
             amount: o.amount,
@@ -218,7 +218,7 @@ export function WorkerPayment({ worker, onClose }: { worker: Worker; onClose: ()
                         </td>
                         <td className="px-3 py-2 text-xs">{formatDate(o.date, language)}</td>
                         <td className="px-3 py-2 text-center text-xs tabular">
-                          {pad(o.workEndHour)}:{pad(o.workEndMinute)} → {pad(o.overtimeEndHour)}:{pad(o.overtimeEndMinute)}
+                          {hasTimes(o) ? `${pad(o.workEndHour)}:${pad(o.workEndMinute)} → ${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}` : '—'}
                         </td>
                         <td className="px-3 py-2 text-center tabular">{o.hours.toFixed(2)} h</td>
                         <td className="px-3 py-2 text-right tabular text-text-muted">{formatCurrency(o.hourlyRate)}</td>

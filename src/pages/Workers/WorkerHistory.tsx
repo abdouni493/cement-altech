@@ -9,7 +9,9 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { printOvertimeReceipt } from '@/lib/documents';
+import { hasTimes } from '@/store/workerStore';
 import { WorkerReport } from './WorkerReport';
+import { EntryActions } from './WorkerEntryEditor';
 import type { Worker } from '@/types';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -73,8 +75,8 @@ export function WorkerHistory({ worker, roleName, initialTab = 'payments' }: {
         amount: overtimes.reduce((s, o) => s + o.amount, 0),
         lines: overtimes.map((o) => ({
           date: o.date,
-          from: `${pad(o.workEndHour)}:${pad(o.workEndMinute)}`,
-          to: `${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}`,
+          from: hasTimes(o) ? `${pad(o.workEndHour)}:${pad(o.workEndMinute)}` : '—',
+          to: hasTimes(o) ? `${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}` : '—',
           hours: o.hours,
           rate: o.hourlyRate,
           amount: o.amount,
@@ -128,7 +130,7 @@ export function WorkerHistory({ worker, roleName, initialTab = 'payments' }: {
           <EmptyState message="Aucun paiement enregistré" icon={<Banknote size={28} />} />
         ) : (
           <Table
-            head={['Date', 'Type', 'Période / motif', 'Montant']}
+            head={['Date', 'Type', 'Période / motif', 'Montant', 'Actions']}
             rows={payments.map((p) => [
               formatDate(p.date, language),
               <Badge key="t" variant={p.kind === 'overtime' ? 'warning' : 'info'}>
@@ -136,6 +138,7 @@ export function WorkerHistory({ worker, roleName, initialTab = 'payments' }: {
               </Badge>,
               p.period || p.description || '—',
               <span key="a" className="tabular font-bold text-pistachio">{formatCurrency(p.amount)}</span>,
+              <EntryActions key="x" entry={{ kind: 'payment', workerId: worker.id, row: p }} />,
             ])}
           />
         )
@@ -155,7 +158,7 @@ export function WorkerHistory({ worker, roleName, initialTab = 'payments' }: {
               head={['Date', 'Horaire', 'Durée', 'Taux', 'Montant', 'Statut']}
               rows={overtimes.map((o) => [
                 formatDate(o.date, language),
-                `${pad(o.workEndHour)}:${pad(o.workEndMinute)} → ${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}`,
+                hasTimes(o) ? `${pad(o.workEndHour)}:${pad(o.workEndMinute)} → ${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}` : '—',
                 `${o.hours.toFixed(2)} h`,
                 formatCurrency(o.hourlyRate),
                 <span key="a" className="tabular font-bold text-gold-dark">{formatCurrency(o.amount)}</span>,
@@ -171,11 +174,12 @@ export function WorkerHistory({ worker, roleName, initialTab = 'payments' }: {
           <EmptyState message="Aucun acompte" icon={<Wallet size={28} />} />
         ) : (
           <Table
-            head={['Date', 'Description', 'Montant']}
+            head={['Date', 'Description', 'Montant', 'Actions']}
             rows={acomptes.map((a) => [
               formatDate(a.date, language),
               a.description || '—',
               <span key="a" className="tabular font-bold text-caramel">{formatCurrency(a.amount)}</span>,
+              <EntryActions key="x" entry={{ kind: 'acompte', workerId: worker.id, row: a }} />,
             ])}
           />
         )
@@ -188,11 +192,12 @@ export function WorkerHistory({ worker, roleName, initialTab = 'payments' }: {
           <EmptyState message="Aucune absence" icon={<CalendarX size={28} />} />
         ) : (
           <Table
-            head={['Date', 'Motif', 'Coût']}
+            head={['Date', 'Motif', 'Coût', 'Actions']}
             rows={absences.map((a) => [
               formatDate(a.date, language),
               a.description || '—',
               <span key="a" className="tabular font-bold text-rose-deep">{formatCurrency(a.cost)}</span>,
+              <EntryActions key="x" entry={{ kind: 'absence', workerId: worker.id, row: a }} />,
             ])}
           />
         )

@@ -11,6 +11,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { formatCurrency, formatDate, todayISO } from '@/lib/utils';
 import { printDetailedReport, type PrintRow, type PrintTableSection } from '@/lib/reportPrint';
+import { hasTimes } from '@/store/workerStore';
 import type { Worker } from '@/types';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -113,8 +114,8 @@ export function WorkerReport({ worker, roleName }: { worker: Worker; roleName?: 
         ...data.overtimes.map<PrintRow>((o) => ({
           cells: [
             formatDate(o.date, language),
-            `${pad(o.workEndHour)}:${pad(o.workEndMinute)}`,
-            `${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}`,
+            (hasTimes(o) ? `${pad(o.workEndHour)}:${pad(o.workEndMinute)}` : '—'),
+            (hasTimes(o) ? `${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}` : '—'),
             `${o.hours.toFixed(2)} h`,
             formatCurrency(o.hourlyRate),
             formatCurrency(o.amount),
@@ -274,8 +275,8 @@ export function WorkerReport({ worker, roleName }: { worker: Worker; roleName?: 
             empty="Aucune heure supplémentaire sur cette période"
             rows={data.overtimes.map((o) => [
               formatDate(o.date, language),
-              `${pad(o.workEndHour)}:${pad(o.workEndMinute)}`,
-              `${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}`,
+              (hasTimes(o) ? `${pad(o.workEndHour)}:${pad(o.workEndMinute)}` : '—'),
+              (hasTimes(o) ? `${pad(o.overtimeEndHour)}:${pad(o.overtimeEndMinute)}` : '—'),
               `${o.hours.toFixed(2)} h`,
               formatCurrency(o.hourlyRate),
               <span key="a" className="font-bold text-gold-dark">{formatCurrency(o.amount)}</span>,
