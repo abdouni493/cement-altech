@@ -54,17 +54,32 @@ export function WorkerReport({ worker, roleName }: { worker: Worker; roleName?: 
     const acomptesTotal = acomptes.reduce((s, a) => s + a.amount, 0);
     const absencesCost = absences.reduce((s, a) => s + a.cost, 0);
 
+    // Salaire de base de la période : mensuel → montant × mois couverts,
+    // journalier → montant × jours de la période.
+    const start = new Date(f), end = new Date(t);
+    const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+    const months = Math.max(1, (end.getFullYear() - start.getFullYear()) * 12 + end.getMonth() - start.getMonth() + 1);
+    const baseUnits = worker.paymentType === 'monthly' ? months : days;
+    const baseSalary = worker.paymentEnabled ? worker.paymentAmount * baseUnits : 0;
+    const netToPay = (baseSalary + overtimeAmount) - (acomptesTotal + absencesCost);
+
     return {
+      baseSalary, baseUnits, netToPay,
       payments, overtimes, acomptes, absences,
       salaryPaid, overtimePaid, overtimeHours, overtimeAmount, overtimeUnpaid,
       acomptesTotal, absencesCost,
       totalPaid: salaryPaid + overtimePaid,
-      net: salaryPaid + overtimePaid + acomptesTotal - absencesCost,
     };
   }, [worker, period]);
 
   const periodLabel = period
     ? `Du ${formatDate(period.from, language)} au ${formatDate(period.to, language)}`
+    : '';
+
+  const baseDetail = data
+    ? worker.paymentEnabled
+      ? `${formatCurrency(worker.paymentAmount)} × ${data.baseUnits} ${worker.paymentType === 'monthly' ? 'mois' : 'jour(s)'}`
+      : 'Non défini'
     : '';
 
   const doPrint = () => {
@@ -168,6 +183,22 @@ export function WorkerReport({ worker, roleName }: { worker: Worker; roleName?: 
       emptyLabel: 'Aucune absence sur la période',
     };
 
+    const netSection: PrintTableSection = {
+      title: 'Net à payer',
+      icon: '🧾',
+      headerTotal: formatCurrency(data.netToPay),
+      note: '(Salaire de base + heures sup.) − (acomptes + absences)',
+      cols: [{ label: 'Élément' }, { label: 'Détail' }, { label: 'Montant', align: 'right' }],
+      rows: [
+        { cells: ['Salaire de base', baseDetail, formatCurrency(data.baseSalary)], tone: 'pos' },
+        { cells: ['+ Heures supplémentaires', `${data.overtimeHours.toFixed(2)} h`, formatCurrency(data.overtimeAmount)], tone: 'pos' },
+        { cells: ['− Acomptes', `${data.acomptes.length} acompte(s)`, formatCurrency(data.acomptesTotal)], tone: 'neg' },
+        { cells: ['− Absences', `${data.absences.length} absence(s)`, formatCurrency(data.absencesCost)], tone: 'neg' },
+        { cells: ['NET À PAYER', '', formatCurrency(data.netToPay)], variant: 'total' },
+      ],
+      emptyLabel: '',
+    };
+
     printDetailedReport(
       {
         docTitle: `Rapport ${worker.fullName}`,
@@ -195,9 +226,9 @@ export function WorkerReport({ worker, roleName }: { worker: Worker; roleName?: 
           { label: 'Acomptes', value: formatCurrency(data.acomptesTotal), tone: 'accent' },
           { label: 'Coût des absences', value: formatCurrency(data.absencesCost), tone: 'neg' },
           { label: 'Total versé', value: formatCurrency(data.totalPaid), tone: 'pos' },
-          { label: 'Coût employé (net)', value: formatCurrency(data.net), tone: 'accent' },
+          { label: 'Net à payer', value: formatCurrency(data.netToPay), tone: 'accent' },
         ],
-        sections: [paymentsSection, overtimeSection, acompteSection, absenceSection],
+        sections: [paymentsSection, overtimeSection, acompteSection, absenceSection, netSection],
       },
       settings,
       language
@@ -247,7 +278,7 @@ export function WorkerReport({ worker, roleName }: { worker: Worker; roleName?: 
               { label: 'Acomptes', value: formatCurrency(data.acomptesTotal), color: 'text-caramel' },
               { label: 'Coût des absences', value: formatCurrency(data.absencesCost), color: 'text-rose-deep' },
               { label: 'Total versé', value: formatCurrency(data.totalPaid), color: 'text-pistachio' },
-              { label: 'Coût employé (net)', value: formatCurrency(data.net), color: 'text-gold-dark' },
+              { label: 'Net à payer', value: formatCurrency(data.netToPay), color: 'text-gold-dark' },
             ]}
           />
 
@@ -264,7 +295,9 @@ export function WorkerReport({ worker, roleName }: { worker: Worker; roleName?: 
               p.period || '—',
               p.description || '—',
               <span key="a" className="font-bold text-pistachio">{formatCurrency(p.amount)}</span>,
-            ])}
+            ]).concat(data.payments.length ? [[
+              <b key="tl">TOTAL VERSÉ</b>, '', '', '', <b key="a" className="text-pistachio">{formatCurrency(data.totalPaid)}</b>,
+            ]] : [])}
           />
 
           <ReportSection
@@ -282,7 +315,10 @@ export function WorkerReport({ worker, roleName }: { worker: Worker; roleName?: 
               <span key="a" className="font-bold text-gold-dark">{formatCurrency(o.amount)}</span>,
               <Badge key="s" variant={o.isPaid ? 'success' : 'warning'}>{o.isPaid ? 'Payée' : 'Non payée'}</Badge>,
               o.description || '—',
-            ])}
+            ]).concat(data.overtimes.length ? [[
+              <b key="tl">TOTAL</b>, '', '', <b key="h">{data.overtimeHours.toFixed(2)} h</b>, '',
+              <b key="a" className="text-gold-dark">{formatCurrency(data.overtimeAmount)}</b>, '', '',
+            ]] : [])}
           />
 
           <ReportSection
@@ -294,7 +330,9 @@ export function WorkerReport({ worker, roleName }: { worker: Worker; roleName?: 
               formatDate(a.date, language),
               a.description || '—',
               <span key="a" className="font-bold text-caramel">{formatCurrency(a.amount)}</span>,
-            ])}
+            ]).concat(data.acomptes.length ? [[
+              <b key="tl">TOTAL ACOMPTES</b>, '', <b key="a" className="text-caramel">{formatCurrency(data.acomptesTotal)}</b>,
+            ]] : [])}
           />
 
           <ReportSection
@@ -306,7 +344,24 @@ export function WorkerReport({ worker, roleName }: { worker: Worker; roleName?: 
               formatDate(a.date, language),
               a.description || '—',
               <span key="a" className="font-bold text-rose-deep">{formatCurrency(a.cost)}</span>,
-            ])}
+            ]).concat(data.absences.length ? [[
+              <b key="tl">TOTAL ABSENCES</b>, '', <b key="a" className="text-rose-deep">{formatCurrency(data.absencesCost)}</b>,
+            ]] : [])}
+          />
+
+          <ReportSection
+            title="Net à payer" icon={<Banknote size={14} />}
+            total={formatCurrency(data.netToPay)}
+            note="(Salaire de base + heures sup.) − (acomptes + absences)"
+            head={['Élément', 'Détail', 'Montant']}
+            empty=""
+            rows={[
+              ['Salaire de base', baseDetail, <span key="a" className="font-bold text-pistachio">{formatCurrency(data.baseSalary)}</span>],
+              ['+ Heures supplémentaires', `${data.overtimeHours.toFixed(2)} h`, <span key="a" className="font-bold text-pistachio">{formatCurrency(data.overtimeAmount)}</span>],
+              ['− Acomptes', `${data.acomptes.length} acompte(s)`, <span key="a" className="font-bold text-rose-deep">{formatCurrency(data.acomptesTotal)}</span>],
+              ['− Absences', `${data.absences.length} absence(s)`, <span key="a" className="font-bold text-rose-deep">{formatCurrency(data.absencesCost)}</span>],
+              [<b key="tl">NET À PAYER</b>, '', <b key="a" className="text-base text-gold-dark">{formatCurrency(data.netToPay)}</b>],
+            ]}
           />
         </div>
       )}
