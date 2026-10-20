@@ -175,6 +175,42 @@ async function exportFromClient(): Promise<Record<string, any>> {
   return { format: 'altech-production-backup', version: 2, source: 'client', created_at: new Date().toISOString(), tables, counts };
 }
 
+/** JSON d'une ligne avec les clés triées, pour comparer indépendamment de l'ordre. */
+function canonical(v: any): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`;
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+
+/** Vérification depuis le navigateur quand `backup_verify()` n'existe pas sur le projet. */
+async function verifyFromClient(data: Record<string, any>) {
+  const fileTables: Record<string, any[]> = data.tables ?? {};
+  const names = Array.from(new Set([...BACKUP_TABLES, ...Object.keys(fileTables)])).sort();
+  const tables: BackupVerifyRow[] = [];
+  let ok = true;
+  for (const t of names) {
+    const live = await selectAll(t);
+    const file = fileTables[t];
+    if (live === null) {
+      if (file) { ok = false; tables.push({ table: t, status: 'absente de la base', file_rows: file.length, db_rows: null }); }
+      continue;
+    }
+    if (!file) {
+      if (live.length > 0) ok = false;
+      tables.push({ table: t, status: 'absente du fichier', file_rows: null, db_rows: live.length });
+      continue;
+    }
+    const a = file.map(canonical).sort();
+    const b = live.map(canonical).sort();
+    const same = a.length === b.length && a.every((r, i) => r === b[i]);
+    if (!same) ok = false;
+    tables.push({ table: t, status: same ? 'identique' : 'différente', file_rows: file.length, db_rows: live.length });
+  }
+  return { ok, created_at: String(data.created_at), tables };
+}
+
 /** Paramètres › Base de données : sauvegarde complète de toutes les tables + comptes. */
 export const backup = {
   export: async () => {
@@ -185,8 +221,14 @@ export const backup = {
     }
     return exportFromClient();
   },
-  verify: (data: Record<string, any>) =>
-    call<{ ok: boolean; created_at: string; tables: BackupVerifyRow[] }>('backup_verify', { p_backup: data }),
+  verify: async (data: Record<string, any>) => {
+    const { data: res, error } = await supabase.rpc('backup_verify', { p_backup: data });
+    if (!error) return res as { ok: boolean; created_at: string; tables: BackupVerifyRow[] };
+    if (!isMissingSchema(error.message) && !/PGRST202|Could not find the function/i.test(error.message)) {
+      throw new Error(`[rpc:backup_verify] ${error.message}`);
+    }
+    return verifyFromClient(data);
+  },
   restore: (data: Record<string, any>) =>
     call<{ ok: boolean; tables: Record<string, number>; users: number }>('backup_restore', { p_backup: data }),
 };
