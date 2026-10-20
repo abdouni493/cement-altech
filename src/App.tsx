@@ -145,7 +145,7 @@ export default function App() {
       void hydrateFromSupabase({ force: false });
     };
     window.addEventListener('focus', onFocus);
-    const timer = window.setInterval(onFocus, 120_000);
+    const timer = window.setInterval(onFocus, 300_000);
     return () => {
       window.removeEventListener('focus', onFocus);
       window.clearInterval(timer);

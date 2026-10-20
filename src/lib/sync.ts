@@ -27,12 +27,12 @@ let lastRun = 0;
 /**
  * Reloads everything, but never twice at the same time: two screens (or the
  * boot sequence and the login effect) asking together share the same request.
- * `force: false` also skips a reload that happened less than 15 s ago.
+ * `force: false` also skips a reload that happened less than 60 s ago.
  */
 export function hydrateFromSupabase(options: { force?: boolean } = {}) {
   const { force = true } = options;
   if (inFlight) return inFlight;
-  if (!force && Date.now() - lastRun < 15_000) {
+  if (!force && Date.now() - lastRun < 60_000) {
     return Promise.resolve({ ok: true, failed: [] as string[] });
   }
   inFlight = runHydration().finally(() => {

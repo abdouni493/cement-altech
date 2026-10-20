@@ -19,12 +19,37 @@ import type { FicheTechnic } from '@/store/ficheTechnicStore';
  */
 
 // ---------------------------------------------------------------- helpers ----
+const PAGE = 1000;
+
+/**
+ * Reads every row of a query. Supabase returns at most 1000 rows per request:
+ * without paging, the oldest rows of a big table silently disappeared from
+ * the screens. Small tables still cost a single request.
+ */
+async function readAll<T>(table: string, build: () => any): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await build().range(from, from + PAGE - 1);
+    if (error) throw new Error(`[${table}] ${error.message}`);
+    rows.push(...((data ?? []) as T[]));
+    if (!data || data.length < PAGE) break;
+  }
+  // un tri sur une colonne non unique peut renvoyer une ligne sur deux pages
+  const seen = new Set<unknown>();
+  return rows.filter((r: any) => {
+    if (r?.id === undefined) return true;
+    if (seen.has(r.id)) return false;
+    seen.add(r.id);
+    return true;
+  });
+}
+
 async function select<T>(table: string, columns = '*', order?: string): Promise<T[]> {
-  let q = supabase.from(table).select(columns);
-  if (order) q = q.order(order, { ascending: false });
-  const { data, error } = await q;
-  if (error) throw new Error(`[${table}] ${error.message}`);
-  return (data ?? []) as T[];
+  return readAll<T>(table, () => {
+    let q = supabase.from(table).select(columns);
+    if (order) q = q.order(order, { ascending: false });
+    return q;
+  });
 }
 
 /** True when the error means "this table/column does not exist yet". */
@@ -58,11 +83,11 @@ async function selectOptionalWhere<T>(
   table: string, column: string, value: string, order?: string
 ): Promise<T[]> {
   try {
-    let q = supabase.from(table).select('*').eq(column, value);
-    if (order) q = q.order(order, { ascending: false });
-    const { data, error } = await q;
-    if (error) throw new Error(`[${table}] ${error.message}`);
-    return (data ?? []) as T[];
+    return await readAll<T>(table, () => {
+      let q = supabase.from(table).select('*').eq(column, value);
+      if (order) q = q.order(order, { ascending: false });
+      return q;
+    });
   } catch (e) {
     const msg = (e as Error).message;
     if (isMissingSchema(msg)) {
