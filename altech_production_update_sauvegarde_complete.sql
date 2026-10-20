@@ -237,6 +237,9 @@ declare
   v_seq      record;
   v_restored jsonb := '{}'::jsonb;
   v_replica  boolean := true;
+  v_has_auth boolean := coalesce((p_backup->'auth') ? 'users', false);
+  v_profiles jsonb;
+  v_fk       record;
 begin
   if not public.is_admin() then
     raise exception 'Réservé à l''administrateur';
@@ -258,8 +261,14 @@ begin
     end loop;
   end if;
 
+  -- Sauvegarde sans comptes (faite depuis le navigateur) : on garde les comptes
+  -- de ce projet, donc leurs profils, pour rester connecté après l'import.
+  if not v_has_auth then
+    select coalesce(jsonb_agg(to_jsonb(p) - 'worker_id'), '[]'::jsonb) into v_profiles from public.profiles p;
+  end if;
+
   -- 1. comptes de connexion
-  if p_backup->'auth' ? 'users' then
+  if v_has_auth then
     execute 'truncate table ' || v_list || ' cascade';
     delete from auth.identities;
     delete from auth.users;
@@ -271,7 +280,7 @@ begin
   execute 'truncate table ' || v_list || ' cascade';
   if v_replica then
     for v_table in select public._backup_tables() loop
-      if p_backup->'tables' ? v_table then
+      if p_backup->'tables' ? v_table and (v_has_auth or v_table <> 'profiles') then
         perform public._backup_insert('public', v_table, p_backup->'tables'->v_table);
         v_restored := v_restored || jsonb_build_object(v_table, jsonb_array_length(p_backup->'tables'->v_table));
       end if;
@@ -297,7 +306,7 @@ begin
               and rn.nspname = 'public' and r.relname <> v_table
               and not (r.relname = any(v_done))
           ) then
-            if p_backup->'tables' ? v_table then
+            if p_backup->'tables' ? v_table and (v_has_auth or v_table <> 'profiles') then
               perform public._backup_insert('public', v_table, p_backup->'tables'->v_table);
               v_restored := v_restored || jsonb_build_object(v_table, jsonb_array_length(p_backup->'tables'->v_table));
             end if;
@@ -314,6 +323,23 @@ begin
     end;
     for v_table in select public._backup_tables() loop
       execute format('alter table public.%I enable trigger user', v_table);
+    end loop;
+  end if;
+
+  -- 2b. sauvegarde sans comptes : profils de ce projet remis en place, et
+  -- références vers des comptes de l'ancien projet effacées (null).
+  if not v_has_auth then
+    perform public._backup_insert('public', 'profiles', v_profiles);
+    for v_fk in
+      select c.relname as tbl, a.attname as col
+      from pg_constraint k
+      join pg_class c on c.oid = k.conrelid
+      join pg_attribute a on a.attrelid = k.conrelid and a.attnum = k.conkey[1]
+      where k.contype = 'f' and k.confrelid = 'auth.users'::regclass
+        and c.relnamespace = 'public'::regnamespace and array_length(k.conkey, 1) = 1
+    loop
+      execute format('update public.%I set %I = null where %I is not null and not exists (select 1 from auth.users u where u.id = %I.%I)',
+        v_fk.tbl, v_fk.col, v_fk.col, v_fk.tbl, v_fk.col);
     end loop;
   end if;
 

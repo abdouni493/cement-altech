@@ -73,7 +73,8 @@ export default function SettingsPage() {
       downloadJSON(data, `altech-backup-${todayISO()}.json`);
       const tables = Object.keys(data.tables ?? {}).length;
       const rows = Object.values<number>(data.counts ?? {}).reduce((s, n) => s + n, 0);
-      toast.success(`Sauvegarde téléchargée — ${tables} tables, ${rows} lignes, ${data.auth?.users?.length ?? 0} comptes`);
+      if (data.auth) toast.success(`Sauvegarde téléchargée — ${tables} tables, ${rows} lignes, ${data.auth.users?.length ?? 0} comptes`);
+      else toast.success(`Sauvegarde téléchargée — ${tables} tables, ${rows} lignes (sans les mots de passe des comptes)`);
     } catch (err) {
       toast.error((err as Error).message);
     } finally {
@@ -105,16 +106,20 @@ export default function SettingsPage() {
     if (!file) return;
     try {
       const data = await readBackupFile(file);
+      const withAccounts = !!data.auth;
       const msg = `Restaurer la sauvegarde du ${new Date(String(data.created_at)).toLocaleString('fr-FR')} ?\n\n`
-        + 'TOUTES les données actuelles et tous les comptes seront remplacés. '
-        + 'Vous devrez ensuite vous reconnecter avec les identifiants contenus dans la sauvegarde.';
+        + (withAccounts
+          ? 'TOUTES les données actuelles et tous les comptes seront remplacés. '
+            + 'Vous devrez ensuite vous reconnecter avec les identifiants contenus dans la sauvegarde.'
+          : 'TOUTES les données actuelles seront remplacées. Les comptes de connexion de ce projet sont conservés ; '
+            + 'les comptes des employés seront à recréer (bouton « Créer le compte »).');
       if (!window.confirm(msg)) return;
       setBusy('restore');
       const result = await backup.restore(data);
       const rows = Object.values(result.tables).reduce((s, n) => s + n, 0);
-      toast.success(`Données restaurées — ${rows} lignes, ${result.users} comptes. Reconnexion...`);
+      toast.success(`Données restaurées — ${rows} lignes. Rechargement...`);
       setTimeout(async () => {
-        await useAuthStore.getState().logout().catch(() => undefined);
+        if (withAccounts) await useAuthStore.getState().logout().catch(() => undefined);
         window.location.reload();
       }, 1500);
     } catch (err) {

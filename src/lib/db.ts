@@ -123,9 +123,68 @@ export interface BackupVerifyRow {
   db_rows: number | null;
 }
 
+/** Toutes les tables de l'application (export sans `backup_export()`). */
+const BACKUP_TABLES = [
+  'activity_log', 'caisse_categories', 'caisse_reports', 'caisse_settings', 'caisse_transactions',
+  'categories', 'client_debt_versements', 'client_debts', 'client_payments', 'clients',
+  'command_adjustment_lines', 'command_adjustments', 'command_deliveries',
+  'command_delivery_consumptions', 'command_delivery_items', 'command_items', 'command_payments',
+  'commands', 'comptoir_items', 'destructions', 'document_titles', 'expense_categories', 'expenses',
+  'fiche_categories', 'fiche_technic_lines', 'fiche_technics', 'marques', 'party_credit_refunds',
+  'party_old_debts', 'production_categories', 'production_used_products', 'productions', 'products',
+  'profiles', 'purchase_lines', 'purchase_order_items', 'purchase_orders', 'purchase_payments',
+  'purchases', 'recycle_bin', 'repair_command_edits', 'repair_phantom_command_payments', 'roles',
+  'sale_lines', 'sale_payments', 'sales', 'stock_movements', 'store_settings', 'supplier_payments',
+  'suppliers', 'units', 'worker_absences', 'worker_acomptes', 'worker_overtimes', 'worker_payments',
+  'workers',
+];
+
+/** Lit une table entière, par pages de 1000 lignes (limite de l'API). */
+async function selectAll(table: string): Promise<any[] | null> {
+  const rows: any[] = [];
+  const page = 1000;
+  let ordered = true;
+  for (let from = 0; ; from += page) {
+    let q = supabase.from(table).select('*');
+    if (ordered) q = q.order('id', { ascending: true });
+    const { data, error } = await q.range(from, from + page - 1);
+    if (error) {
+      if (ordered && from === 0 && /42703|column .*id/i.test(error.message)) { ordered = false; from -= page; continue; }
+      if (isMissingSchema(error.message)) return null;
+      throw new Error(`[${table}] ${error.message}`);
+    }
+    rows.push(...(data ?? []));
+    if (!data || data.length < page) return rows;
+  }
+}
+
+/**
+ * Export fait depuis le navigateur quand `backup_export()` n'existe pas sur le
+ * projet. Les comptes de connexion (auth.users) ne sont pas lisibles par l'API :
+ * le fichier n'a donc pas de section `auth`.
+ */
+async function exportFromClient(): Promise<Record<string, any>> {
+  const tables: Record<string, any[]> = {};
+  const counts: Record<string, number> = {};
+  for (const t of BACKUP_TABLES) {
+    const rows = await selectAll(t);
+    if (rows === null) continue;
+    tables[t] = rows;
+    counts[t] = rows.length;
+  }
+  return { format: 'altech-production-backup', version: 2, source: 'client', created_at: new Date().toISOString(), tables, counts };
+}
+
 /** Paramètres › Base de données : sauvegarde complète de toutes les tables + comptes. */
 export const backup = {
-  export: () => call<Record<string, any>>('backup_export'),
+  export: async () => {
+    const { data, error } = await supabase.rpc('backup_export');
+    if (!error) return data as Record<string, any>;
+    if (!isMissingSchema(error.message) && !/PGRST202|Could not find the function/i.test(error.message)) {
+      throw new Error(`[rpc:backup_export] ${error.message}`);
+    }
+    return exportFromClient();
+  },
   verify: (data: Record<string, any>) =>
     call<{ ok: boolean; created_at: string; tables: BackupVerifyRow[] }>('backup_verify', { p_backup: data }),
   restore: (data: Record<string, any>) =>
