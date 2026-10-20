@@ -9,9 +9,9 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
  * `lancer-cement-store.bat`, …). The anon key is a public key: it is safe in
  * the bundle, every table is protected by Row Level Security.
  */
-const FALLBACK_URL = 'https://mkzgwfagkhtfytkvlzwb.supabase.co';
+const FALLBACK_URL = 'https://bxxdunoxajzybpsihown.supabase.co';
 const FALLBACK_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1remd3ZmFna2h0Znl0a3ZsendiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNTc1MDIsImV4cCI6MjEwMDgzMzUwMn0.i4LxrkyPpn18dfjoUzE_ra3vPROOkX7fOwW7yLfiZ1w';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4eGR1bm94YWp6eWJwc2lob3duIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0OTAzOTMsImV4cCI6MjEwODA2NjM5M30.c-CjF4LDrH2XjkRVfi0ezCBqHYTawpFE3MadcAYrDgA';
 
 export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || FALLBACK_URL;
 export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || FALLBACK_ANON_KEY;

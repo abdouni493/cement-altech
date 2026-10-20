@@ -2,7 +2,7 @@
 --  ALTECH PRODUCTION — CIMENT BLIDA
 --  Full PostgreSQL / Supabase database schema
 -- ----------------------------------------------------------------------------
---  Project : https://mkzgwfagkhtfytkvlzwb.supabase.co
+--  Project : https://bxxdunoxajzybpsihown.supabase.co
 --  Engine  : PostgreSQL 15 (Supabase)
 --  Usage   : paste the WHOLE file in Supabase Studio > SQL Editor > Run.
 --            The script is idempotent: it can be executed several times.
