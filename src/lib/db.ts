@@ -116,6 +116,22 @@ export const recycleBin = {
   restore: (txId: number) => call<number>('recycle_restore', { p_tx_id: txId }),
 };
 
+export interface BackupVerifyRow {
+  table: string;
+  status: string;
+  file_rows: number | null;
+  db_rows: number | null;
+}
+
+/** Paramètres › Base de données : sauvegarde complète de toutes les tables + comptes. */
+export const backup = {
+  export: () => call<Record<string, any>>('backup_export'),
+  verify: (data: Record<string, any>) =>
+    call<{ ok: boolean; created_at: string; tables: BackupVerifyRow[] }>('backup_verify', { p_backup: data }),
+  restore: (data: Record<string, any>) =>
+    call<{ ok: boolean; tables: Record<string, number>; users: number }>('backup_restore', { p_backup: data }),
+};
+
 async function call<T>(fn: string, args: Record<string, any> = {}): Promise<T> {
   const { data, error } = await supabase.rpc(fn, args);
   if (error) throw new Error(`[rpc:${fn}] ${error.message}`);

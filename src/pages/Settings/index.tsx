@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Settings as SettingsIcon, UserCog, Database, Upload, Download, Save, AlertTriangle, FlaskConical } from 'lucide-react';
+import { Settings as SettingsIcon, UserCog, Database, Upload, Download, Save, AlertTriangle, FlaskConical, ShieldCheck } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Tabs } from '@/components/ui/Tabs';
 import { Card } from '@/components/ui/Card';
@@ -11,13 +11,27 @@ import { useLanguage } from '@/hooks/useLanguage';
 import { downloadJSON, todayISO } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 import { RecycleBin } from './RecycleBin';
+import { backup } from '@/lib/db';
 
-const STORE_KEYS = [
-  'altech-auth', 'altech-settings', 'altech-stock', 'altech-suppliers',
-  'altech-clients', 'altech-client-debts', 'altech-purchases', 'altech-comptoir',
-  'altech-productions', 'altech-fiche-technics', 'altech-sales', 'altech-commands',
-  'altech-workers', 'altech-expenses', 'altech-caisse', 'altech-caisse-reports',
-];
+type VerifyResult = Awaited<ReturnType<typeof backup.verify>>;
+
+/** Lit un fichier de sauvegarde choisi par l'utilisateur. */
+function readBackupFile(file: File): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result as string);
+        if (data?.format !== 'altech-production-backup' || !data.tables) throw new Error();
+        resolve(data);
+      } catch {
+        reject(new Error("Fichier invalide : ce n'est pas une sauvegarde Altech Production"));
+      }
+    };
+    reader.onerror = () => reject(new Error('Lecture du fichier impossible'));
+    reader.readAsText(file);
+  });
+}
 
 
 export default function SettingsPage() {
@@ -29,6 +43,9 @@ export default function SettingsPage() {
   const [form, setForm] = useState(settings);
   const [account, setAccount] = useState({ name: user?.name || '', username: user?.username || '', email: user?.email || '', oldPwd: '', newPwd: '', confirmPwd: '' });
   const fileRef = useRef<HTMLInputElement>(null);
+  const verifyRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState<'' | 'backup' | 'verify' | 'restore'>('');
+  const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
 
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -49,28 +66,62 @@ export default function SettingsPage() {
     setAccount({ ...account, oldPwd: '', newPwd: '', confirmPwd: '' });
   };
 
-  const handleBackup = () => {
-    const data: Record<string, unknown> = {};
-    STORE_KEYS.forEach((k) => { const v = localStorage.getItem(k); if (v) data[k] = JSON.parse(v); });
-    downloadJSON(data, `altech-backup-${todayISO()}.json`);
-    toast.success('Sauvegarde téléchargée');
+  const handleBackup = async () => {
+    setBusy('backup');
+    try {
+      const data = await backup.export();
+      downloadJSON(data, `altech-backup-${todayISO()}.json`);
+      const tables = Object.keys(data.tables ?? {}).length;
+      const rows = Object.values<number>(data.counts ?? {}).reduce((s, n) => s + n, 0);
+      toast.success(`Sauvegarde téléchargée — ${tables} tables, ${rows} lignes, ${data.auth?.users?.length ?? 0} comptes`);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy('');
+    }
   };
 
-  const handleRestore = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleVerify = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = JSON.parse(reader.result as string);
-        Object.entries(data).forEach(([k, v]) => localStorage.setItem(k, JSON.stringify(v)));
-        toast.success('Données restaurées — rechargement...');
-        setTimeout(() => window.location.reload(), 1200);
-      } catch {
-        toast.error('Fichier invalide');
-      }
-    };
-    reader.readAsText(file);
+    setBusy('verify');
+    setVerifyResult(null);
+    try {
+      const result = await backup.verify(await readBackupFile(file));
+      setVerifyResult(result);
+      if (result.ok) toast.success('Sauvegarde vérifiée : identique aux données actuelles');
+      else toast.error('Des différences ont été trouvées — voir le détail');
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const handleRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const data = await readBackupFile(file);
+      const msg = `Restaurer la sauvegarde du ${new Date(String(data.created_at)).toLocaleString('fr-FR')} ?\n\n`
+        + 'TOUTES les données actuelles et tous les comptes seront remplacés. '
+        + 'Vous devrez ensuite vous reconnecter avec les identifiants contenus dans la sauvegarde.';
+      if (!window.confirm(msg)) return;
+      setBusy('restore');
+      const result = await backup.restore(data);
+      const rows = Object.values(result.tables).reduce((s, n) => s + n, 0);
+      toast.success(`Données restaurées — ${rows} lignes, ${result.users} comptes. Reconnexion...`);
+      setTimeout(async () => {
+        await useAuthStore.getState().logout().catch(() => undefined);
+        window.location.reload();
+      }, 1500);
+    } catch (err) {
+      toast.error((err as Error).message);
+    } finally {
+      setBusy('');
+    }
   };
 
   return (
@@ -155,19 +206,51 @@ export default function SettingsPage() {
       )}
 
       {tab === 'database' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card index={0}>
-            <div className="flex items-center gap-2 mb-3 text-pistachio"><Download size={20} /><h3 className="font-display font-semibold text-text-primary">{t('backup')}</h3></div>
-            <p className="text-sm text-text-muted mb-4">Exporter toutes les données en JSON</p>
-            <Button variant="gold" onClick={handleBackup}><Download size={16} /> {t('downloadBackup')}</Button>
-          </Card>
-          <Card index={1} className="border-rose-deep/20">
-            <div className="flex items-center gap-2 mb-3 text-rose-deep"><Database size={20} /><h3 className="font-display font-semibold text-text-primary">{t('restore')}</h3></div>
-            <p className="text-sm text-text-muted mb-2">Importer un fichier JSON de sauvegarde</p>
-            <p className="text-xs text-rose-deep flex items-center gap-1 mb-4"><AlertTriangle size={14} /> Remplace toutes les données actuelles</p>
-            <input ref={fileRef} type="file" accept="application/json" className="hidden" onChange={handleRestore} />
-            <Button variant="danger" onClick={() => fileRef.current?.click()}><Upload size={16} /> {t('selectFile')}</Button>
-          </Card>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card index={0}>
+              <div className="flex items-center gap-2 mb-3 text-pistachio"><Download size={20} /><h3 className="font-display font-semibold text-text-primary">{t('backup')}</h3></div>
+              <p className="text-sm text-text-muted mb-4">Exporter toutes les données (toutes les interfaces, historiques, stock, opérations) et tous les comptes en JSON</p>
+              <Button variant="gold" onClick={handleBackup} disabled={!!busy}><Download size={16} /> {busy === 'backup' ? 'Export en cours...' : t('downloadBackup')}</Button>
+            </Card>
+            <Card index={1}>
+              <div className="flex items-center gap-2 mb-3 text-gold-dark"><ShieldCheck size={20} /><h3 className="font-display font-semibold text-text-primary">Vérifier une sauvegarde</h3></div>
+              <p className="text-sm text-text-muted mb-4">Comparer un fichier de sauvegarde avec les données actuelles, table par table, ligne par ligne</p>
+              <input ref={verifyRef} type="file" accept="application/json" className="hidden" onChange={handleVerify} />
+              <Button variant="gold" onClick={() => verifyRef.current?.click()} disabled={!!busy}><ShieldCheck size={16} /> {busy === 'verify' ? 'Vérification...' : t('selectFile')}</Button>
+            </Card>
+            <Card index={2} className="border-rose-deep/20">
+              <div className="flex items-center gap-2 mb-3 text-rose-deep"><Database size={20} /><h3 className="font-display font-semibold text-text-primary">{t('restore')}</h3></div>
+              <p className="text-sm text-text-muted mb-2">Importer un fichier JSON de sauvegarde</p>
+              <p className="text-xs text-rose-deep flex items-center gap-1 mb-4"><AlertTriangle size={14} /> Remplace toutes les données et tous les comptes actuels</p>
+              <input ref={fileRef} type="file" accept="application/json" className="hidden" onChange={handleRestore} />
+              <Button variant="danger" onClick={() => fileRef.current?.click()} disabled={!!busy}><Upload size={16} /> {busy === 'restore' ? 'Restauration...' : t('selectFile')}</Button>
+            </Card>
+          </div>
+
+          {verifyResult && (
+            <Card index={3}>
+              <h3 className={`font-display font-semibold mb-1 ${verifyResult.ok ? 'text-pistachio' : 'text-rose-deep'}`}>
+                {verifyResult.ok ? 'Sauvegarde complète : identique aux données actuelles' : 'Différences trouvées'}
+              </h3>
+              <p className="text-xs text-text-muted mb-3">Sauvegarde du {new Date(verifyResult.created_at).toLocaleString('fr-FR')}</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="text-left text-text-muted"><th className="py-1 pr-4">Table</th><th className="py-1 pr-4">Fichier</th><th className="py-1 pr-4">Base</th><th className="py-1">État</th></tr></thead>
+                  <tbody>
+                    {verifyResult.tables.map((r) => (
+                      <tr key={r.table} className="border-t border-gold/10">
+                        <td className="py-1 pr-4 font-mono text-xs">{r.table}</td>
+                        <td className="py-1 pr-4">{r.file_rows ?? '—'}</td>
+                        <td className="py-1 pr-4">{r.db_rows ?? '—'}</td>
+                        <td className={`py-1 ${r.status === 'identique' ? 'text-pistachio' : 'text-rose-deep font-semibold'}`}>{r.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
         </div>
       )}
 
