@@ -32,7 +32,7 @@ export function Header({ onMenuClick }: HeaderProps) {
         <button
           onClick={toggleTheme}
           title={theme === 'dark' ? 'Passer en Mode Clair' : 'Passer en Mode Sombre'}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-vanilla/70 border border-gold/20 text-sm font-medium text-text-secondary hover:bg-gold/10 hover:text-gold transition-all"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-chocolate border border-[--border-input] text-sm font-medium text-text-secondary hover:bg-gold/10 hover:text-gold transition-all"
         >
           {theme === 'dark' ? (
             <>
@@ -50,7 +50,7 @@ export function Header({ onMenuClick }: HeaderProps) {
         {/* Language toggle */}
         <button
           onClick={() => setLanguage(language === 'fr' ? 'ar' : 'fr')}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-vanilla/70 border border-gold/20 text-sm font-medium text-text-secondary hover:bg-gold/10 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-chocolate border border-[--border-input] text-sm font-medium text-text-secondary hover:bg-gold/10 transition-colors"
         >
           <Globe size={16} />
           {language === 'fr' ? '🇫🇷 FR' : '🇩🇿 AR'}
@@ -62,7 +62,7 @@ export function Header({ onMenuClick }: HeaderProps) {
             <p className="text-sm font-semibold text-text-primary leading-tight">{user?.name}</p>
             <p className="text-[11px] text-text-muted capitalize">{user?.role}</p>
           </div>
-          <div className="h-9 w-9 rounded-full bg-gradient-button flex items-center justify-center text-white text-sm font-semibold shadow-gold">
+          <div className="h-9 w-9 rounded-full bg-gradient-button flex items-center justify-center text-[--btn-on-gold] text-sm font-bold ring-1 ring-gold-dark/40">
             {initials || 'U'}
           </div>
         </div>

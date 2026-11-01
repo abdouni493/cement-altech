@@ -49,6 +49,12 @@ export interface DocColumn {
   width?: string;
 }
 
+/** Applique les noms de colonnes choisis a l'impression (vides = nom d'origine). */
+export function withColumnLabels(columns: DocColumn[], labels?: string[]): DocColumn[] {
+  if (!labels) return columns;
+  return columns.map((c, i) => (labels[i]?.trim() ? { ...c, label: labels[i].trim() } : c));
+}
+
 export interface DocRow {
   cells: (string | number)[];
   /** Ligne de sous-total / regroupement — fond ambré et texte gras. */

@@ -2,7 +2,7 @@ import type { StoreSettings, PaymentMethod } from '@/types';
 import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel } from './utils';
 import { amountInWords } from './invoicePrint';
 import {
-  printOfficialDocument, versementLine,
+  printOfficialDocument, versementLine, withColumnLabels,
   type DocRow, type DocTotal,
 } from './officialDoc';
 
@@ -230,6 +230,8 @@ export interface DeliveryNoteData {
   docTitle?: string;
   /** Texte libre imprime a la fin du bon. */
   endText?: string;
+  /** Noms des colonnes choisis a l'impression (dans l'ordre de DELIVERY_NOTE_COLUMNS). */
+  columnLabels?: string[];
   lines: DeliveryNoteLine[];
   /** TVA propre à CE bon — masquée sur le document quand elle est désactivée. */
   tvaEnabled?: boolean;
@@ -251,6 +253,9 @@ export interface DeliveryNoteData {
   paidAmount: number;
   restAmount: number;
 }
+
+/** Colonnes du bon de livraison, dans l'ordre imprime (renommables a l'impression). */
+export const DELIVERY_NOTE_COLUMNS = ['Désignation', 'Adresse de livraison', 'Quantité', 'Prix U', 'P.T H.T'];
 
 /**
  * BON DE LIVRAISON — reprise EXACTE du modèle papier de l'entreprise :
@@ -289,13 +294,13 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
       metaLines: [`N° BL : ${data.reference}`],
       tables: [
         {
-          columns: [
-            { label: 'Désignation', align: 'left' },
-            { label: 'Adresse de livraison', align: 'left', width: '24%' },
-            { label: 'Quantité', align: 'center', width: '13%' },
-            { label: 'Prix U', align: 'right', width: '17%' },
-            { label: 'P.T H.T', align: 'right', width: '19%' },
-          ],
+          columns: withColumnLabels([
+            { label: DELIVERY_NOTE_COLUMNS[0], align: 'left' },
+            { label: DELIVERY_NOTE_COLUMNS[1], align: 'left', width: '24%' },
+            { label: DELIVERY_NOTE_COLUMNS[2], align: 'center', width: '13%' },
+            { label: DELIVERY_NOTE_COLUMNS[3], align: 'right', width: '17%' },
+            { label: DELIVERY_NOTE_COLUMNS[4], align: 'right', width: '19%' },
+          ], data.columnLabels),
           rows,
           totals: totalsBlock({
             ht, tvaEnabled: data.tvaEnabled, tvaRate: data.tvaRate, tvaAmount,

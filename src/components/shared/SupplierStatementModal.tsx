@@ -24,7 +24,7 @@ import {
   buildSupplierLedger, sliceLedger, ledgerRows, type DebitKind, type LedgerSlice,
 } from '@/lib/ledger';
 import {
-  printPartyStatement, statementTotals, dayBefore,
+  printPartyStatement, statementTotals, dayBefore, STATEMENT_COLUMNS,
   defaultStatementTitle, defaultStatementPeriodPrefix, periodSuffix,
 } from '@/lib/statementPrint';
 import { buildSupplierHistory } from '@/lib/partyHistory';
@@ -146,6 +146,8 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
         includePrior,
         includeVersements: c.versements,
         includeProducts: c.products,
+        productsOnly: c.productsOnly,
+        columnLabels: c.columnLabels,
         tvaMode: c.tvaMode,
         tvaRate: c.tvaRate,
         docTitle: c.docTitle,
@@ -164,7 +166,7 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
     setPrintOpen(false);
     const slice = sliceFor(c);
     if (!slice) return;
-    if (c.oldDebts && Math.abs(slice.priorBalance) > 0.004) {
+    if (c.oldDebts && !c.productsOnly && Math.abs(slice.priorBalance) > 0.004) {
       setPriorAsk({ choice: c, slice });
       return;
     }
@@ -438,6 +440,8 @@ export function SupplierStatementModal({ supplier, onClose }: { supplier: Suppli
 
           {data && (
             <StatementPrintDialog
+              columns={STATEMENT_COLUMNS.supplier}
+              columnsKey="statement-supplier"
               open={printOpen}
               onClose={() => setPrintOpen(false)}
               onPrint={onPrintChoice}

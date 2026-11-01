@@ -30,39 +30,48 @@ export function Sidebar({ open, onClose }: SidebarProps) {
     navigate('/login');
   };
 
+  const initials = (user?.name ?? '?').split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+
   return (
     <>
       {/* Mobile overlay */}
-      {open && <div className="fixed inset-0 bg-black/60 z-30 lg:hidden" onClick={onClose} />}
+      {open && <div className="fixed inset-0 bg-black/70 backdrop-blur-[2px] z-30 lg:hidden" onClick={onClose} />}
 
       <motion.aside
         initial={false}
-        className={`fixed lg:sticky top-0 z-40 h-screen w-[260px] bg-gradient-sidebar flex flex-col shrink-0 transition-transform duration-300 border-gold/20 ${
+        className={`fixed lg:sticky top-0 z-40 h-screen w-[264px] bg-gradient-sidebar flex flex-col shrink-0 transition-transform duration-300 border-[--sidebar-border] ${
           isRTL ? 'right-0 border-l' : 'left-0 border-r'
         } ${open ? 'translate-x-0' : isRTL ? 'translate-x-full lg:translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
       >
+        {/* Filet dore en tete */}
+        <div className="h-[3px] w-full bg-gradient-button" />
+
         {/* Logo */}
-        <div className="flex items-center justify-between gap-3 px-5 py-5">
-          <div className="flex items-center gap-3">
-            <LogoBadge size={44} icon={24} />
+        <div className="flex items-center justify-between gap-3 px-5 pt-5 pb-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <LogoBadge size={42} icon={22} />
             <div className="min-w-0">
-              <h2 className="font-display text-base font-bold text-text-primary leading-tight truncate">
+              <h2 className="font-display text-[15px] font-bold leading-tight truncate text-[--sidebar-text-strong]">
                 {store.name || 'Altech Production'}
               </h2>
-              <p className="text-[11px] text-text-secondary/80 truncate">
+              <p className="text-[10.5px] uppercase tracking-[0.12em] truncate text-gold/80">
                 {store.description || 'Vente & Fabrication de Ciment'}
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="lg:hidden text-text-secondary/70 hover:text-text-primary">
-            <X size={20} />
+          <button
+            onClick={onClose}
+            className="lg:hidden rounded-lg p-1.5 text-[--sidebar-text] hover:bg-white/5 hover:text-[--sidebar-text-strong]"
+            aria-label="Fermer le menu"
+          >
+            <X size={18} />
           </button>
         </div>
 
-        <div className="mx-5 h-px bg-gradient-to-r from-transparent via-gold/40 to-transparent mb-2" />
+        <p className="px-6 pb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[--sidebar-muted]">Navigation</p>
 
         {/* Nav */}
-        <nav className="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+        <nav className="sidebar-scroll flex-1 overflow-y-auto px-3 pb-3 space-y-0.5">
           {visibleItems.map((item, i) => {
             const Icon = item.icon;
             return (
@@ -71,41 +80,63 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                   to={item.to}
                   onClick={onClose}
                   className={({ isActive }) =>
-                    `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                    `group relative flex items-center gap-3 rounded-lg px-3 py-2 text-[13.5px] transition-colors ${
                       isActive
-                        ? 'btn-gold-animated text-black shadow-gold font-bold'
-                        : 'text-text-secondary hover:bg-gold/10 hover:text-gold-light'
+                        ? 'bg-gold/[0.13] font-semibold text-[#f4dc8f]'
+                        : 'font-medium text-[--sidebar-text] hover:bg-white/[0.04] hover:text-[--sidebar-text-strong]'
                     }`
                   }
                 >
-                  <Icon size={19} className="shrink-0" />
-                  <span className="truncate">{t(item.key)}</span>
+                  {({ isActive }) => (
+                    <>
+                      <span
+                        className={`absolute top-1.5 bottom-1.5 w-[3px] rounded-full bg-gold transition-opacity ${
+                          isRTL ? '-right-3' : '-left-3'
+                        } ${isActive ? 'opacity-100' : 'opacity-0'}`}
+                      />
+                      <span
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border transition-colors ${
+                          isActive
+                            ? 'border-gold/50 bg-gradient-button text-[--btn-on-gold]'
+                            : 'border-white/[0.06] bg-white/[0.03] text-gold/80 group-hover:border-gold/30 group-hover:text-gold'
+                        }`}
+                      >
+                        <Icon size={16} strokeWidth={isActive ? 2.25 : 1.9} />
+                      </span>
+                      <span className="truncate">{t(item.key)}</span>
+                    </>
+                  )}
                 </NavLink>
               </motion.div>
             );
           })}
           {visibleItems.length === 0 && (
-            <p className="px-3 py-4 text-xs text-text-muted">
+            <p className="px-3 py-4 text-xs text-[--sidebar-muted]">
               Aucune interface autorisée pour ce compte.
             </p>
           )}
         </nav>
 
         {/* Account + logout */}
-        <div className="p-3 border-t border-gold/15 space-y-2">
+        <div className="border-t border-[--sidebar-border] p-3 space-y-2">
           {user && (
-            <div className="px-3.5 py-2 rounded-xl bg-gold/5 border border-gold/10">
-              <p className="text-xs font-semibold text-text-primary truncate">{user.name}</p>
-              <p className="text-[10px] text-text-muted truncate">
-                {isAdmin ? 'Administrateur' : `Employé · ${visibleItems.length} interface(s)`}
-              </p>
+            <div className="flex items-center gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.03] px-3 py-2">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-button text-[11px] font-bold text-[--btn-on-gold]">
+                {initials}
+              </span>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold truncate text-[--sidebar-text-strong]">{user.name}</p>
+                <p className="text-[10px] truncate text-[--sidebar-muted]">
+                  {isAdmin ? 'Administrateur' : `Employé · ${visibleItems.length} interface(s)`}
+                </p>
+              </div>
             </div>
           )}
           <button
             onClick={handleLogout}
-            className="flex items-center gap-3 w-full px-3.5 py-2.5 rounded-xl text-sm font-medium text-text-secondary hover:bg-rose-deep/15 hover:text-rose-deep transition-all"
+            className="flex items-center justify-center gap-2 w-full rounded-lg border border-white/[0.08] px-3 py-2 text-[13px] font-semibold text-[--sidebar-text] transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-400"
           >
-            <LogOut size={19} />
+            <LogOut size={16} />
             {t('logout')}
           </button>
         </div>

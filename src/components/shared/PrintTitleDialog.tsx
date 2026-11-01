@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Printer } from 'lucide-react';
 import { Modal } from '@/components/ui/Modal';
 import { Button } from '@/components/ui/Button';
+import { ColumnLabelsEditor, loadColumnLabels, saveColumnLabels } from './ColumnLabelsEditor';
 import type { DocTitleScope } from '@/store/docTitleStore';
 import {
   DocTitlePicker, initialDocTitleChoice, resolvedDocTitle, resolvedPeriodPrefix, type DocTitleChoice,
@@ -13,6 +14,8 @@ export interface PrintTitles {
   periodPrefix: string;
   /** Texte libre imprime a la fin du document. */
   endText: string;
+  /** Noms des colonnes choisis (seulement si la demande propose des colonnes). */
+  columns?: string[];
 }
 
 /** Une demande d'impression en attente du choix du titre. */
@@ -25,6 +28,9 @@ export interface PrintTitleRequest {
   dialogTitle?: string;
   /** Contenu supplementaire affiche au-dessus du choix du titre. */
   extra?: () => ReactNode;
+  /** Colonnes du tableau imprime, renommables ; memorisees sous `columnsKey`. */
+  columns?: string[];
+  columnsKey?: string;
   print: (titles: PrintTitles) => void;
 }
 
@@ -35,9 +41,12 @@ export interface PrintTitleRequest {
  */
 export function PrintTitleDialog({ request, onClose }: { request: PrintTitleRequest | null; onClose: () => void }) {
   const [choice, setChoice] = useState<DocTitleChoice>(() => initialDocTitleChoice(''));
+  const [labels, setLabels] = useState<string[]>([]);
 
   useEffect(() => {
-    if (request) setChoice(initialDocTitleChoice(request.defaultTitle, request.defaultPeriodPrefix));
+    if (!request) return;
+    setChoice(initialDocTitleChoice(request.defaultTitle, request.defaultPeriodPrefix));
+    setLabels(request.columns ? loadColumnLabels(request.columnsKey ?? request.scope, request.columns) : []);
   }, [request]);
 
   if (!request) return null;
@@ -55,6 +64,9 @@ export function PrintTitleDialog({ request, onClose }: { request: PrintTitleRequ
           periodSuffix={request.periodSuffix}
           scope={request.scope}
         />
+        {request.columns && (
+          <ColumnLabelsEditor defaults={request.columns} value={labels} onChange={setLabels} />
+        )}
         <div className="flex gap-2 border-t border-gold/15 pt-4">
           <Button variant="secondary" className="flex-1" onClick={onClose}>Annuler</Button>
           <Button
@@ -65,7 +77,9 @@ export function PrintTitleDialog({ request, onClose }: { request: PrintTitleRequ
                 title: resolvedDocTitle(choice, request.defaultTitle),
                 periodPrefix: resolvedPeriodPrefix(choice, fallbackPrefix),
                 endText: choice.endText.trim(),
+                columns: request.columns ? labels.map((l, i) => l.trim() || request.columns![i]) : undefined,
               };
+              if (request.columns && titles.columns) saveColumnLabels(request.columnsKey ?? request.scope, titles.columns);
               onClose();
               request.print(titles);
             }}

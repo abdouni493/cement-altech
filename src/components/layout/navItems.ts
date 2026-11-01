@@ -1,6 +1,6 @@
 import {
-  Building2, Warehouse, Factory, ShoppingCart, Receipt, Calculator,
-  Users, ClipboardList, Truck, HardHat, Banknote, Wallet, TrendingUp, Settings,
+  LayoutDashboard, Boxes, Construction, PackagePlus, ReceiptText, ScanBarcode,
+  UsersRound, ClipboardCheck, Container, UserCog, HandCoins, Vault, ChartColumnBig, Settings2,
 } from 'lucide-react';
 import type { PermissionModule } from '@/types';
 import type { TranslationKey } from '@/lib/i18n';
@@ -9,7 +9,7 @@ export interface NavItem {
   to: string;
   key: TranslationKey;
   module: PermissionModule;
-  icon: typeof Building2;
+  icon: typeof LayoutDashboard;
 }
 
 /**
@@ -18,18 +18,18 @@ export interface NavItem {
  * « Dettes Clients » is gone: it now lives inside the Clients interface.
  */
 export const navItems: NavItem[] = [
-  { to: '/dashboard', key: 'dashboard', module: 'dashboard', icon: Building2 },
-  { to: '/stock', key: 'stock', module: 'stock', icon: Warehouse },
-  { to: '/production', key: 'production', module: 'production', icon: Factory },
-  { to: '/purchase', key: 'purchase', module: 'purchase', icon: ShoppingCart },
-  { to: '/sales', key: 'sales', module: 'sales', icon: Receipt },
-  { to: '/pos', key: 'pos', module: 'pos', icon: Calculator },
-  { to: '/clients', key: 'clients', module: 'clients', icon: Users },
-  { to: '/commands', key: 'commands', module: 'clients', icon: ClipboardList },
-  { to: '/suppliers', key: 'suppliers', module: 'suppliers', icon: Truck },
-  { to: '/workers', key: 'workers', module: 'workers', icon: HardHat },
-  { to: '/expenses', key: 'expenses', module: 'expenses', icon: Banknote },
-  { to: '/caisse', key: 'caisse', module: 'caisse', icon: Wallet },
-  { to: '/reports', key: 'reports', module: 'reports', icon: TrendingUp },
-  { to: '/settings', key: 'settings', module: 'settings', icon: Settings },
+  { to: '/dashboard', key: 'dashboard', module: 'dashboard', icon: LayoutDashboard },
+  { to: '/stock', key: 'stock', module: 'stock', icon: Boxes },
+  { to: '/production', key: 'production', module: 'production', icon: Construction },
+  { to: '/purchase', key: 'purchase', module: 'purchase', icon: PackagePlus },
+  { to: '/sales', key: 'sales', module: 'sales', icon: ReceiptText },
+  { to: '/pos', key: 'pos', module: 'pos', icon: ScanBarcode },
+  { to: '/clients', key: 'clients', module: 'clients', icon: UsersRound },
+  { to: '/commands', key: 'commands', module: 'clients', icon: ClipboardCheck },
+  { to: '/suppliers', key: 'suppliers', module: 'suppliers', icon: Container },
+  { to: '/workers', key: 'workers', module: 'workers', icon: UserCog },
+  { to: '/expenses', key: 'expenses', module: 'expenses', icon: HandCoins },
+  { to: '/caisse', key: 'caisse', module: 'caisse', icon: Vault },
+  { to: '/reports', key: 'reports', module: 'reports', icon: ChartColumnBig },
+  { to: '/settings', key: 'settings', module: 'settings', icon: Settings2 },
 ];

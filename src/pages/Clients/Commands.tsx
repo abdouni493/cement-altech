@@ -36,7 +36,7 @@ import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency, formatDate, formatDateTime, todayISO, DEFAULT_TVA_RATE } from '@/lib/utils';
 import { commandTtc, deliverySalesOf, lineTotal } from '@/lib/commandBilling';
-import { printCommandOrder, printDeliveryNote } from '@/lib/documents';
+import { printCommandOrder, printDeliveryNote, DELIVERY_NOTE_COLUMNS } from '@/lib/documents';
 import { PrintTitleDialog, type PrintTitleRequest } from '@/components/shared/PrintTitleDialog';
 import { cardVariants, EASE } from '@/lib/animations';
 import type { Client, CommandDelivery } from '@/types';
@@ -513,14 +513,19 @@ export default function CommandsPage() {
       defaultTitle: (delivery.isHistorical ?? cmd.isHistorical) ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON',
       scope: 'delivery',
       dialogTitle: `Imprimer le bon ${delivery.reference}`,
-      print: ({ title, endText }) => runPrintDelivery(cmd, delivery, title, endText),
+      columns: DELIVERY_NOTE_COLUMNS,
+      columnsKey: 'delivery-note',
+      print: ({ title, endText, columns }) => runPrintDelivery(cmd, delivery, title, endText, columns),
     });
 
-  const runPrintDelivery = (cmd: Command, delivery: CommandDelivery, docTitle: string, endText = '') => {
+  const runPrintDelivery = (
+    cmd: Command, delivery: CommandDelivery, docTitle: string, endText = '', columnLabels?: string[],
+  ) => {
     printDeliveryNote(
       {
         docTitle,
         endText,
+        columnLabels,
         reference: delivery.reference,
         commandReference: cmd.reference,
         bonNumber: cmd.bonNumber,

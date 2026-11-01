@@ -43,3 +43,6 @@ fix the creation of commandes and delivery creations let the user can activate t
 
 apply this updates then give me the sql code that i have to run for this new updates 
 then push all updates to rpeo with merge code directly without pull request 
+
+VITE_SUPABASE_URL=https://mkzgwfagkhtfytkvlzwb.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1remd3ZmFna2h0Znl0a3ZsendiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNTc1MDIsImV4cCI6MjEwMDgzMzUwMn0.i4LxrkyPpn18dfjoUzE_ra3vPROOkX7fOwW7yLfiZ1w

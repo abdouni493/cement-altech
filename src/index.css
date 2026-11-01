@@ -2,123 +2,130 @@
 @import "tailwindcss/components";
 @import "tailwindcss/utilities";
 
+/* ============================================================================
+ *  CHARTE : NOIR & OR — les deux modes partagent la meme identite.
+ *  Mode sombre : fond noir profond, surfaces graphite, or metallique.
+ *  Mode clair  : fond ivoire, surfaces blanches, or bruni ; la barre laterale
+ *  reste noire dans les deux modes.
+ * ========================================================================== */
 :root,
 html.dark {
-  /* Premium Cement Store Dark Palette: Obsidian Black, Gold & Silver */
-  --color-cream: #0c0a09;
-  --color-gold: #eab308;
-  --color-gold-light: #fde047;
-  --color-gold-dark: #ca8a04;
-  --color-rose: #f43f5e;
-  --color-rose-deep: #e11d48;
-  --color-lavender: #a855f7;
-  --color-lavender-deep: #9333ea;
-  --color-chocolate: #1c1917;
-  --color-caramel: #f59e0b;
-  --color-pistachio: #10b981;
-  --color-vanilla: #18181b;
+  --color-cream: #0a0a0b;
+  --color-gold: #d4af37;
+  --color-gold-light: #ecd27f;
+  --color-gold-dark: #c29b2c;
+  --color-rose: #ef4444;
+  --color-rose-deep: #dc2626;
+  --color-lavender: #818cf8;
+  --color-lavender-deep: #6366f1;
+  --color-chocolate: #131315;
+  --color-caramel: #e0a43a;
+  --color-pistachio: #22c55e;
+  --color-vanilla: #1a1a1d;
 
-  /* Signature Metallic & Dark Gradients */
-  --gradient-hero: linear-gradient(135deg, #1c1917 0%, #0c0a09 50%, #18181b 100%);
-  --gradient-sidebar: linear-gradient(180deg, #18181b 0%, #09090b 100%);
-  --gradient-card: linear-gradient(145deg, #1f1f23 0%, #121215 100%);
-  --gradient-button: linear-gradient(135deg, #fde047 0%, #eab308 50%, #ca8a04 100%);
-  --gradient-rose: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
-  --gradient-lavender: linear-gradient(135deg, #c084fc 0%, #a855f7 100%);
-  --gradient-mint: linear-gradient(135deg, #34d399 0%, #10b981 100%);
-  --gradient-glass: linear-gradient(135deg, rgba(24, 24, 27, 0.85) 0%, rgba(12, 10, 9, 0.75) 100%);
+  --gradient-hero: linear-gradient(135deg, #17150f 0%, #0a0a0b 60%, #111113 100%);
+  --gradient-sidebar: linear-gradient(180deg, #0f0f10 0%, #050505 100%);
+  --gradient-card: linear-gradient(160deg, #161618 0%, #111113 100%);
+  --gradient-button: linear-gradient(180deg, #e6c65c 0%, #d4af37 55%, #b8932c 100%);
+  --gradient-rose: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
+  --gradient-lavender: linear-gradient(180deg, #818cf8 0%, #6366f1 100%);
+  --gradient-mint: linear-gradient(180deg, #22c55e 0%, #16a34a 100%);
+  --gradient-glass: linear-gradient(135deg, rgba(19, 19, 21, 0.92) 0%, rgba(10, 10, 11, 0.86) 100%);
 
-  /* Text colors */
-  --text-primary: #f8fafc;
-  --text-secondary: #cbd5e1;
-  --text-muted: #94a3b8;
+  --text-primary: #f4efe2;
+  --text-secondary: #c8c1b1;
+  --text-muted: #8c8577;
   --text-light: #ffffff;
 
-  /* Metallic & Gold Shadows */
-  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(234, 179, 8, 0.05);
-  --shadow-hover: 0 10px 34px rgba(234, 179, 8, 0.18), 0 2px 8px rgba(0, 0, 0, 0.6);
-  --shadow-gold: 0 6px 22px rgba(234, 179, 8, 0.35);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.6), 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-hover: 0 0 0 1px rgba(212, 175, 55, 0.35), 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-gold: 0 4px 16px rgba(212, 175, 55, 0.28);
 
-  /* Toast / notification colors for dark mode */
   --toast-success-fg: #4ade80;
-  --toast-success-bg: #111f18;
+  --toast-success-bg: #0f1a13;
   --toast-success-border: rgba(74, 222, 128, 0.35);
-  --toast-error-fg: #fb7185;
-  --toast-error-bg: #241318;
-  --toast-error-border: rgba(251, 113, 133, 0.35);
-  --toast-warning-fg: #fb923c;
-  --toast-warning-bg: #241a10;
-  --toast-warning-border: rgba(251, 146, 60, 0.35);
-  --toast-info-fg: #fcd34d;
-  --toast-info-bg: #221d0e;
-  --toast-info-border: rgba(252, 211, 77, 0.35);
+  --toast-error-fg: #f87171;
+  --toast-error-bg: #1f1111;
+  --toast-error-border: rgba(248, 113, 113, 0.35);
+  --toast-warning-fg: #fbbf24;
+  --toast-warning-bg: #1d170b;
+  --toast-warning-border: rgba(251, 191, 36, 0.35);
+  --toast-info-fg: #ecd27f;
+  --toast-info-bg: #19160c;
+  --toast-info-border: rgba(212, 175, 55, 0.4);
 
-  /* Component surface colors for dark mode */
-  --surface-dropdown: #181820;
-  --surface-input: #16151a;
-  --surface-input-focus: #1d1c23;
-  --border-input: #54453b;
-  --logo-inner-bg: linear-gradient(to bottom right, #1c1917, #09090b);
+  --surface-dropdown: #161618;
+  --surface-input: #101012;
+  --surface-input-focus: #151517;
+  --border-input: #3a3428;
+  --logo-inner-bg: linear-gradient(to bottom right, #1a1814, #050505);
   --logo-inner-solid: #000000;
+
+  /* Barre laterale : noire dans les deux modes */
+  --sidebar-text: #bdb6a6;
+  --sidebar-text-strong: #f4efe2;
+  --sidebar-muted: #7a7466;
+  --sidebar-border: rgba(212, 175, 55, 0.16);
+  --btn-on-gold: #15110a;
 }
 
 html.light {
-  /* Premium Cement Store Light Palette: Ivory White & Metallic Amber/Gold */
-  --color-cream: #f8fafc;
-  --color-gold: #d97706;
-  --color-gold-light: #fbbf24;
-  --color-gold-dark: #b45309;
-  --color-rose: #f43f5e;
-  --color-rose-deep: #e11d48;
-  --color-lavender: #9333ea;
-  --color-lavender-deep: #7c3aed;
+  --color-cream: #f6f4ee;
+  --color-gold: #b8892a;
+  --color-gold-light: #d4af37;
+  --color-gold-dark: #8a6519;
+  --color-rose: #dc2626;
+  --color-rose-deep: #b91c1c;
+  --color-lavender: #6366f1;
+  --color-lavender-deep: #4f46e5;
   --color-chocolate: #ffffff;
-  --color-caramel: #d97706;
-  --color-pistachio: #059669;
-  --color-vanilla: #f1f5f9;
+  --color-caramel: #b8892a;
+  --color-pistachio: #16a34a;
+  --color-vanilla: #efebe1;
 
-  /* Light Gradients */
-  --gradient-hero: linear-gradient(135deg, #fef3c7 0%, #f8fafc 50%, #ffffff 100%);
-  --gradient-sidebar: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
-  --gradient-card: linear-gradient(145deg, #ffffff 0%, #f8fafc 100%);
-  --gradient-button: linear-gradient(135deg, #fbbf24 0%, #d97706 50%, #b45309 100%);
-  --gradient-rose: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%);
-  --gradient-lavender: linear-gradient(135deg, #c084fc 0%, #9333ea 100%);
-  --gradient-mint: linear-gradient(135deg, #34d399 0%, #059669 100%);
-  --gradient-glass: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.90) 100%);
+  --gradient-hero: linear-gradient(135deg, #f3ead2 0%, #f6f4ee 55%, #ffffff 100%);
+  --gradient-sidebar: linear-gradient(180deg, #121213 0%, #070707 100%);
+  --gradient-card: linear-gradient(160deg, #ffffff 0%, #fbfaf6 100%);
+  --gradient-button: linear-gradient(180deg, #dcbb4f 0%, #c9a032 55%, #a87f22 100%);
+  --gradient-rose: linear-gradient(180deg, #ef4444 0%, #dc2626 100%);
+  --gradient-lavender: linear-gradient(180deg, #818cf8 0%, #6366f1 100%);
+  --gradient-mint: linear-gradient(180deg, #22c55e 0%, #16a34a 100%);
+  --gradient-glass: linear-gradient(135deg, rgba(255, 255, 255, 0.96) 0%, rgba(250, 248, 242, 0.92) 100%);
 
-  /* Text colors */
-  --text-primary: #0f172a;
-  --text-secondary: #334155;
-  --text-muted: #64748b;
+  --text-primary: #111111;
+  --text-secondary: #3b3832;
+  --text-muted: #6d685d;
   --text-light: #ffffff;
 
-  /* Light Shadows */
-  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
-  --shadow-hover: 0 10px 30px rgba(217, 119, 6, 0.15), 0 2px 6px rgba(0, 0, 0, 0.08);
-  --shadow-gold: 0 6px 20px rgba(217, 119, 6, 0.25);
+  --shadow-card: 0 1px 2px rgba(17, 17, 17, 0.05), 0 6px 18px rgba(17, 17, 17, 0.06);
+  --shadow-hover: 0 0 0 1px rgba(184, 137, 42, 0.35), 0 12px 28px rgba(17, 17, 17, 0.1);
+  --shadow-gold: 0 4px 14px rgba(184, 137, 42, 0.3);
 
-  /* Toast / notification colors for light mode */
-  --toast-success-fg: #7a9e7e;
-  --toast-success-bg: #f0f7f1;
-  --toast-success-border: rgba(122, 158, 126, 0.4);
-  --toast-error-fg: #c4687a;
-  --toast-error-bg: #fbeef2;
-  --toast-error-border: rgba(196, 104, 122, 0.4);
-  --toast-warning-fg: #d4854a;
-  --toast-warning-bg: #fcf3ea;
-  --toast-warning-border: rgba(212, 133, 74, 0.4);
-  --toast-info-fg: #c9a84c;
-  --toast-info-bg: #fbf6e9;
-  --toast-info-border: rgba(201, 168, 76, 0.4);
+  --toast-success-fg: #15803d;
+  --toast-success-bg: #effaf2;
+  --toast-success-border: rgba(21, 128, 61, 0.3);
+  --toast-error-fg: #b91c1c;
+  --toast-error-bg: #fdf0f0;
+  --toast-error-border: rgba(185, 28, 28, 0.3);
+  --toast-warning-fg: #b45309;
+  --toast-warning-bg: #fdf6e9;
+  --toast-warning-border: rgba(180, 83, 9, 0.3);
+  --toast-info-fg: #8a6519;
+  --toast-info-bg: #faf5e6;
+  --toast-info-border: rgba(184, 137, 42, 0.35);
 
-  /* Component surface colors for light mode */
   --surface-dropdown: #ffffff;
-  --surface-input: #faf8f5;
+  --surface-input: #ffffff;
   --surface-input-focus: #ffffff;
-  --border-input: #d7cac0;
-  --logo-inner-bg: linear-gradient(to bottom right, #f8f7f4, #ffffff);
-  --logo-inner-solid: #ffffff;
+  --border-input: #d9d1bf;
+  --logo-inner-bg: linear-gradient(to bottom right, #1a1814, #050505);
+  --logo-inner-solid: #000000;
+
+  --sidebar-text: #bdb6a6;
+  --sidebar-text-strong: #f4efe2;
+  --sidebar-muted: #7a7466;
+  --sidebar-border: rgba(212, 175, 55, 0.16);
+  --btn-on-gold: #15110a;
 }
 
 * {
@@ -159,17 +166,17 @@ html[dir='rtl'] .font-display {
   height: 8px;
 }
 html.dark ::-webkit-scrollbar-track {
-  background: #09090b;
+  background: #0a0a0b;
 }
 html.light ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: #efebe1;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(234, 179, 8, 0.3);
+  background: rgba(212, 175, 55, 0.3);
   border-radius: 8px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(234, 179, 8, 0.6);
+  background: rgba(212, 175, 55, 0.6);
 }
 
 /* Utility classes */
@@ -177,7 +184,7 @@ html.light ::-webkit-scrollbar-track {
   background: var(--gradient-glass);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(234, 179, 8, 0.2);
+  border: 1px solid rgba(212, 175, 55, 0.2);
 }
 
 .text-gradient-gold {
@@ -224,7 +231,7 @@ html.light ::-webkit-scrollbar-track {
 }
 
 .shimmer {
-  background: linear-gradient(90deg, rgba(234, 179, 8, 0.05) 25%, rgba(234, 179, 8, 0.2) 50%, rgba(234, 179, 8, 0.05) 75%);
+  background: linear-gradient(90deg, rgba(212, 175, 55, 0.05) 25%, rgba(212, 175, 55, 0.2) 50%, rgba(212, 175, 55, 0.05) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
@@ -292,12 +299,12 @@ html.light ::-webkit-scrollbar-track {
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(180, 136, 27, 0.28);
+  background: rgba(184, 137, 42, 0.28);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(180, 136, 27, 0.5); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: rgba(184, 137, 42, 0.5); background-clip: content-box; }
 
 /* `content-visibility: auto` sur les lignes de tableau a ete RETIRE : la
    hauteur estimee (42 px) remplacee par la vraie hauteur a l'affichage
@@ -316,3 +323,9 @@ html.light ::-webkit-scrollbar-track {
     scroll-behavior: auto !important;
   }
 }
+
+/* Barre de defilement de la barre laterale (toujours noire). */
+.sidebar-scroll::-webkit-scrollbar-thumb { background: rgba(212, 175, 55, 0.22); background-clip: content-box; }
+
+/* Selection de texte aux couleurs de la charte. */
+::selection { background: rgba(212, 175, 55, 0.35); }

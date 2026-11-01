@@ -29,7 +29,7 @@ import { clientAccountOf } from '@/lib/accounts';
 import { commandTtc } from '@/lib/commandBilling';
 import { formatCurrency, formatDate, formatDateTime, paymentMethodLabel, todayISO } from '@/lib/utils';
 import { printSaleInvoice } from '@/lib/invoicePrint';
-import { printDeliveryNote, printCommandOrder, printPaymentReceipt } from '@/lib/documents';
+import { printDeliveryNote, DELIVERY_NOTE_COLUMNS, printCommandOrder, printPaymentReceipt } from '@/lib/documents';
 import { printListDocument } from '@/lib/statementPrint';
 import type {
   Client, PartyOldDebt, PartyPayment, Sale, PartyCreditRefund, CommandAdjustment,
@@ -247,15 +247,18 @@ export function ClientHistoryScreen({
       defaultTitle: h.delivery.isHistorical ? 'ANCIENNE LIVRAISON' : 'BON DE LIVRAISON',
       scope: 'delivery',
       dialogTitle: `Imprimer le bon ${h.delivery.reference}`,
-      print: ({ title, endText }) => runPrintDelivery(h, title, endText),
+      columns: DELIVERY_NOTE_COLUMNS,
+      columnsKey: 'delivery-note',
+      print: ({ title, endText, columns }) => runPrintDelivery(h, title, endText, columns),
     });
 
-  const runPrintDelivery = (h: HistoryDelivery, docTitle: string, endText = '') => {
+  const runPrintDelivery = (h: HistoryDelivery, docTitle: string, endText = '', columnLabels?: string[]) => {
     const { delivery: d, command: c } = h;
     printDeliveryNote(
       {
         docTitle,
         endText,
+        columnLabels,
         reference: d.reference,
         commandReference: c?.reference ?? '',
         bonNumber: c?.bonNumber,

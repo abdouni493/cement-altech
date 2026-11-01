@@ -29,7 +29,7 @@ import {
   buildClientLedger, sliceLedger, ledgerRows, type DebitKind, type LedgerSlice,
 } from '@/lib/ledger';
 import {
-  printPartyStatement, statementTotals, dayBefore,
+  printPartyStatement, statementTotals, dayBefore, STATEMENT_COLUMNS,
   defaultStatementTitle, defaultStatementPeriodPrefix, periodSuffix,
 } from '@/lib/statementPrint';
 import type { DocTable } from '@/lib/officialDoc';
@@ -297,6 +297,8 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
         includePrior,
         includeVersements: c.versements,
         includeProducts: c.products,
+        productsOnly: c.productsOnly,
+        columnLabels: c.columnLabels,
         tvaMode: c.tvaMode,
         tvaRate: c.tvaRate,
         extraTables: extraTables(c),
@@ -315,7 +317,7 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
     const slice = sliceFor(mode, c);
     if (!slice) return;
     // Une dette anterieure a la periode ? On demande avant d'imprimer.
-    if (c.oldDebts && Math.abs(slice.priorBalance) > 0.004) {
+    if (c.oldDebts && !c.productsOnly && Math.abs(slice.priorBalance) > 0.004) {
       setPriorAsk({ mode, choice: c, slice });
       return;
     }
@@ -704,6 +706,8 @@ export function ClientStatementModal({ client, onClose }: { client: Client | nul
 
           {data && (
             <StatementPrintDialog
+              columns={STATEMENT_COLUMNS.client}
+              columnsKey="statement-client"
               open={!!printMode}
               onClose={() => setPrintMode(null)}
               onPrint={onPrintChoice}

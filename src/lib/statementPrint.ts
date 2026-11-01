@@ -1,7 +1,7 @@
 import type { StoreSettings } from '@/types';
 import { formatCurrency, formatDate, todayISO } from './utils';
 import {
-  printOfficialDocument,
+  printOfficialDocument, withColumnLabels,
   type DocColumn, type DocRow, type DocTable, type DocTotal,
 } from './officialDoc';
 import type { ClientFiscal } from './documents';
@@ -47,6 +47,10 @@ export interface StatementPrintOptions {
   includeVersements: boolean;
   /** Tableau recapitulatif des marchandises. */
   includeProducts: boolean;
+  /** N'imprimer QUE le tableau des marchandises. */
+  productsOnly?: boolean;
+  /** Noms des colonnes du tableau des operations (ordre de STATEMENT_COLUMNS). */
+  columnLabels?: string[];
   tvaMode: StatementTvaMode;
   tvaRate: number;
   /** Tableaux d'information (commandes en cours, annulations...). */
@@ -60,6 +64,12 @@ export interface StatementPrintOptions {
   /** Versements masques de la liste (toujours comptes dans les totaux). */
   hiddenVersements?: string[];
 }
+
+/** Colonnes du tableau des operations, dans l'ordre imprime (renommables). */
+export const STATEMENT_COLUMNS = {
+  client: ['Date', 'Designation', 'Adresse de livraison', 'Quantite', 'Prix U', 'P.T H.T'],
+  supplier: ['Date', 'N de bon', 'Matricule', 'Designation', 'Quantite', 'Prix U', 'Montant'],
+};
 
 /** Titre par defaut d'un compte rendu / bon de livraison de periode. */
 export function defaultStatementTitle(kind: 'client' | 'supplier', mode: 'statement' | 'deliveries'): string {
@@ -157,14 +167,15 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
   const rows: DocRow[] = [];
 
   if (isClient) {
-    columns = [
-      { label: 'Date', align: 'center', width: '12%' },
-      { label: 'Designation', align: 'left' },
-      { label: 'Adresse de livraison', align: 'left', width: '20%' },
-      { label: 'Quantite', align: 'center', width: '11%' },
-      { label: 'Prix U', align: 'right', width: '15%' },
-      { label: 'P.T H.T', align: 'right', width: '17%' },
-    ];
+    const L = STATEMENT_COLUMNS.client;
+    columns = withColumnLabels([
+      { label: L[0], align: 'center', width: '12%' },
+      { label: L[1], align: 'left' },
+      { label: L[2], align: 'left', width: '20%' },
+      { label: L[3], align: 'center', width: '11%' },
+      { label: L[4], align: 'right', width: '15%' },
+      { label: L[5], align: 'right', width: '17%' },
+    ], o.columnLabels);
     main.forEach((d) => {
       const where = (d.location || (d.kind === 'sale' ? 'VENTE COMPTOIR' : '') || '/').toUpperCase();
       if (!d.lines.length) {
@@ -186,15 +197,16 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
     });
   } else {
     // Fournisseur : colonnes « N de bon » et « Matricule » demandees.
-    columns = [
-      { label: 'Date', align: 'center', width: '11%' },
-      { label: 'N de bon', align: 'center', width: '12%' },
-      { label: 'Matricule', align: 'center', width: '13%' },
-      { label: 'Designation', align: 'left' },
-      { label: 'Quantite', align: 'center', width: '10%' },
-      { label: 'Prix U', align: 'right', width: '13%' },
-      { label: 'Montant', align: 'right', width: '15%' },
-    ];
+    const L = STATEMENT_COLUMNS.supplier;
+    columns = withColumnLabels([
+      { label: L[0], align: 'center', width: '11%' },
+      { label: L[1], align: 'center', width: '12%' },
+      { label: L[2], align: 'center', width: '13%' },
+      { label: L[3], align: 'left' },
+      { label: L[4], align: 'center', width: '10%' },
+      { label: L[5], align: 'right', width: '13%' },
+      { label: L[6], align: 'right', width: '15%' },
+    ], o.columnLabels);
     main.forEach((d) => {
       const bon = (d.bonNumber || '/').toUpperCase();
       const plate = (d.driverPlate || '/').toUpperCase();
@@ -260,7 +272,7 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
     );
   }
 
-  const tables: DocTable[] = [
+  const tables: DocTable[] = o.productsOnly ? [] : [
     {
       title: o.mode === 'deliveries'
         ? undefined
@@ -274,7 +286,7 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
   ];
 
   /* ---- marchandises (optionnel) ----------------------------------------- */
-  if (o.includeProducts) {
+  if (o.includeProducts || o.productsOnly) {
     const grouped = new Map<string, { name: string; unit?: string; qty: number; price: number; amount: number }>();
     main.forEach((d) =>
       d.lines.forEach((l) => {
@@ -286,6 +298,20 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
       })
     );
     const list = [...grouped.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+    // T.V.A du tableau des marchandises : meme regle que le document
+    // (taux impose, TVA des documents au prorata, ou aucune).
+    const pHt = r2(list.reduce((s, p) => s + p.amount, 0));
+    const pTva = o.tvaMode === 'none' ? 0
+      : o.tvaMode === 'forced' ? r2((pHt * (o.tvaRate || 0)) / 100)
+      : t.ht > 0 ? r2((t.tva * pHt) / t.ht) : 0;
+    const pRate = o.tvaMode === 'forced' ? ` ${o.tvaRate} %` : t.rates.length === 1 ? ` ${t.rates[0]} %` : '';
+    const pTotals: DocTotal[] = pTva > 0.004
+      ? [
+          { label: 'Total H.T', value: formatCurrency(pHt) },
+          { label: `T.V.A${pRate}`, value: formatCurrency(pTva) },
+          { label: 'Total T.T.C', value: formatCurrency(r2(pHt + pTva)), strong: true },
+        ]
+      : [{ label: 'Total marchandises', value: formatCurrency(pHt), strong: true }];
     tables.push({
       title: isClient ? 'Marchandises de la periode' : 'Marchandises recues sur la periode',
       columns: [
@@ -302,7 +328,7 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
           formatCurrency(r2(p.amount)),
         ],
       })),
-      totals: [{ label: 'Total marchandises', value: formatCurrency(r2(list.reduce((s, p) => s + p.amount, 0))), strong: true }],
+      totals: pTotals,
       emptyLabel: 'Aucune marchandise sur la periode',
     });
   }
@@ -324,7 +350,7 @@ export function printPartyStatement(o: StatementPrintOptions, store: StoreSettin
       // document, chacun avec sa date. Seuls les VERSEMENTS du tiers y
       // figurent — les reglements de commande / de facture n'y sont plus
       // detailles (ils restent compris dans « Total versements »).
-      footNotes: o.includeVersements
+      footNotes: o.includeVersements && !o.productsOnly
         ? versementsOnly(slice.credits)
             .filter((c) => !(o.hiddenVersements ?? []).includes(c.id))
             .sort((a, b) => a.date.localeCompare(b.date))

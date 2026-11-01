@@ -12,6 +12,7 @@ import {
 } from './DocTitlePicker';
 import { VersementChecklist, type VersementItem } from './VersementChecklist';
 import { DocumentChecklist, type DocumentItem } from './DocumentChecklist';
+import { ColumnLabelsEditor, loadColumnLabels, saveColumnLabels } from './ColumnLabelsEditor';
 
 /* ============================================================================
  *  AVANT D'IMPRIMER UN COMPTE RENDU / UN BON DE LIVRAISON DE PERIODE
@@ -55,6 +56,10 @@ export interface StatementPrintChoice {
   excludedDocs?: string[];
   /** Parties de l'historique cochees (tableaux d'information en fin de document). */
   historyKeys?: string[];
+  /** N'imprimer QUE le tableau des marchandises (sans le tableau des operations). */
+  productsOnly?: boolean;
+  /** Noms des colonnes du tableau des operations choisis a l'impression. */
+  columnLabels?: string[];
 }
 
 /** Un onglet de l'historique du tiers, imprimable avec le compte rendu. */
@@ -96,7 +101,7 @@ export interface StatementPreview {
 
 const EMPTY_CHOICE: StatementPrintChoice = {
   deliveries: false, sales: false, purchases: false, oldDebts: false, versements: false,
-  products: false, pendingCommands: false, adjustments: false,
+  products: false, pendingCommands: false, adjustments: false, productsOnly: false,
   tvaMode: 'documents', tvaRate: DEFAULT_TVA_RATE,
 };
 
@@ -119,7 +124,11 @@ export function StatementPrintDialog({
   open, onClose, onPrint, parts, kind, preview, note,
   title = 'Impression du compte rendu', printLabel = 'Imprimer',
   defaultDocTitle, defaultPeriodPrefix, periodSuffix, versementItems = [], documentItems = [], historyParts = [],
+  columns, columnsKey,
 }: {
+  /** Colonnes du tableau des operations, renommables ; memorisees sous `columnsKey`. */
+  columns?: string[];
+  columnsKey?: string;
   /** Onglets de l'historique du tiers, a cocher pour les joindre au document. */
   historyParts?: StatementHistoryPart[];
   /** Documents de la periode, a cocher un par un ou par adresse. */
@@ -147,6 +156,7 @@ export function StatementPrintDialog({
   const [excludedDocs, setExcludedDocs] = useState<string[]>([]);
   const [historyKeys, setHistoryKeys] = useState<string[]>([]);
   const [paidFilters, setPaidFilters] = useState<Record<string, PaidFilter>>({});
+  const [labels, setLabels] = useState<string[]>([]);
   const [titleChoice, setTitleChoice] = useState<DocTitleChoice>(() =>
     initialDocTitleChoice(defaultDocTitle, defaultPeriodPrefix));
 
@@ -166,6 +176,7 @@ export function StatementPrintDialog({
     setExcludedDocs([]);
     setHistoryKeys([]);
     setPaidFilters({});
+    setLabels(columns ? loadColumnLabels(columnsKey ?? kind, columns) : []);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -173,7 +184,10 @@ export function StatementPrintDialog({
     if (p.locked) return;
     setChoice((c) => {
       const next = { ...c, [p.key]: !c[p.key] };
-      if (p.key === 'products') writeProductsPref(kind, next.products);
+      if (p.key === 'products') {
+        writeProductsPref(kind, next.products);
+        if (!next.products) next.productsOnly = false;
+      }
       return next;
     });
   };
@@ -240,6 +254,28 @@ export function StatementPrintDialog({
               </div>
             );
           })}
+          {choice.products && parts.some((p) => p.key === 'products') && (
+            <button
+              type="button"
+              onClick={() => setChoice((c) => ({ ...c, productsOnly: !c.productsOnly }))}
+              className={cn(
+                'flex w-full items-start gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors',
+                choice.productsOnly ? 'border-gold bg-gold/15' : 'border-gold/25 bg-vanilla/30 hover:bg-gold/5'
+              )}
+            >
+              {choice.productsOnly ? <CheckSquare size={16} className="mt-0.5 shrink-0 text-gold-dark" />
+                : <Square size={16} className="mt-0.5 shrink-0 text-text-muted" />}
+              <span>
+                <span className="block text-[13px] font-semibold text-text-primary">
+                  Imprimer uniquement le tableau des marchandises
+                </span>
+                <span className="block text-[11px] text-text-muted">
+                  Sans le tableau des opérations ni les versements — les opérations cochées ci-dessus servent de source,
+                  et la T.V.A choisie plus bas est appliquée au tableau.
+                </span>
+              </span>
+            </button>
+          )}
         </section>
 
         {historyParts.length > 0 && (
@@ -324,6 +360,10 @@ export function StatementPrintDialog({
           <VersementChecklist items={versementItems} hidden={hiddenVersements} onChange={setHiddenVersements} />
         )}
 
+        {columns && !choice.productsOnly && (
+          <ColumnLabelsEditor defaults={columns} value={labels} onChange={setLabels} />
+        )}
+
         <DocTitlePicker
           value={titleChoice}
           onChange={setTitleChoice}
@@ -400,15 +440,20 @@ export function StatementPrintDialog({
 
         <div className="flex gap-2 border-t border-gold/15 pt-4">
           <Button variant="secondary" className="flex-1" onClick={onClose}>Annuler</Button>
-          <Button variant="gold" className="flex-1 font-bold" disabled={nothingInTable} onClick={() => onPrint({
+          <Button variant="gold" className="flex-1 font-bold" disabled={nothingInTable} onClick={() => {
+            const columnLabels = columns ? labels.map((l, i) => l.trim() || columns[i]) : undefined;
+            if (columns && columnLabels) saveColumnLabels(columnsKey ?? kind, columnLabels);
+            onPrint({
             ...choice,
+            columnLabels,
             docTitle: resolvedDocTitle(titleChoice, defaultDocTitle),
             periodPrefix: resolvedPeriodPrefix(titleChoice, defaultPeriodPrefix),
             endText: titleChoice.endText.trim(),
             hiddenVersements,
             excludedDocs,
             historyKeys: historyKeys.map((k) => (paidFilters[k] && paidFilters[k] !== 'all' ? `${k}:${paidFilters[k]}` : k)),
-          })}>
+            });
+          }}>
             <Printer size={16} /> {printLabel}
           </Button>
         </div>

@@ -4,51 +4,46 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/50 disabled:opacity-50 disabled:pointer-events-none whitespace-nowrap active:scale-[0.98]',
+  'inline-flex items-center justify-center gap-2 rounded-lg font-semibold tracking-[0.01em] select-none whitespace-nowrap ' +
+    'transition-[background-color,border-color,color,box-shadow,filter] duration-150 ' +
+    'focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/60 focus-visible:ring-offset-2 focus-visible:ring-offset-cream ' +
+    'disabled:opacity-45 disabled:pointer-events-none [&_svg]:shrink-0',
   {
     variants: {
       variant: {
-        // Gold buttons remain signature rich metallic gold
-        primary: 'bg-gradient-button text-stone-950 font-bold shadow-gold hover:brightness-105 border border-amber-300/40',
-        gold: 'bg-gradient-button text-stone-950 font-bold shadow-gold hover:brightness-105 border border-amber-300/40',
+        // Or metallique, texte noir — l'action principale de chaque ecran
+        primary:
+          'bg-gradient-button text-[--btn-on-gold] border border-gold-dark/50 ' +
+          'shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_1px_2px_rgba(0,0,0,0.25)] hover:brightness-110 hover:shadow-gold',
+        gold:
+          'bg-gradient-button text-[--btn-on-gold] border border-gold-dark/50 ' +
+          'shadow-[inset_0_1px_0_rgba(255,255,255,0.35),0_1px_2px_rgba(0,0,0,0.25)] hover:brightness-110 hover:shadow-gold',
 
-        // Theme-adaptive secondary button
+        // Surface neutre, filet dore au survol
         secondary:
-          'border font-semibold shadow-sm ' +
-          'bg-vanilla text-text-secondary border-[--border-input] hover:bg-gold/10 hover:text-text-primary',
+          'bg-chocolate text-text-primary border border-[--border-input] shadow-sm ' +
+          'hover:border-gold/70 hover:text-gold-dark hover:bg-vanilla/60',
 
+        // Noir et or — action forte mais secondaire
         liver:
-          'border font-bold shadow-md ' +
-          'bg-gradient-to-r from-[#6b574d] to-[#54433a] text-amber-50 border-[#45362e] hover:from-[#5c4940] hover:to-[#483931]',
+          'bg-[#111111] text-gold-light border border-gold/40 shadow-sm ' +
+          'hover:bg-black hover:border-gold hover:text-[#f4dc8f]',
 
-        rose:
-          'text-white shadow-md border ' +
-          'bg-gradient-to-r from-rose-600 to-rose-700 border-rose/60 hover:from-rose-700 hover:to-rose-800',
+        rose: 'bg-rose-deep text-white border border-rose-deep shadow-sm hover:brightness-110',
+        danger: 'bg-rose-deep text-white border border-rose-deep shadow-sm hover:brightness-110',
+        lavender: 'bg-lavender-deep text-white border border-lavender-deep shadow-sm hover:brightness-110',
+        mint: 'bg-emerald-600 text-white border border-emerald-700 shadow-sm hover:bg-emerald-700',
 
-        danger:
-          'text-white shadow-md border ' +
-          'bg-gradient-to-r from-rose-600 to-rose-700 border-rose/60 hover:from-rose-700 hover:to-rose-800',
-
-        lavender:
-          'text-white shadow-md border ' +
-          'bg-gradient-to-r from-purple-600 to-indigo-600 border-purple-400 hover:from-purple-700 hover:to-indigo-700',
-
-        mint:
-          'text-white shadow-md border ' +
-          'bg-gradient-to-r from-emerald-600 to-teal-700 border-emerald-500 hover:from-emerald-700 hover:to-teal-800',
-
-        ghost:
-          'bg-transparent font-medium ' +
-          'text-text-secondary hover:bg-gold/10 hover:text-text-primary',
+        ghost: 'bg-transparent text-text-secondary hover:bg-gold/10 hover:text-text-primary',
 
         outline:
-          'bg-transparent border-2 font-bold ' +
-          'border-gold/60 text-gold hover:bg-gold/15 hover:text-gold-dark',
+          'bg-transparent border border-gold/70 text-gold-dark ' +
+          'hover:bg-gold hover:text-[--btn-on-gold] hover:border-gold',
       },
       size: {
-        sm: 'text-xs px-3 py-1.5 h-8',
-        md: 'text-sm px-4 py-2.5 h-10',
-        lg: 'text-base px-6 py-3 h-12',
+        sm: 'h-8 px-3 text-xs',
+        md: 'h-10 px-4 text-sm',
+        lg: 'h-12 px-6 text-[15px]',
         icon: 'h-9 w-9 p-0',
       },
     },
@@ -64,8 +59,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, children, ...props }, ref) => (
     <motion.button
       ref={ref}
-      whileHover={{ scale: 1.02 }}
-      whileTap={{ scale: 0.97 }}
+      whileTap={{ scale: 0.98 }}
       className={cn(buttonVariants({ variant, size }), className)}
       {...props}
     >
