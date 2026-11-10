@@ -63,6 +63,31 @@ export interface Supplier {
   creditAmount?: number;
 }
 
+// ---------- Deliverors (livreurs) ----------
+export interface Deliverer {
+  id: string;
+  name: string;
+  phone: string;
+  address: string;
+}
+
+/** Règlement direct versé à un livreur (bouton « Payer la dette »). */
+export interface DelivererPayment {
+  id: string;
+  delivererId: string;
+  delivererName?: string;
+  amount: number;
+  date: string;        // YYYY-MM-DD
+  paidAt: string;      // ISO datetime
+  notes?: string;
+  method?: PaymentMethod;
+  chequeNumber?: string;
+  virementNumber?: string;
+  bankName?: string;
+  createdAt?: string;
+  createdBy?: string;
+}
+
 // ---------- Purchases ----------
 export interface PurchaseLine {
   productId: string;
@@ -121,6 +146,13 @@ export interface Purchase {
   allocatedAmount?: number;
   payments: Payment[];
   createdBy?: string;
+  /** Livreur affecté à cette facture (facultatif). */
+  delivererId?: string;
+  delivererName?: string;
+  /** Coût de transport fixé au livreur pour cette facture. */
+  delivererCost?: number;
+  /** Montant déjà payé au livreur au moment de l'achat. */
+  delivererPaid?: number;
 }
 
 // ---------- Clients & Client Debts ----------

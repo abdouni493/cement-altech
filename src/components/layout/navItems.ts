@@ -1,6 +1,7 @@
 import {
   LayoutDashboard, Boxes, Construction, PackagePlus, ReceiptText, ScanBarcode,
   UsersRound, ClipboardCheck, Container, UserCog, HandCoins, Vault, ChartColumnBig, Settings2,
+  Bike,
 } from 'lucide-react';
 import type { PermissionModule } from '@/types';
 import type { TranslationKey } from '@/lib/i18n';
@@ -27,6 +28,7 @@ export const navItems: NavItem[] = [
   { to: '/clients', key: 'clients', module: 'clients', icon: UsersRound },
   { to: '/commands', key: 'commands', module: 'clients', icon: ClipboardCheck },
   { to: '/suppliers', key: 'suppliers', module: 'suppliers', icon: Container },
+  { to: '/deliverers', key: 'deliverers', module: 'suppliers', icon: Bike },
   { to: '/workers', key: 'workers', module: 'workers', icon: UserCog },
   { to: '/expenses', key: 'expenses', module: 'expenses', icon: HandCoins },
   { to: '/caisse', key: 'caisse', module: 'caisse', icon: Vault },

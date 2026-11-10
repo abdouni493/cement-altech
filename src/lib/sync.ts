@@ -1,5 +1,6 @@
 import { useStockStore } from '@/store/stockStore';
 import { useSupplierStore } from '@/store/supplierStore';
+import { useDelivererStore } from '@/store/delivererStore';
 import { useClientStore } from '@/store/clientStore';
 import { usePurchaseStore } from '@/store/purchaseStore';
 import { useSalesStore } from '@/store/salesStore';
@@ -57,6 +58,7 @@ async function runHydration(): Promise<{ ok: boolean; failed: string[] }> {
   await Promise.all([
     step('stock', () => useStockStore.getState().load()),
     step('fournisseurs', () => useSupplierStore.getState().load()),
+    step('livreurs', () => useDelivererStore.getState().load()),
     step('clients', () => useClientStore.getState().load()),
     step('achats', () => usePurchaseStore.getState().load()),
     step('ventes', () => useSalesStore.getState().load()),

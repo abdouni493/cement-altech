@@ -27,6 +27,7 @@ const Sales         = lazy(() => import('@/pages/Sales'));
 const Clients       = lazy(() => import('@/pages/Clients'));
 const Commands      = lazy(() => import('@/pages/Clients/Commands'));
 const Suppliers     = lazy(() => import('@/pages/Suppliers'));
+const Deliverers    = lazy(() => import('@/pages/Deliverers'));
 const Workers       = lazy(() => import('@/pages/Workers'));
 const Expenses      = lazy(() => import('@/pages/Expenses'));
 const Caisse        = lazy(() => import('@/pages/Caisse'));
@@ -191,6 +192,7 @@ export default function App() {
           <Route path="/commands" element={<Guarded module="clients"><Commands /></Guarded>} />
           <Route path="/clients/commands" element={<Guarded module="clients"><Commands /></Guarded>} />
           <Route path="/suppliers" element={<Guarded module="suppliers"><Suppliers /></Guarded>} />
+          <Route path="/deliverers" element={<Guarded module="suppliers"><Deliverers /></Guarded>} />
           <Route path="/workers" element={<Guarded module="workers"><Workers /></Guarded>} />
           <Route path="/expenses" element={<Guarded module="expenses"><Expenses /></Guarded>} />
           {/* Les dettes clients sont désormais intégrées à l'interface Clients */}
