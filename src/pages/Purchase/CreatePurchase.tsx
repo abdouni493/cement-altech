@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Plus, X, Truck, Package, Wallet, Ruler, Check, FileText, CarFront, History, AlertTriangle, PencilLine, PiggyBank } from 'lucide-react';
+import { Search, Plus, X, Truck, Package, Wallet, Ruler, Check, FileText, CarFront, History, AlertTriangle, PencilLine, PiggyBank, Bike } from 'lucide-react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Switch } from '@/components/ui/Switch';
@@ -9,7 +9,9 @@ import { ProductForm } from '@/components/shared/ProductForm';
 import { SupplierForm } from '@/components/shared/SupplierForm';
 import { useStockStore } from '@/store/stockStore';
 import { useSupplierStore } from '@/store/supplierStore';
+import { useDelivererStore } from '@/store/delivererStore';
 import { usePurchaseStore } from '@/store/purchaseStore';
+import { rpc } from '@/lib/db';
 import { formatCurrency, todayISO } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 import type { PurchaseLine, Product, Purchase } from '@/types';
@@ -45,6 +47,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
   const products = useStockStore((s) => s.products);
   const addProduct = useStockStore((s) => s.addProduct);
   const { suppliers, addSupplier, applyCreditToPurchase, payDebt: paySupplier } = useSupplierStore();
+  const { deliverers, addDeliverer, load: loadDeliverers } = useDelivererStore();
   const addPurchase = usePurchaseStore((s) => s.addPurchase);
   const updatePurchase = usePurchaseStore((s) => s.updatePurchase);
 
@@ -64,6 +67,13 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
   const [showProductForm, setShowProductForm] = useState(false);
   const [showSupplierForm, setShowSupplierForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  // ---- Livreur (facultatif, activé par défaut) ----------------------------
+  const [delivererEnabled, setDelivererEnabled] = useState(true);
+  const [delivererSearch, setDelivererSearch] = useState('');
+  const [delivererId, setDelivererId] = useState('');
+  const [delivererCost, setDelivererCost] = useState<number>(0);
+  const [delivererPaid, setDelivererPaid] = useState<number>(0);
+  const [showDelivererForm, setShowDelivererForm] = useState(false);
   /** Trop-versé du fournisseur (versé en trop auparavant) utilisé sur cette facture. */
   const [useSupplierCredit, setUseSupplierCredit] = useState(true);
   const [creditInput, setCreditInput] = useState<number | null>(null);
@@ -81,6 +91,18 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
     setBonNumber(editing.bonNumber || '');
     setDriverPlate(editing.driverPlate || '');
     setPaidAmount(editing.paidAmount);
+    if (editing.delivererId) {
+      setDelivererEnabled(true);
+      setDelivererId(editing.delivererId);
+      setDelivererSearch(
+        deliverers.find((d) => d.id === editing.delivererId)?.name
+        || editing.delivererName || ''
+      );
+      setDelivererCost(Number(editing.delivererCost) || 0);
+      setDelivererPaid(Number(editing.delivererPaid) || 0);
+    } else {
+      setDelivererEnabled(false);
+    }
     setLines(
       editing.products.map((l, i) => {
         const prod = products.find((p) => p.id === l.productId);
@@ -130,6 +152,42 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
     const s = supplierSearch.toLowerCase();
     return suppliers.filter((sup) => sup.name.toLowerCase().includes(s)).slice(0, 6);
   }, [supplierSearch, suppliers]);
+
+  const delivererResults = useMemo(() => {
+    if (!delivererSearch) return [];
+    const s = delivererSearch.toLowerCase();
+    return deliverers.filter((d) => d.name.toLowerCase().includes(s)).slice(0, 6);
+  }, [delivererSearch, deliverers]);
+
+  const handleDelivererCreated = async (data: { name: string; phone: string; address: string }) => {
+    const d = await addDeliverer(data);
+    setDelivererId(d.id);
+    setDelivererSearch(d.name);
+    setShowDelivererForm(false);
+    toast.success('Livreur créé');
+  };
+
+  /** Pose / met à jour le livreur de la facture après sa création ou sa modif. */
+  const saveDeliverer = async (purchaseId: string) => {
+    const wants = delivererEnabled && !!delivererId;
+    const had = !!editing?.delivererId;
+    // Rien à faire : pas de livreur demandé et aucun à retirer — on n'appelle
+    // pas la base pour ne pas gêner les utilisateurs qui n'ont pas la mise à jour.
+    if (!wants && !had) return;
+    try {
+      await rpc.setPurchaseDeliverer(
+        purchaseId,
+        wants ? delivererId : null,
+        wants ? Number(delivererCost) || 0 : 0,
+        wants ? Number(delivererPaid) || 0 : 0,
+      );
+      await Promise.all([usePurchaseStore.getState().load(), loadDeliverers()]);
+    } catch {
+      toast.error(
+        "Livreur non enregistré : exécutez altech_production_update_livreurs.sql sur la base de données."
+      );
+    }
+  };
 
   const addLine = (p: Product) => {
     if (lines.some((l) => l.productId === p.id)) {
@@ -206,6 +264,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
           products: payloadLines,
           paidAmount: Number(paidAmount),
         });
+        await saveDeliverer(editing.id);
         toast.success(
           isHistorical
             ? 'Ancien achat modifié — historique du fournisseur mis à jour'
@@ -233,6 +292,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
           if (applied > 0) toast.info(`Trop-versé du fournisseur utilisé : ${formatCurrency(applied)}`);
         } catch { /* message déjà affiché */ }
       }
+      if (purchase?.id) await saveDeliverer(purchase.id);
       if (overpaid > 0.004 && !historical) {
         try {
           await paySupplier(
@@ -247,7 +307,8 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
           ? "Ancien achat enregistré — stock actuel inchangé, historique du fournisseur mis à jour"
           : 'Facture enregistrée — quantités du stock mises à jour'
       );
-      onCreated?.(purchase);
+      const freshCreated = usePurchaseStore.getState().purchases.find((p) => p.id === purchase?.id) ?? purchase;
+      onCreated?.(freshCreated);
       onClose();
     } catch {
       /* the store already showed the error */
@@ -517,10 +578,83 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
         </div>
       </section>
 
-      {/* 3 — Paiement */}
+      {/* 3 — Livreur (facultatif, activé par défaut) */}
+      <section className="bg-vanilla/30 rounded-2xl p-4 border border-gold/15">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-display font-semibold text-text-primary flex items-center gap-2 text-sm">
+            <Bike size={16} className="text-gold" /> 3. Livreur
+            <span className="normal-case tracking-normal font-medium text-text-muted/70 text-xs">(facultatif)</span>
+          </h3>
+          <Switch
+            checked={delivererEnabled}
+            onChange={(v) => { setDelivererEnabled(v); if (!v) { setDelivererId(''); setDelivererSearch(''); } }}
+            label="Affecter un livreur"
+          />
+        </div>
+
+        {delivererEnabled && (
+          <>
+            <div className="flex flex-wrap gap-2">
+              <div className="relative flex-1 min-w-[220px]">
+                <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                <Input
+                  value={delivererSearch}
+                  onChange={(e) => { setDelivererSearch(e.target.value); setDelivererId(''); }}
+                  placeholder="Rechercher un livreur…"
+                  className="pl-10"
+                />
+                {delivererResults.length > 0 && !delivererId && (
+                  <div className="absolute z-20 mt-1 w-full rounded-xl border border-gold/20 bg-[--surface-dropdown] shadow-hover overflow-hidden">
+                    {delivererResults.map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => { setDelivererId(d.id); setDelivererSearch(d.name); }}
+                        className="w-full text-left px-4 py-2.5 text-sm hover:bg-gold/10"
+                      >
+                        {d.name} {d.phone && <span className="text-text-muted text-xs">· {d.phone}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <Button variant="secondary" onClick={() => setShowDelivererForm(true)}>
+                <Plus size={16} /> Livreur
+              </Button>
+            </div>
+            {delivererId && (
+              <p className="text-sm text-pistachio mt-2 flex items-center gap-1.5">
+                <Check size={15} /> {deliverers.find((d) => d.id === delivererId)?.name}
+              </p>
+            )}
+
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <Input
+                label="Coût du livreur pour cet achat (DA)"
+                type="number" step="any" min={0}
+                value={delivererCost}
+                onChange={(e) => setDelivererCost(Number(e.target.value))}
+              />
+              <Input
+                label="Payé au livreur (DA)"
+                type="number" step="any" min={0}
+                value={delivererPaid}
+                onChange={(e) => setDelivererPaid(Number(e.target.value))}
+              />
+            </div>
+            <p className="mt-2 text-[11px] text-text-muted">
+              Reste dû au livreur&nbsp;:
+              <b className="tabular text-rose-deep"> {formatCurrency(Math.max(0, (Number(delivererCost) || 0) - (Number(delivererPaid) || 0)))}</b>
+              {' '}— le montant payé au livreur sort de la caisse et s'enregistre dans son historique.
+            </p>
+          </>
+        )}
+      </section>
+
+      {/* 4 — Paiement */}
       <section className="bg-vanilla/30 rounded-2xl p-4 border border-gold/15">
         <h3 className="font-display font-semibold text-text-primary mb-3 flex items-center gap-2 text-sm">
-          <Wallet size={16} className="text-gold" /> 3. Paiement
+          <Wallet size={16} className="text-gold" /> 4. Paiement fournisseur
         </h3>
         <div className="flex flex-wrap items-end gap-4">
           <div className="flex-1 min-w-[150px]">
@@ -613,6 +747,9 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
       </Modal>
       <Modal open={showSupplierForm} onClose={() => setShowSupplierForm(false)} title="Nouveau fournisseur" size="sm">
         <SupplierForm onSubmit={handleSupplierCreated} onCancel={() => setShowSupplierForm(false)} />
+      </Modal>
+      <Modal open={showDelivererForm} onClose={() => setShowDelivererForm(false)} title="Nouveau livreur" size="sm">
+        <SupplierForm onSubmit={handleDelivererCreated} onCancel={() => setShowDelivererForm(false)} />
       </Modal>
     </div>
   );
