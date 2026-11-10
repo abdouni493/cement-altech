@@ -32,6 +32,7 @@ export function DelivererHistoryModal({ deliverer, stats, onClose, onPay }: Prop
   const { language } = useLanguage();
   const purchases = usePurchaseStore((s) => s.purchases);
   const payments = useDelivererStore((s) => s.payments);
+  const assignments = useDelivererStore((s) => s.assignments);
 
   const [tab, setTab] = useState<Tab>('purchases');
   const [search, setSearch] = useState('');
@@ -44,16 +45,27 @@ export function DelivererHistoryModal({ deliverer, stats, onClose, onPay }: Prop
   const myPurchases = useMemo(() => {
     if (!deliverer) return [];
     const q = search.toLowerCase();
-    return purchases
-      .filter((p) => p.delivererId === deliverer.id)
-      .filter((p) => inPeriod(p.date))
-      .filter((p) =>
+    return Object.entries(assignments)
+      .filter(([, a]) => a.delivererId === deliverer.id)
+      .map(([purchaseId, a]) => {
+        const p = purchases.find((x) => x.id === purchaseId);
+        return {
+          id: purchaseId,
+          reference: p?.reference ?? '—',
+          date: p?.date ?? '',
+          bonNumber: p?.bonNumber ?? '',
+          cost: Number(a.cost) || 0,
+          paid: Number(a.paid) || 0,
+        };
+      })
+      .filter((r) => inPeriod(r.date))
+      .filter((r) =>
         !q ||
-        p.reference.toLowerCase().includes(q) ||
-        (p.bonNumber || '').toLowerCase().includes(q))
+        r.reference.toLowerCase().includes(q) ||
+        (r.bonNumber || '').toLowerCase().includes(q))
       .sort((a, b) => (a.date < b.date ? 1 : -1));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deliverer, purchases, search, usePeriod, startDate, endDate]);
+  }, [deliverer, purchases, assignments, search, usePeriod, startDate, endDate]);
 
   const myPayments = useMemo(() => {
     if (!deliverer) return [];
@@ -142,16 +154,14 @@ export function DelivererHistoryModal({ deliverer, stats, onClose, onPay }: Prop
                 </thead>
                 <tbody>
                   {myPurchases.map((p) => {
-                    const cost = Number(p.delivererCost) || 0;
-                    const paid = Number(p.delivererPaid) || 0;
-                    const rest = Math.max(0, cost - paid);
+                    const rest = Math.max(0, p.cost - p.paid);
                     return (
                       <tr key={p.id} className="border-t border-gold/10">
                         <td className="px-3 py-2 font-semibold">{p.reference}</td>
-                        <td className="px-3 py-2">{formatDate(p.date, language)}</td>
+                        <td className="px-3 py-2">{p.date ? formatDate(p.date, language) : '—'}</td>
                         <td className="px-3 py-2 text-text-muted">{p.bonNumber || '—'}</td>
-                        <td className="px-3 py-2 text-right tabular">{formatCurrency(cost)}</td>
-                        <td className="px-3 py-2 text-right tabular text-pistachio">{formatCurrency(paid)}</td>
+                        <td className="px-3 py-2 text-right tabular">{formatCurrency(p.cost)}</td>
+                        <td className="px-3 py-2 text-right tabular text-pistachio">{formatCurrency(p.paid)}</td>
                         <td className={`px-3 py-2 text-right tabular font-bold ${rest > 0.004 ? 'text-rose-deep' : 'text-pistachio'}`}>
                           {formatCurrency(rest)}
                         </td>

@@ -17,6 +17,7 @@ import { CreatePurchase } from './CreatePurchase';
 import { PayDebtModal } from '@/components/shared/PayDebtModal';
 import { usePurchaseStore } from '@/store/purchaseStore';
 import { useSupplierStore } from '@/store/supplierStore';
+import { useDelivererStore } from '@/store/delivererStore';
 import { useStockStore } from '@/store/stockStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
@@ -31,6 +32,7 @@ export default function PurchasePage() {
   const { can } = usePermissions();
   const { purchases, payDebt, deletePurchase } = usePurchaseStore();
   const suppliers = useSupplierStore((s) => s.suppliers);
+  const delivererAssignments = useDelivererStore((s) => s.assignments);
   const settings = useSettingsStore((s) => s.settings);
   const stockProducts = useStockStore((s) => s.products);
   const units = useStockStore((s) => s.units);
@@ -63,7 +65,7 @@ export default function PurchasePage() {
         p.reference.toLowerCase().includes(q) ||
         (p.bonNumber || '').toLowerCase().includes(q) ||
         (p.driverPlate || '').toLowerCase().includes(q) ||
-        (p.delivererName || '').toLowerCase().includes(q);
+        (delivererAssignments[p.id]?.delivererName || '').toLowerCase().includes(q);
       
       const matchDate = dateFilter === 'period'
         ? isWithinRange(p.date, startDate, endDate)
@@ -76,7 +78,7 @@ export default function PurchasePage() {
 
       return matchSearch && matchDate && matchUnit;
     });
-  }, [purchases, search, dateFilter, startDate, endDate, unitFilter, stockProducts, suppliers]);
+  }, [purchases, search, dateFilter, startDate, endDate, unitFilter, stockProducts, suppliers, delivererAssignments]);
 
   // Statistics calculation for the filtered purchases
   const stats = useMemo(() => {
@@ -413,29 +415,32 @@ export default function PurchasePage() {
                 )}
               </div>
             )}
-            {viewing.delivererId && (viewing.delivererName || viewing.delivererCost || viewing.delivererPaid) && (
-              <div className="rounded-xl border border-gold/20 bg-gold/5 px-3 py-2.5">
-                <p className="flex items-center gap-1.5 text-sm font-semibold text-gold-dark">
-                  <Bike size={14} /> Livreur : {viewing.delivererName || '—'}
-                </p>
-                <div className="mt-1.5 grid grid-cols-3 gap-2 text-xs">
-                  <div>
-                    <p className="text-[10px] uppercase text-text-muted">Coût livreur</p>
-                    <p className="tabular font-bold text-text-primary">{formatCurrency(viewing.delivererCost || 0)}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] uppercase text-text-muted">Payé au livreur</p>
-                    <p className="tabular font-bold text-pistachio">{formatCurrency(viewing.delivererPaid || 0)}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] uppercase text-text-muted">Reste dû</p>
-                    <p className="tabular font-bold text-rose-deep">
-                      {formatCurrency(Math.max(0, (viewing.delivererCost || 0) - (viewing.delivererPaid || 0)))}
-                    </p>
+            {delivererAssignments[viewing.id] && (() => {
+              const a = delivererAssignments[viewing.id];
+              return (
+                <div className="rounded-xl border border-gold/20 bg-gold/5 px-3 py-2.5">
+                  <p className="flex items-center gap-1.5 text-sm font-semibold text-gold-dark">
+                    <Bike size={14} /> Livreur : {a.delivererName || '—'}
+                  </p>
+                  <div className="mt-1.5 grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <p className="text-[10px] uppercase text-text-muted">Coût livreur</p>
+                      <p className="tabular font-bold text-text-primary">{formatCurrency(a.cost || 0)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase text-text-muted">Payé au livreur</p>
+                      <p className="tabular font-bold text-pistachio">{formatCurrency(a.paid || 0)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase text-text-muted">Reste dû</p>
+                      <p className="tabular font-bold text-rose-deep">
+                        {formatCurrency(Math.max(0, (a.cost || 0) - (a.paid || 0)))}
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
             {viewing.createdBy && <p className="text-xs text-text-muted">{t('createdBy')}: {viewing.createdBy}</p>}
             <table className="w-full text-sm">
               <thead className="bg-vanilla/60"><tr><th className="text-left px-3 py-2">{t('name')}</th><th className="text-right px-3 py-2">{t('quantity')}</th><th className="text-right px-3 py-2">P.U.</th><th className="text-right px-3 py-2">Total</th></tr></thead>

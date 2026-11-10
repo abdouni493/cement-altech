@@ -5,7 +5,7 @@ import type {
   Production, ComptoirItem, Destruction, Worker, Role, Expense, CaisseTransaction,
   CaisseReport, StoreSettings, PartyPayment, CommandDelivery, WorkerOvertime,
   PurchaseOrder, PaymentMethodDetails, PartyOldDebt, PartyCreditRefund, PartyType,
-  CommandAdjustment, Deliverer, DelivererPayment,
+  CommandAdjustment,
 } from '@/types';
 import type { Command } from '@/store/commandStore';
 import type { FicheTechnic } from '@/store/ficheTechnicStore';
@@ -310,25 +310,6 @@ const toSupplier = (r: any): Supplier => ({
   creditAmount: num(r.credit_amount),
 });
 
-const toDeliverer = (r: any): Deliverer => ({
-  id: r.id, name: r.name, phone: r.phone ?? '', address: r.address ?? '',
-});
-
-const toDelivererPayment = (r: any): DelivererPayment => ({
-  id: r.id,
-  delivererId: r.deliverer_id ?? '',
-  delivererName: r.deliverer_name ?? undefined,
-  amount: num(r.amount),
-  date: r.date,
-  paidAt: r.paid_at ?? r.created_at,
-  notes: r.notes ?? '',
-  method: (r.method ?? 'especes') as DelivererPayment['method'],
-  chequeNumber: r.cheque_number ?? undefined,
-  virementNumber: r.virement_number ?? undefined,
-  bankName: r.bank_name ?? undefined,
-  createdAt: r.created_at,
-  createdBy: r.created_by ?? undefined,
-});
 
 const toClient = (r: any): Client => ({
   id: r.id, name: r.name, phone: r.phone ?? '', address: r.address ?? '', note: r.note ?? '',
@@ -534,10 +515,6 @@ const toPurchase = (r: any): Purchase => ({
   restAmount: num(r.rest_amount),
   allocatedAmount: num(r.allocated_amount),
   createdBy: r.created_by ?? undefined,
-  delivererId: r.deliverer_id ?? undefined,
-  delivererName: r.deliverer_name ?? undefined,
-  delivererCost: num(r.deliverer_cost),
-  delivererPaid: num(r.deliverer_paid),
   products: (r.purchase_lines ?? []).map((l: any) => ({
     productId: l.product_id ?? '',
     productName: l.product_name,
@@ -887,21 +864,6 @@ export const db = {
     update: async (id: string, s: Partial<Supplier>) =>
       toSupplier(await update('suppliers', id, { name: s.name, phone: s.phone, address: s.address })),
     remove: (id: string) => remove('suppliers', id),
-  },
-
-  // /deliverers (livreurs)
-  deliverers: {
-    list: async (): Promise<Deliverer[]> =>
-      (await selectOptional<any>('delivery_persons')).map(toDeliverer),
-    create: async (d: Omit<Deliverer, 'id'>) =>
-      toDeliverer(await insert('delivery_persons', { name: d.name, phone: d.phone, address: d.address })),
-    update: async (id: string, d: Partial<Deliverer>) =>
-      toDeliverer(await update('delivery_persons', id, { name: d.name, phone: d.phone, address: d.address })),
-    remove: (id: string) => remove('delivery_persons', id),
-  },
-  delivererPayments: {
-    list: async (): Promise<DelivererPayment[]> =>
-      (await selectOptional<any>('deliverer_payments', '*', 'paid_at')).map(toDelivererPayment),
   },
 
   // /clients
@@ -1318,40 +1280,6 @@ export const rpc = {
       p_bank_name: method ? method.bankName || '' : null,
     }),
   deleteSupplierPayment: (id: string) => call<void>('delete_supplier_payment', { p_id: id }),
-
-  // /deliverers — règlement direct au livreur, affectation sur un achat
-  payDeliverer: (
-    delivererId: string, amount: number, paidAt: string, notes = '',
-    method: PaymentMethodDetails = { method: 'especes' },
-  ) =>
-    call<any>('pay_deliverer', {
-      p_deliverer_id: delivererId, p_amount: amount, p_paid_at: paidAt, p_notes: notes,
-      p_method: method.method ?? 'especes',
-      p_cheque_number: method.chequeNumber || null,
-      p_virement_number: method.virementNumber || null,
-      p_bank_name: method.bankName || null,
-    }),
-  updateDelivererPayment: (
-    id: string, amount: number, paidAt?: string, notes?: string,
-    method?: PaymentMethodDetails,
-  ) =>
-    call<any>('update_deliverer_payment', {
-      p_id: id, p_amount: amount, p_paid_at: paidAt ?? null, p_notes: notes ?? null,
-      p_method: method?.method ?? null,
-      p_cheque_number: method ? method.chequeNumber || '' : null,
-      p_virement_number: method ? method.virementNumber || '' : null,
-      p_bank_name: method ? method.bankName || '' : null,
-    }),
-  deleteDelivererPayment: (id: string) => call<void>('delete_deliverer_payment', { p_id: id }),
-  setPurchaseDeliverer: (
-    purchaseId: string, delivererId: string | null, cost: number, paid: number,
-  ) =>
-    call<any>('set_purchase_deliverer', {
-      p_purchase_id: purchaseId,
-      p_deliverer_id: delivererId,
-      p_cost: cost,
-      p_paid: paid,
-    }),
 
   // /clients — versement du client (espèces / chèque / virement)
   payClient: (

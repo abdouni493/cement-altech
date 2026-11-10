@@ -21,7 +21,6 @@ import { SupplierForm } from '@/components/shared/SupplierForm';
 import { VersementModal } from '@/components/shared/VersementModal';
 import { DelivererHistoryModal } from '@/components/shared/DelivererHistoryModal';
 import { useDelivererStore } from '@/store/delivererStore';
-import { usePurchaseStore } from '@/store/purchaseStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { usePermissions } from '@/hooks/usePermissions';
 import { formatCurrency } from '@/lib/utils';
@@ -51,10 +50,9 @@ const EMPTY_STATS: DelivererStats = {
 export default function DeliverersPage() {
   const { can } = usePermissions();
   const {
-    deliverers, payments,
+    deliverers, payments, assignments,
     addDeliverer, updateDeliverer, deleteDeliverer, payDebt,
   } = useDelivererStore();
-  const { purchases } = usePurchaseStore();
   const settings = useSettingsStore((s) => s.settings);
 
   const [view, setView] = useViewMode('deliverers');
@@ -76,12 +74,12 @@ export default function DeliverersPage() {
       return s;
     };
     deliverers.forEach((d) => ensure(d.id));
-    purchases.forEach((p) => {
-      if (!p.delivererId) return;
-      const s = ensure(p.delivererId);
+    Object.values(assignments).forEach((a) => {
+      if (!a.delivererId) return;
+      const s = ensure(a.delivererId);
       s.count += 1;
-      s.total += Number(p.delivererCost) || 0;
-      s.paid += Number(p.delivererPaid) || 0;
+      s.total += Number(a.cost) || 0;
+      s.paid += Number(a.paid) || 0;
     });
     payments.forEach((pay) => {
       const s = ensure(pay.delivererId);
@@ -90,7 +88,7 @@ export default function DeliverersPage() {
     });
     out.forEach((s) => { s.rest = Math.max(0, s.total - s.paid); });
     return out;
-  }, [deliverers, purchases, payments]);
+  }, [deliverers, assignments, payments]);
 
   const statsOf = (id: string): DelivererStats => statsById.get(id) ?? EMPTY_STATS;
 

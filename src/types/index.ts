@@ -86,6 +86,20 @@ export interface DelivererPayment {
   bankName?: string;
   createdAt?: string;
   createdBy?: string;
+  /** Écriture de caisse liée (sortie), pour la corriger / la supprimer. */
+  caisseTxId?: string;
+}
+
+/** Livreur affecté à une facture d'achat (stocké côté application). */
+export interface PurchaseDelivererAssignment {
+  delivererId: string;
+  delivererName: string;
+  /** Coût de transport fixé au livreur pour cette facture. */
+  cost: number;
+  /** Montant payé au livreur au moment de l'achat. */
+  paid: number;
+  /** Écriture de caisse liée au montant payé au livreur. */
+  caisseTxId?: string;
 }
 
 // ---------- Purchases ----------
@@ -146,13 +160,6 @@ export interface Purchase {
   allocatedAmount?: number;
   payments: Payment[];
   createdBy?: string;
-  /** Livreur affecté à cette facture (facultatif). */
-  delivererId?: string;
-  delivererName?: string;
-  /** Coût de transport fixé au livreur pour cette facture. */
-  delivererCost?: number;
-  /** Montant déjà payé au livreur au moment de l'achat. */
-  delivererPaid?: number;
 }
 
 // ---------- Clients & Client Debts ----------

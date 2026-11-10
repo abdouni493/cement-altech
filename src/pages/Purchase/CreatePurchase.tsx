@@ -11,7 +11,6 @@ import { useStockStore } from '@/store/stockStore';
 import { useSupplierStore } from '@/store/supplierStore';
 import { useDelivererStore } from '@/store/delivererStore';
 import { usePurchaseStore } from '@/store/purchaseStore';
-import { rpc } from '@/lib/db';
 import { formatCurrency, todayISO } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 import type { PurchaseLine, Product, Purchase } from '@/types';
@@ -47,7 +46,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
   const products = useStockStore((s) => s.products);
   const addProduct = useStockStore((s) => s.addProduct);
   const { suppliers, addSupplier, applyCreditToPurchase, payDebt: paySupplier } = useSupplierStore();
-  const { deliverers, addDeliverer, load: loadDeliverers } = useDelivererStore();
+  const { deliverers, addDeliverer, assignments, setPurchaseDeliverer } = useDelivererStore();
   const addPurchase = usePurchaseStore((s) => s.addPurchase);
   const updatePurchase = usePurchaseStore((s) => s.updatePurchase);
 
@@ -91,15 +90,16 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
     setBonNumber(editing.bonNumber || '');
     setDriverPlate(editing.driverPlate || '');
     setPaidAmount(editing.paidAmount);
-    if (editing.delivererId) {
+    const assigned = assignments[editing.id];
+    if (assigned) {
       setDelivererEnabled(true);
-      setDelivererId(editing.delivererId);
+      setDelivererId(assigned.delivererId);
       setDelivererSearch(
-        deliverers.find((d) => d.id === editing.delivererId)?.name
-        || editing.delivererName || ''
+        deliverers.find((d) => d.id === assigned.delivererId)?.name
+        || assigned.delivererName || ''
       );
-      setDelivererCost(Number(editing.delivererCost) || 0);
-      setDelivererPaid(Number(editing.delivererPaid) || 0);
+      setDelivererCost(Number(assigned.cost) || 0);
+      setDelivererPaid(Number(assigned.paid) || 0);
     } else {
       setDelivererEnabled(false);
     }
@@ -168,25 +168,18 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
   };
 
   /** Pose / met à jour le livreur de la facture après sa création ou sa modif. */
-  const saveDeliverer = async (purchaseId: string) => {
+  const saveDeliverer = async (purchaseId: string, reference: string) => {
     const wants = delivererEnabled && !!delivererId;
-    const had = !!editing?.delivererId;
-    // Rien à faire : pas de livreur demandé et aucun à retirer — on n'appelle
-    // pas la base pour ne pas gêner les utilisateurs qui n'ont pas la mise à jour.
+    const had = !!assignments[purchaseId];
+    // Rien à faire : pas de livreur demandé et aucun à retirer.
     if (!wants && !had) return;
-    try {
-      await rpc.setPurchaseDeliverer(
-        purchaseId,
-        wants ? delivererId : null,
-        wants ? Number(delivererCost) || 0 : 0,
-        wants ? Number(delivererPaid) || 0 : 0,
-      );
-      await Promise.all([usePurchaseStore.getState().load(), loadDeliverers()]);
-    } catch {
-      toast.error(
-        "Livreur non enregistré : exécutez altech_production_update_livreurs.sql sur la base de données."
-      );
-    }
+    await setPurchaseDeliverer(
+      purchaseId,
+      reference,
+      wants ? delivererId : null,
+      wants ? Number(delivererCost) || 0 : 0,
+      wants ? Number(delivererPaid) || 0 : 0,
+    );
   };
 
   const addLine = (p: Product) => {
@@ -264,7 +257,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
           products: payloadLines,
           paidAmount: Number(paidAmount),
         });
-        await saveDeliverer(editing.id);
+        await saveDeliverer(editing.id, editing.reference);
         toast.success(
           isHistorical
             ? 'Ancien achat modifié — historique du fournisseur mis à jour'
@@ -292,7 +285,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
           if (applied > 0) toast.info(`Trop-versé du fournisseur utilisé : ${formatCurrency(applied)}`);
         } catch { /* message déjà affiché */ }
       }
-      if (purchase?.id) await saveDeliverer(purchase.id);
+      if (purchase?.id) await saveDeliverer(purchase.id, purchase.reference);
       if (overpaid > 0.004 && !historical) {
         try {
           await paySupplier(
