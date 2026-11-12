@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Bike, Plus, Pencil, Trash2, Phone, MapPin, Printer, Layers,
-  CheckCircle2, AlertTriangle, Receipt, TrendingDown, HandCoins, Truck,
+  CheckCircle2, AlertTriangle, Receipt, TrendingDown, HandCoins, Truck, FileBarChart,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -20,6 +20,7 @@ import { StatCard } from '@/components/shared/StatCard';
 import { SupplierForm } from '@/components/shared/SupplierForm';
 import { VersementModal } from '@/components/shared/VersementModal';
 import { DelivererHistoryModal } from '@/components/shared/DelivererHistoryModal';
+import { DelivererStatementModal } from '@/components/shared/DelivererStatementModal';
 import { useDelivererStore } from '@/store/delivererStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -61,6 +62,7 @@ export default function DeliverersPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Deliverer | null>(null);
   const [history, setHistory] = useState<Deliverer | null>(null);
+  const [statement, setStatement] = useState<Deliverer | null>(null);
   const [paying, setPaying] = useState<Deliverer | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [printPrompt, setPrintPrompt] = useState<{ deliverer: Deliverer; payment: DelivererPayment } | null>(null);
@@ -165,6 +167,7 @@ export default function DeliverersPage() {
 
   const actionsFor = (d: Deliverer): ActionItem[] => [
     { label: 'Détails & historique', icon: <Layers size={15} />, onClick: () => setHistory(d) },
+    { label: 'Compte rendu (période)', icon: <FileBarChart size={15} />, onClick: () => setStatement(d) },
     {
       label: 'Payer la dette', icon: <HandCoins size={15} />, hidden: !can('suppliers', 'pay'),
       onClick: () => setPaying(d),
@@ -358,13 +361,22 @@ export default function DeliverersPage() {
                       </Button>
                     )}
 
-                    <Button
-                      size="sm" variant="secondary" className="w-full text-xs"
-                      onClick={() => setHistory(d)}
-                      title="Toutes les opérations du livreur"
-                    >
-                      <Layers size={14} /> Détails & historique
-                    </Button>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <Button
+                        size="sm" variant="secondary" className="text-xs"
+                        onClick={() => setHistory(d)}
+                        title="Toutes les opérations du livreur"
+                      >
+                        <Layers size={14} /> Historique
+                      </Button>
+                      <Button
+                        size="sm" variant="secondary" className="text-xs"
+                        onClick={() => setStatement(d)}
+                        title="Compte rendu sur une période (imprimable)"
+                      >
+                        <FileBarChart size={14} /> Compte rendu
+                      </Button>
+                    </div>
 
                     <div className="flex gap-1.5">
                       {can('suppliers', 'edit') && (
@@ -398,6 +410,9 @@ export default function DeliverersPage() {
         onClose={() => setHistory(null)}
         onPay={(d) => { setHistory(null); setPaying(d); }}
       />
+
+      {/* ---- Compte rendu sur une période ---- */}
+      <DelivererStatementModal deliverer={statement} onClose={() => setStatement(null)} />
 
       {/* ---- Payer la dette ---- */}
       {paying && (() => {
