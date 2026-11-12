@@ -41,6 +41,7 @@ interface DelivererState {
   setPurchaseDeliverer: (
     purchaseId: string, reference: string,
     delivererId: string | null, cost: number, paid: number,
+    opts?: { perUnit?: boolean; unitPrice?: number },
   ) => Promise<void>;
 }
 
@@ -187,7 +188,7 @@ export const useDelivererStore = create<DelivererState>()((set, get) => ({
     persist(get);
   },
 
-  setPurchaseDeliverer: async (purchaseId, reference, delivererId, cost, paid) => {
+  setPurchaseDeliverer: async (purchaseId, reference, delivererId, cost, paid, opts) => {
     const prev = get().assignments[purchaseId];
     const wants = !!delivererId;
 
@@ -216,6 +217,8 @@ export const useDelivererStore = create<DelivererState>()((set, get) => ({
       delivererName: deliverer?.name ?? '',
       cost: Math.max(0, cost),
       paid: Math.max(0, paid),
+      perUnit: opts?.perUnit || undefined,
+      unitPrice: opts?.perUnit ? Math.max(0, opts?.unitPrice || 0) : undefined,
       caisseTxId,
     };
     set({ assignments: nextAssign });

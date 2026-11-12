@@ -72,6 +72,9 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
   const [delivererId, setDelivererId] = useState('');
   const [delivererCost, setDelivererCost] = useState<number>(0);
   const [delivererPaid, setDelivererPaid] = useState<number>(0);
+  /** Mode « prix par unité » : le total de livraison se calcule depuis les quantités. */
+  const [delivererPerUnit, setDelivererPerUnit] = useState(false);
+  const [delivererUnitPrice, setDelivererUnitPrice] = useState<number>(0);
   const [showDelivererForm, setShowDelivererForm] = useState(false);
   /** Trop-versé du fournisseur (versé en trop auparavant) utilisé sur cette facture. */
   const [useSupplierCredit, setUseSupplierCredit] = useState(true);
@@ -100,6 +103,8 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
       );
       setDelivererCost(Number(assigned.cost) || 0);
       setDelivererPaid(Number(assigned.paid) || 0);
+      setDelivererPerUnit(!!assigned.perUnit);
+      setDelivererUnitPrice(Number(assigned.unitPrice) || 0);
     } else {
       setDelivererEnabled(false);
     }
@@ -125,6 +130,21 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
     () => lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.purchasePrice) || 0), 0),
     [lines]
   );
+
+  /** Quantité totale de la facture (toutes lignes confondues). */
+  const totalQuantity = useMemo(
+    () => lines.reduce((s, l) => s + (Number(l.quantity) || 0), 0),
+    [lines]
+  );
+
+  /* ---- COÛT DE LIVRAISON « PAR UNITÉ » -------------------------------------
+   * Quand l'option est activée, le total de livraison se recalcule depuis le
+   * prix par unité et la quantité totale de la facture. Le total reste
+   * modifiable à la main : toucher le champ « total » repasse en saisie libre. */
+  useEffect(() => {
+    if (!delivererPerUnit) return;
+    setDelivererCost((Number(delivererUnitPrice) || 0) * totalQuantity);
+  }, [delivererPerUnit, delivererUnitPrice, totalQuantity]);
 
   /* ---- TROP-VERSE DU FOURNISSEUR -------------------------------------------
    * L'entreprise a déjà versé plus que ses factures : ce trop-versé paie la
@@ -179,6 +199,7 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
       wants ? delivererId : null,
       wants ? Number(delivererCost) || 0 : 0,
       wants ? Number(delivererPaid) || 0 : 0,
+      { perUnit: delivererPerUnit, unitPrice: Number(delivererUnitPrice) || 0 },
     );
   };
 
@@ -621,9 +642,37 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
               </p>
             )}
 
-            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {/* Mode de calcul du coût de livraison */}
+            <div className="mt-4 rounded-xl border border-gold/15 bg-vanilla/30 p-3">
+              <Switch
+                checked={delivererPerUnit}
+                onChange={(v) => {
+                  setDelivererPerUnit(v);
+                  if (v) setDelivererCost((Number(delivererUnitPrice) || 0) * totalQuantity);
+                }}
+                label="Fixer le prix de livraison par unité"
+              />
+              {delivererPerUnit && (
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <Input
+                    label="Prix de livraison pour 1 unité (DA)"
+                    type="number" step="any" min={0}
+                    value={delivererUnitPrice}
+                    onChange={(e) => setDelivererUnitPrice(Number(e.target.value))}
+                  />
+                  <div className="flex flex-col justify-center rounded-xl border border-gold/15 bg-gold/5 px-3 py-2">
+                    <p className="text-[10px] uppercase tracking-wide text-text-muted">Quantité totale de la facture</p>
+                    <p className="tabular text-sm font-bold text-gold-dark">
+                      {totalQuantity} × {formatCurrency(Number(delivererUnitPrice) || 0)} = {formatCurrency((Number(delivererUnitPrice) || 0) * totalQuantity)}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <Input
-                label="Coût du livreur pour cet achat (DA)"
+                label={delivererPerUnit ? 'Total livraison (modifiable) (DA)' : 'Coût du livreur pour cet achat (DA)'}
                 type="number" step="any" min={0}
                 value={delivererCost}
                 onChange={(e) => setDelivererCost(Number(e.target.value))}
@@ -635,6 +684,12 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
                 onChange={(e) => setDelivererPaid(Number(e.target.value))}
               />
             </div>
+            {delivererPerUnit && (
+              <p className="mt-2 text-[11px] text-text-muted">
+                Le total se calcule automatiquement depuis le prix par unité et la quantité totale
+                ({totalQuantity}). Vous pouvez tout de même le corriger à la main dans le champ ci-dessus.
+              </p>
+            )}
             <p className="mt-2 text-[11px] text-text-muted">
               Reste dû au livreur&nbsp;:
               <b className="tabular text-rose-deep"> {formatCurrency(Math.max(0, (Number(delivererCost) || 0) - (Number(delivererPaid) || 0)))}</b>

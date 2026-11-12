@@ -98,6 +98,9 @@ export interface PurchaseDelivererAssignment {
   cost: number;
   /** Montant payé au livreur au moment de l'achat. */
   paid: number;
+  /** Prix de livraison par unité (si le coût est calculé par unité). */
+  perUnit?: boolean;
+  unitPrice?: number;
   /** Écriture de caisse liée au montant payé au livreur. */
   caisseTxId?: string;
 }
