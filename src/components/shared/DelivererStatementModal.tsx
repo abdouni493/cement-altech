@@ -40,6 +40,8 @@ interface DeliveryRow {
   date: string;
   bonNumber: string;
   driverPlate: string;
+  /** Quantité totale de la facture (toutes lignes confondues). */
+  quantity: number;
   cost: number;
   paid: number;
 }
@@ -71,12 +73,14 @@ export function DelivererStatementModal({ deliverer, onClose }: { deliverer: Del
       .filter(([, a]) => a.delivererId === deliverer.id)
       .map(([purchaseId, a]) => {
         const p = purchases.find((x) => x.id === purchaseId);
+        const quantity = (p?.products ?? []).reduce((s, l) => s + (Number(l.quantity) || 0), 0);
         return {
           id: purchaseId,
           reference: p?.reference ?? '—',
           date: d10(p?.date),
           bonNumber: p?.bonNumber ?? '',
           driverPlate: p?.driverPlate ?? '',
+          quantity: Math.round(quantity * 1000) / 1000,
           cost: Number(a.cost) || 0,
           paid: Number(a.paid) || 0,
         };
@@ -150,19 +154,19 @@ export function DelivererStatementModal({ deliverer, onClose }: { deliverer: Del
       title: 'Livraisons de la période',
       columns: [
         { label: 'Date', align: 'center', width: '12%' },
-        { label: 'N° achat', align: 'center', width: '14%' },
-        { label: 'N° bon', align: 'center', width: '12%' },
-        { label: 'Matricule', align: 'center', width: '13%' },
-        { label: 'Coût', align: 'right', width: '15%' },
-        { label: 'Payé', align: 'right', width: '15%' },
-        { label: 'Reste', align: 'right', width: '15%' },
+        { label: 'N° bon', align: 'center', width: '13%' },
+        { label: 'Matricule', align: 'center', width: '14%' },
+        { label: 'Quantité', align: 'center', width: '12%' },
+        { label: 'Coût', align: 'right', width: '16%' },
+        { label: 'Payé', align: 'right', width: '16%' },
+        { label: 'Reste', align: 'right', width: '16%' },
       ],
       rows: data.deliveries.map((d) => ({
         cells: [
           formatDate(d.date, language),
-          d.reference,
           d.bonNumber || '/',
           (d.driverPlate || '/').toUpperCase(),
+          d.quantity,
           money(d.cost),
           money(d.paid),
           money(Math.max(0, d.cost - d.paid)),
