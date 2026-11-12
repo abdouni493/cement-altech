@@ -72,8 +72,8 @@ export function CreatePurchase({ onClose, onCreated, historical = false, editing
   const [delivererId, setDelivererId] = useState('');
   const [delivererCost, setDelivererCost] = useState<number>(0);
   const [delivererPaid, setDelivererPaid] = useState<number>(0);
-  /** Mode « prix par unité » : le total de livraison se calcule depuis les quantités. */
-  const [delivererPerUnit, setDelivererPerUnit] = useState(false);
+  /** Mode « prix par unité » : le total de livraison se calcule depuis les quantités. Activé par défaut. */
+  const [delivererPerUnit, setDelivererPerUnit] = useState(true);
   const [delivererUnitPrice, setDelivererUnitPrice] = useState<number>(0);
   const [showDelivererForm, setShowDelivererForm] = useState(false);
   /** Trop-versé du fournisseur (versé en trop auparavant) utilisé sur cette facture. */
