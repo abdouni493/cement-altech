@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type {
   CommandDelivery, CommandDeliveryItem, CommandAdjustment, CommandAdjustmentLine, CommandPayment,
 } from '@/types';
-import { db, rpc, isTransient } from '@/lib/db';
+import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
 import { useStockStore } from './stockStore';
 import { useSalesStore } from './salesStore';
@@ -293,17 +293,9 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         created_at: data.createdAt ?? null,
         items: data.items.map(itemPayload),
       };
-    const row = await save('commands.create', async () => {
-      try {
-        return await rpc.createCommandOnce(payload);
-      } catch (e) {
-        // Base surchargee : la fonction create_command() depasse le delai.
-        // On cree la commande par petites ecritures directes (memes lignes).
-        if (!isTransient((e as Error).message)) throw e;
-        console.warn('[commands.create] create_command trop lente, creation directe');
-        return db.commands.createDirect(payload);
-      }
-    });
+    // create_command() ou, si elle depasse le delai de la base, creation
+    // directe par petites ecritures (memes lignes) — voir rpcOrDirect().
+    const row = await save('commands.create', () => rpc.createCommandSafe(payload));
     // On ne relit QUE la commande creee (et non toute la table avec ses lignes
     // et reglements) : la creation redevient instantanee.
     const created = await db.commands.get(row.id).catch(() => null);

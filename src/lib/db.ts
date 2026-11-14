@@ -320,6 +320,110 @@ async function call<T>(fn: string, args: Record<string, any> = {}): Promise<T> {
   }
 }
 
+/* ---------------------------------------------------------------------------
+ * FONCTIONS LENTES : BASCULE AUTOMATIQUE SUR L'ECRITURE DIRECTE
+ * ---------------------------------------------------------------------------
+ * Quand une fonction de la base depasse le delai (« statement timeout »), rien
+ * n'est ecrit (transaction annulee) et l'ecran bascule sur une creation
+ * directe par petites requetes. Cette lenteur est memorisee 6 heures : les
+ * creations suivantes passent DIRECTEMENT par l'ecriture directe — plus
+ * d'attente ni d'erreur 500 dans la console.
+ * ------------------------------------------------------------------------- */
+const SLOW_KEY = 'altech-slow-rpc';
+const SLOW_TTL = 6 * 3600_000;
+
+function slowMap(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(SLOW_KEY) || '{}'); } catch { return {}; }
+}
+function isKnownSlow(fn: string): boolean {
+  const t = slowMap()[fn];
+  return !!t && Date.now() - t < SLOW_TTL;
+}
+function markSlow(fn: string): void {
+  try { localStorage.setItem(SLOW_KEY, JSON.stringify({ ...slowMap(), [fn]: Date.now() })); } catch { /* ignore */ }
+}
+
+async function rpcOrDirect<T>(fn: string, args: Record<string, any>, direct: () => Promise<T>): Promise<T> {
+  if (isKnownSlow(fn)) return direct();
+  const { data, error } = await supabase.rpc(fn, args);
+  if (!error) return data as T;
+  if (!isTransient(error.message)) throw new Error(`[rpc:${fn}] ${error.message}`);
+  markSlow(fn);
+  console.info(`[db] ${fn} trop lente : enregistrement direct (memorise 6 h)`);
+  return direct();
+}
+
+/** Prochain numero PREFIXE-AAAA-NNN d'apres les references existantes. */
+async function nextReference(table: string, prefix: string, year: string): Promise<number> {
+  const { data, error } = await supabase.from(table).select('reference').like('reference', `${prefix}-${year}-%`);
+  if (error) throw new Error(`[${table}] ${error.message}`);
+  return (data ?? []).reduce((m: number, r: any) => {
+    const n = parseInt(String(r.reference).split('-').pop() ?? '', 10);
+    return Number.isFinite(n) && n > m ? n : m;
+  }, 0);
+}
+
+/**
+ * Creation directe d'une facture d'achat — memes ecritures que create_purchase():
+ * la facture AVANT ses lignes (le declencheur de stock lit `is_historical`),
+ * puis les lignes (stock alimente par trg_purchase_line_stock) et l'acompte
+ * (sortie de caisse par trg_purchase_payment_caisse).
+ */
+async function createPurchaseDirect(p: Record<string, any>): Promise<{ id: string; reference: string }> {
+  const date = String(p.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const year = date.slice(0, 4);
+  const hist = !!p.is_historical;
+  const lines: any[] = p.products ?? [];
+  const total = p.total_amount ?? lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.purchase_price) || 0), 0);
+  const paid = Math.max(0, Number(p.paid_amount) || 0);
+  let seq = await nextReference('purchases', 'ACH', year);
+  let row: any = null;
+  for (let attempt = 0; attempt < 5 && !row; attempt++) {
+    seq += 1;
+    const { data, error } = await supabase.from('purchases').insert({
+      reference: `ACH-${year}-${String(seq).padStart(3, '0')}`,
+      supplier_id: p.supplier_id || null,
+      date,
+      bon_number: (p.bon_number || '').trim() || null,
+      driver_plate: (p.driver_plate || '').trim().toUpperCase() || null,
+      is_historical: hist,
+      total_amount: total,
+      paid_amount: paid,
+      rest_amount: Math.max(0, total - paid),
+      note: p.note ?? null,
+    }).select('id, reference').single();
+    if (!error) { row = data; break; }
+    if (!/duplicate key|already exists|23505/i.test(error.message)) throw new Error(`[purchases] ${error.message}`);
+  }
+  if (!row) throw new Error('[purchases] impossible de trouver un numero de facture libre');
+
+  if (lines.length) {
+    const { error } = await supabase.from('purchase_lines').insert(lines.map((l) => ({
+      purchase_id: row.id,
+      product_id: l.product_id || null,
+      product_name: l.product_name || 'Produit',
+      quantity: Number(l.quantity) || 0,
+      purchase_price: Number(l.purchase_price) || 0,
+      min_alert_quantity: l.min_alert_quantity ?? null,
+      unit_enabled: !!l.unit_enabled,
+      unit: l.unit ?? null,
+      expiration_enabled: !!l.expiration_enabled,
+      expiration_date: l.expiration_date || null,
+    })));
+    if (error) {
+      await supabase.from('purchases').delete().eq('id', row.id);
+      throw new Error(`[purchase_lines] ${error.message}`);
+    }
+  }
+  if (paid > 0) {
+    await supabase.from('purchase_payments').insert({
+      purchase_id: row.id, date, amount: paid,
+      description: hist ? 'Acompte ancien achat' : 'Acompte achat',
+    });
+  }
+  return { id: row.id, reference: row.reference };
+}
+
 const num = (v: any, d = 0) => (v === null || v === undefined ? d : Number(v));
 
 // ---------------------------------------------------------------- mappers ----
@@ -1315,7 +1419,8 @@ export const db = {
 /** Business buttons — one entry per action RPC declared in the SQL file. */
 export const rpc = {
   // /purchase
-  createPurchase: (payload: Record<string, any>) => call<any>('create_purchase', { p_payload: payload }),
+  createPurchase: (payload: Record<string, any>) =>
+    rpcOrDirect<any>('create_purchase', { p_payload: payload }, () => createPurchaseDirect(payload)),
   /** Modifier l'en-tête d'une facture d'achat (date, bon, matricule, payé). */
   updatePurchase: (id: string, payload: Record<string, any>) =>
     call<any>('update_purchase', { p_id: id, p_payload: payload }),
@@ -1346,11 +1451,9 @@ export const rpc = {
   // /clients/commands
   createCommand: (payload: Record<string, any>) => call<any>('create_command', { p_payload: payload }),
   /** create_command SANS relance : sert a basculer vite sur la creation directe. */
-  createCommandOnce: async (payload: Record<string, any>) => {
-    const { data, error } = await supabase.rpc('create_command', { p_payload: payload });
-    if (error) throw new Error(`[rpc:create_command] ${error.message}`);
-    return data as any;
-  },
+  /** create_command, ou creation directe si la fonction depasse le delai. */
+  createCommandSafe: (payload: Record<string, any>) =>
+    rpcOrDirect<any>('create_command', { p_payload: payload }, () => db.commands.createDirect(payload)),
   /**
    * Modifier une commande EN ENTIER : en-tete, TVA, acompte et lignes.
    * L'ancienne version n'ecrivait que l'en-tete — l'acompte, la TVA et les
