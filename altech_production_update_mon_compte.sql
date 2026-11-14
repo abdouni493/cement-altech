@@ -7,6 +7,7 @@
 --    - auth.identities  (e-mail du fournisseur "email")
 --    - public.profiles  (nom, nom d'utilisateur, e-mail)
 --    - public.workers   (si le compte appartient a un employe)
+--  Repare aussi les comptes deja desynchronises (voir fin du fichier).
 --  A executer dans Supabase › SQL Editor. Idempotent.
 -- =============================================================================
 
@@ -71,6 +72,7 @@ begin
          email_change       = '',
          email_change_token_new = '',
          email_change_token_current = '',
+         email_change_confirm_status = 0,
          encrypted_password = case when coalesce(p_new_password, '') <> ''
                                    then extensions.crypt(p_new_password, extensions.gen_salt('bf'))
                                    else encrypted_password end,
@@ -105,5 +107,70 @@ $$;
 
 revoke execute on function public.update_my_account(text, text, text, text, text) from anon, public;
 grant  execute on function public.update_my_account(text, text, text, text, text) to authenticated;
+
+-- -----------------------------------------------------------------------------
+--  Connexion : l'e-mail de connexion fait foi (auth.users), pas une copie du
+--  profil qui pourrait etre desynchronisee.
+-- -----------------------------------------------------------------------------
+create or replace function public.resolve_login_email(p_identifier text)
+returns text
+language plpgsql
+stable
+security definer
+set search_path = public, auth
+as $$
+declare v_email text;
+begin
+  select coalesce(u.email, p.email) into v_email
+    from public.profiles p
+    left join auth.users u on u.id = p.id
+   where p.is_active
+     and (lower(p.username) = lower(trim(p_identifier))
+       or lower(p.email)    = lower(trim(p_identifier))
+       or lower(u.email)    = lower(trim(p_identifier)))
+   order by (lower(p.email) = lower(trim(p_identifier))) desc
+   limit 1;
+  return v_email;
+end;
+$$;
+grant execute on function public.resolve_login_email(text) to anon, authenticated;
+
+-- -----------------------------------------------------------------------------
+--  REPARATION : comptes dont l'e-mail a ete modifie dans Parametres mais pas
+--  dans Authentication (auth.users). La nouvelle adresse du profil est appliquee
+--  a auth.users et la demande de confirmation en attente est annulee.
+-- -----------------------------------------------------------------------------
+do $$
+declare r record;
+begin
+  for r in
+    select p.id, lower(p.email) as new_email
+      from public.profiles p
+      join auth.users u on u.id = p.id
+     where lower(u.email) <> lower(p.email)
+       and not exists (select 1 from auth.users o
+                        where lower(o.email) = lower(p.email) and o.id <> p.id)
+  loop
+    update auth.users
+       set email                      = r.new_email,
+           email_confirmed_at         = now(),
+           email_change               = '',
+           email_change_token_new     = '',
+           email_change_token_current = '',
+           email_change_confirm_status = 0,
+           updated_at                 = now()
+     where id = r.id;
+
+    update auth.identities
+       set identity_data = coalesce(identity_data, '{}'::jsonb)
+                           || jsonb_build_object('email', r.new_email, 'email_verified', true),
+           updated_at    = now()
+     where user_id = r.id and provider = 'email';
+
+    update public.workers set email = r.new_email where user_id = r.id;
+    raise notice 'E-mail de connexion corrige : %', r.new_email;
+  end loop;
+end;
+$$;
 
 notify pgrst, 'reload schema';

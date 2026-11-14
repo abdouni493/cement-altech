@@ -284,33 +284,28 @@ export const useAuthStore = create<AuthState>()(
 );
 
 /**
- * Fallback when `update_my_account()` is not installed yet: profile row via the
- * REST API, e-mail / password via Supabase Auth.
+ * Fallback when `update_my_account()` is not installed in the database yet.
+ * Only the name and username can be saved safely this way: changing the e-mail
+ * through the Auth API leaves it "pending confirmation" in auth.users while the
+ * profile already holds the new address, which breaks the login. The e-mail and
+ * password are therefore only changed by the SQL function.
  */
 async function updateAccountWithAuthApi(
   current: User,
   changes: { name: string; username: string; email: string },
   data: UpdateMyAccountData
 ): Promise<{ ok: boolean; error?: string }> {
-  if (data.newPassword) {
-    const { error } = await supabase.auth.signInWithPassword({
-      email: current.email,
-      password: data.oldPassword || '',
-    });
-    if (error) return { ok: false, error: 'Ancien mot de passe incorrect' };
+  if (changes.email !== current.email.toLowerCase() || data.newPassword) {
+    return {
+      ok: false,
+      error:
+        "La modification de l'e-mail ou du mot de passe nécessite la mise à jour de la base : " +
+        'exécutez le fichier altech_production_update_mon_compte.sql dans Supabase › SQL Editor, puis réessayez.',
+    };
   }
-
-  const authChanges: { email?: string; password?: string; data?: Record<string, string> } = {
-    data: { full_name: changes.name, username: changes.username },
-  };
-  if (changes.email !== current.email.toLowerCase()) authChanges.email = changes.email;
-  if (data.newPassword) authChanges.password = data.newPassword;
-  const { error: authError } = await supabase.auth.updateUser(authChanges);
-  if (authError) return { ok: false, error: authError.message };
-
   const { error } = await supabase
     .from('profiles')
-    .update({ full_name: changes.name, username: changes.username, email: changes.email })
+    .update({ full_name: changes.name, username: changes.username })
     .eq('id', current.id);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
