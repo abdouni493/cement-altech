@@ -12,7 +12,13 @@ import { toast } from '@/components/ui/Toast';
  * When the write fails the user is told (French toast) and the error is
  * rethrown so the calling screen can abort instead of showing a phantom row.
  */
+/** Heure du dernier enregistrement — la synchronisation de fond s'efface derriere lui. */
+let lastWriteAt = 0;
+let writesInFlight = 0;
+export const isWriteBusy = () => writesInFlight > 0 || Date.now() - lastWriteAt < 15_000;
+
 export async function save<T>(label: string, run: () => Promise<T>): Promise<T> {
+  writesInFlight += 1;
   try {
     return await run();
   } catch (e: any) {
@@ -20,6 +26,9 @@ export async function save<T>(label: string, run: () => Promise<T>): Promise<T> 
     console.error(`[db] ${label}:`, raw);
     toast.error(`Enregistrement impossible — ${humanize(raw)}`);
     throw e;
+  } finally {
+    writesInFlight -= 1;
+    lastWriteAt = Date.now();
   }
 }
 
@@ -36,6 +45,8 @@ export async function trySave<T>(label: string, run: () => Promise<T>): Promise<
 /** Turns a raw PostgREST / PostgreSQL error into something readable. */
 function humanize(message: string): string {
   const m = message.replace(/^\[[^\]]+\]\s*/, '');
+  if (/statement timeout|canceling statement|57014/i.test(m))
+    return 'la base de données est momentanément surchargée, rien n\'a été enregistré ; réessayez dans quelques secondes';
   if (/duplicate key|already exists/i.test(m)) return 'cet enregistrement existe déjà';
   if (/PGRST202|Could not find the function/i.test(m))
     return 'fonction absente de la base de données ; exécutez le dernier script SQL ' +

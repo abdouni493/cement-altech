@@ -26,10 +26,22 @@ const PAGE = 1000;
  * without paging, the oldest rows of a big table silently disappeared from
  * the screens. Small tables still cost a single request.
  */
+/** Erreurs passageres de la base : la requete peut etre relancee telle quelle. */
+function isTransient(message: string): boolean {
+  return /statement timeout|canceling statement|57014|timeout|Failed to fetch|NetworkError|fetch failed|503|502|504/i.test(message);
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function readAll<T>(table: string, build: () => any): Promise<T[]> {
   const rows: T[] = [];
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await build().range(from, from + PAGE - 1);
+    let res = await build().range(from, from + PAGE - 1);
+    for (let attempt = 0; res.error && attempt < 2 && isTransient(res.error.message); attempt++) {
+      await sleep(700 * (attempt + 1));
+      res = await build().range(from, from + PAGE - 1);
+    }
+    const { data, error } = res;
     if (error) throw new Error(`[${table}] ${error.message}`);
     rows.push(...((data ?? []) as T[]));
     if (!data || data.length < PAGE) break;
@@ -259,9 +271,18 @@ export const backup = {
 };
 
 async function call<T>(fn: string, args: Record<string, any> = {}): Promise<T> {
-  const { data, error } = await supabase.rpc(fn, args);
-  if (error) throw new Error(`[rpc:${fn}] ${error.message}`);
-  return data as T;
+  // Un « statement timeout » est annule COTE BASE : la transaction de la RPC
+  // est entierement annulee, rien n'a ete ecrit. On peut donc la relancer sans
+  // risque de doublon, apres une courte pause (base momentanement surchargee).
+  for (let attempt = 0; ; attempt++) {
+    const { data, error } = await supabase.rpc(fn, args);
+    if (!error) return data as T;
+    if (attempt < 2 && isTransient(error.message)) {
+      await sleep(700 * (attempt + 1));
+      continue;
+    }
+    throw new Error(`[rpc:${fn}] ${error.message}`);
+  }
 }
 
 const num = (v: any, d = 0) => (v === null || v === undefined ? d : Number(v));

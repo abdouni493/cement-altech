@@ -13,6 +13,7 @@ import { useExpenseStore } from '@/store/expenseStore';
 import { useCaisseStore } from '@/store/caisseStore';
 import { useCaisseReportStore } from '@/store/caisseReportStore';
 import { useSettingsStore } from '@/store/settingsStore';
+import { isWriteBusy } from '@/lib/persist';
 
 /**
  * Loads every screen from Supabase.
@@ -33,7 +34,13 @@ let lastRun = 0;
 export function hydrateFromSupabase(options: { force?: boolean } = {}) {
   const { force = true } = options;
   if (inFlight) return inFlight;
-  if (!force && Date.now() - lastRun < 60_000) {
+  // Synchronisation de FOND : jamais pendant qu'un operateur enregistre (elle
+  // concurrencerait sa requete et provoquait des « statement timeout »), ni
+  // quand l'onglet est masque, ni plus d'une fois toutes les 3 minutes.
+  if (!force && (
+    Date.now() - lastRun < 180_000 || isWriteBusy() ||
+    (typeof document !== 'undefined' && document.visibilityState === 'hidden')
+  )) {
     return Promise.resolve({ ok: true, failed: [] as string[] });
   }
   inFlight = runHydration().finally(() => {
@@ -55,23 +62,31 @@ async function runHydration(): Promise<{ ok: boolean; failed: string[] }> {
     }
   };
 
-  await Promise.all([
-    step('stock', () => useStockStore.getState().load()),
-    step('fournisseurs', () => useSupplierStore.getState().load()),
-    step('livreurs', () => useDelivererStore.getState().load()),
-    step('clients', () => useClientStore.getState().load()),
-    step('achats', () => usePurchaseStore.getState().load()),
-    step('ventes', () => useSalesStore.getState().load()),
-    step('commandes', () => useCommandStore.getState().load()),
-    step('productions', () => useProductionStore.getState().load()),
-    step('fiches techniques', () => useFicheTechnicStore.getState().load()),
-    step('comptoir', () => useComptoirStore.getState().load()),
-    step('employés', () => useWorkerStore.getState().load()),
-    step('dépenses', () => useExpenseStore.getState().load()),
-    step('caisse', () => useCaisseStore.getState().load()),
-    step('rapports de caisse', () => useCaisseReportStore.getState().load()),
-    step('paramètres', () => useSettingsStore.getState().load()),
-  ]);
+  // Les modules se chargent par petits groupes au lieu d'envoyer une quinzaine
+  // de lectures completes en meme temps : la base (petite instance) repond
+  // plus vite a chacune et les enregistrements ne restent plus bloques.
+  const tasks: (() => Promise<void>)[] = [
+    () => step('stock', () => useStockStore.getState().load()),
+    () => step('fournisseurs', () => useSupplierStore.getState().load()),
+    () => step('livreurs', () => useDelivererStore.getState().load()),
+    () => step('clients', () => useClientStore.getState().load()),
+    () => step('achats', () => usePurchaseStore.getState().load()),
+    () => step('ventes', () => useSalesStore.getState().load()),
+    () => step('commandes', () => useCommandStore.getState().load()),
+    () => step('productions', () => useProductionStore.getState().load()),
+    () => step('fiches techniques', () => useFicheTechnicStore.getState().load()),
+    () => step('comptoir', () => useComptoirStore.getState().load()),
+    () => step('employés', () => useWorkerStore.getState().load()),
+    () => step('dépenses', () => useExpenseStore.getState().load()),
+    () => step('caisse', () => useCaisseStore.getState().load()),
+    () => step('rapports de caisse', () => useCaisseReportStore.getState().load()),
+    () => step('paramètres', () => useSettingsStore.getState().load()),
+  ];
+  const POOL = 4;
+  let next = 0;
+  await Promise.all(Array.from({ length: POOL }, async () => {
+    while (next < tasks.length) await tasks[next++]();
+  }));
 
   return { ok: failed.length === 0, failed };
 }
