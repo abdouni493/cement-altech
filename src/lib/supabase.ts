@@ -3,25 +3,29 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 /**
  * Supabase connection — Altech Production (Ciment Blida).
  *
- * The credentials come from the `.env` file (VITE_SUPABASE_URL /
- * VITE_SUPABASE_ANON_KEY). The literals below are only a fallback so the
- * application also works when it is built without a `.env` (Vercel preview,
- * `lancer-cement-store.bat`, …). The anon key is a public key: it is safe in
- * the bundle, every table is protected by Row Level Security.
+ * NOUVEAU PROJET (asxdoijraguloypigiia). L'ancien projet (bxxdunoxajzybpsihown)
+ * etait sature (« statement timeout ») : l'application a ete transferee.
+ * Les identifiants sont ecrits ici et NE sont PLUS lus depuis les variables
+ * d'environnement : une ancienne variable VITE_SUPABASE_URL restee sur Vercel
+ * renverrait sinon le site vers l'ancien projet. La cle anon est publique ;
+ * chaque table est protegee par la securite au niveau des lignes (RLS).
  */
-const FALLBACK_URL = 'https://bxxdunoxajzybpsihown.supabase.co';
-const FALLBACK_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4eGR1bm94YWp6eWJwc2lob3duIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0OTAzOTMsImV4cCI6MjEwODA2NjM5M30.c-CjF4LDrH2XjkRVfi0ezCBqHYTawpFE3MadcAYrDgA';
+export const SUPABASE_URL = 'https://asxdoijraguloypigiia.supabase.co';
+export const SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFzeGRvaWpyYWd1bG95cGlnaWlhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTQ2NzMxNTIsImV4cCI6MjExMDI0OTE1Mn0.d-ZVD9KyuxwmbCiSDIkSb66R2t1Ls0L-e6Toe7IkJyU';
 
-export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || FALLBACK_URL;
-export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || FALLBACK_ANON_KEY;
+/** Ancien projet — lu UNIQUEMENT par l'outil de migration (Parametres). */
+export const OLD_SUPABASE_URL = 'https://bxxdunoxajzybpsihown.supabase.co';
+export const OLD_SUPABASE_ANON_KEY =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ4eGR1bm94YWp6eWJwc2lob3duIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTI0OTAzOTMsImV4cCI6MjEwODA2NjM5M30.c-CjF4LDrH2XjkRVfi0ezCBqHYTawpFE3MadcAYrDgA';
 
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: false,
-    storageKey: 'altech-production-auth',
+    // nouvelle cle : une session de l'ancien projet n'est pas renvoyee au nouveau
+    storageKey: 'altech-production-auth-asxdoij',
   },
 });
 

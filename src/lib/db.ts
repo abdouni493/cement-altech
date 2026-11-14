@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from './supabase';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import type {
   Product, Marque, Category, Unit, Supplier, Client, ClientDebt, Sale, Purchase,
   Production, ComptoirItem, Destruction, Worker, Role, Expense, CaisseTransaction,
@@ -161,7 +162,7 @@ export interface BackupVerifyRow {
 }
 
 /** Toutes les tables de l'application (export sans `backup_export()`). */
-const BACKUP_TABLES = [
+export const BACKUP_TABLES = [
   'activity_log', 'caisse_categories', 'caisse_reports', 'caisse_settings', 'caisse_transactions',
   'categories', 'client_debt_versements', 'client_debts', 'client_payments', 'clients',
   'command_adjustment_lines', 'command_adjustments', 'command_deliveries',
@@ -180,14 +181,14 @@ const BACKUP_TABLES = [
  * Lit une table entière par petites pages (500 lignes), en relançant chaque page
  * plusieurs fois quand la base est surchargée (« statement timeout »).
  */
-async function selectAll(table: string): Promise<any[] | null> {
+export async function selectAll(table: string, client: SupabaseClient = supabase): Promise<any[] | null> {
   const rows: any[] = [];
   const page = 500;
   let ordered = true;
   for (let from = 0; ; from += page) {
     let res: { data: any[] | null; error: { message: string } | null } = { data: null, error: null };
     for (let attempt = 0; attempt < 5; attempt++) {
-      let q = supabase.from(table).select('*');
+      let q = client.from(table).select('*');
       if (ordered) q = q.order('id', { ascending: true });
       res = await q.range(from, from + page - 1);
       if (!res.error || !isTransient(res.error.message)) break;
@@ -329,7 +330,8 @@ async function call<T>(fn: string, args: Record<string, any> = {}): Promise<T> {
  * creations suivantes passent DIRECTEMENT par l'ecriture directe — plus
  * d'attente ni d'erreur 500 dans la console.
  * ------------------------------------------------------------------------- */
-const SLOW_KEY = 'altech-slow-rpc';
+// propre au projet : une lenteur notee sur l'ancienne base ne s'applique pas a la nouvelle
+const SLOW_KEY = 'altech-slow-rpc-asxdoij';
 const SLOW_TTL = 6 * 3600_000;
 
 function slowMap(): Record<string, number> {
@@ -1450,8 +1452,9 @@ export const rpc = {
   // /clients/commands
   createCommand: (payload: Record<string, any>) => call<any>('create_command', { p_payload: payload }),
   /** create_command SANS relance : sert a basculer vite sur la creation directe. */
-  /** Creation d'une commande : ecriture directe (create_command() est trop lente sur cette base). */
-  createCommandSafe: (payload: Record<string, any>) => db.commands.createDirect(payload),
+  /** create_command(), ou creation directe si la fonction depasse le delai de la base. */
+  createCommandSafe: (payload: Record<string, any>) =>
+    rpcOrDirect<any>('create_command', { p_payload: payload }, () => db.commands.createDirect(payload)),
   /**
    * Modifier une commande EN ENTIER : en-tete, TVA, acompte et lignes.
    * L'ancienne version n'ecrivait que l'en-tete — l'acompte, la TVA et les

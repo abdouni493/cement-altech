@@ -11,6 +11,7 @@ import { useLanguage } from '@/hooks/useLanguage';
 import { downloadJSON, todayISO } from '@/lib/utils';
 import { toast } from '@/components/ui/Toast';
 import { RecycleBin } from './RecycleBin';
+import { MigrationPanel } from './MigrationPanel';
 import { backup } from '@/lib/db';
 
 type VerifyResult = Awaited<ReturnType<typeof backup.verify>>;
@@ -126,6 +127,10 @@ export default function SettingsPage() {
       if (!window.confirm(msg)) return;
       setBusy('restore');
       const result = await backup.restore(data);
+      const localDeliverers = (data as { local?: { deliverers?: unknown } }).local?.deliverers;
+      if (localDeliverers) {
+        try { localStorage.setItem('altech-deliverers-v1', JSON.stringify(localDeliverers)); } catch { /* ignore */ }
+      }
       const rows = Object.values(result.tables).reduce((s, n) => s + n, 0);
       toast.success(`Données restaurées — ${rows} lignes. Rechargement...`);
       setTimeout(async () => {
@@ -222,6 +227,7 @@ export default function SettingsPage() {
 
       {tab === 'database' && (
         <div className="space-y-4">
+          <MigrationPanel />
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card index={0}>
               <div className="flex items-center gap-2 mb-3 text-pistachio"><Download size={20} /><h3 className="font-display font-semibold text-text-primary">{t('backup')}</h3></div>
