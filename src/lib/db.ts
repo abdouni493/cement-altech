@@ -176,15 +176,24 @@ const BACKUP_TABLES = [
   'workers',
 ];
 
-/** Lit une table entière, par pages de 1000 lignes (limite de l'API). */
+/**
+ * Lit une table entière par petites pages (500 lignes), en relançant chaque page
+ * plusieurs fois quand la base est surchargée (« statement timeout »).
+ */
 async function selectAll(table: string): Promise<any[] | null> {
   const rows: any[] = [];
-  const page = 1000;
+  const page = 500;
   let ordered = true;
   for (let from = 0; ; from += page) {
-    let q = supabase.from(table).select('*');
-    if (ordered) q = q.order('id', { ascending: true });
-    const { data, error } = await q.range(from, from + page - 1);
+    let res: { data: any[] | null; error: { message: string } | null } = { data: null, error: null };
+    for (let attempt = 0; attempt < 5; attempt++) {
+      let q = supabase.from(table).select('*');
+      if (ordered) q = q.order('id', { ascending: true });
+      res = await q.range(from, from + page - 1);
+      if (!res.error || !isTransient(res.error.message)) break;
+      await sleep(2000 * (attempt + 1));
+    }
+    const { data, error } = res;
     if (error) {
       if (ordered && from === 0 && /42703|column .*id/i.test(error.message)) { ordered = false; from -= page; continue; }
       if (isMissingSchema(error.message)) return null;
@@ -195,21 +204,40 @@ async function selectAll(table: string): Promise<any[] | null> {
   }
 }
 
+export type BackupProgress = (done: number, total: number, table: string) => void;
+
 /**
- * Export fait depuis le navigateur quand `backup_export()` n'existe pas sur le
- * projet. Les comptes de connexion (auth.users) ne sont pas lisibles par l'API :
- * le fichier n'a donc pas de section `auth`.
+ * Export fait depuis le navigateur, table par table. Une table qui échoue
+ * n'arrête pas la sauvegarde : elle est listée dans `failed_tables`.
+ * Les comptes de connexion (auth.users) ne sont pas lisibles par l'API.
+ * Les livreurs (stockés dans ce navigateur) sont joints dans `local`.
  */
-async function exportFromClient(): Promise<Record<string, any>> {
+async function exportFromClient(onProgress?: BackupProgress): Promise<Record<string, any>> {
   const tables: Record<string, any[]> = {};
   const counts: Record<string, number> = {};
-  for (const t of BACKUP_TABLES) {
-    const rows = await selectAll(t);
-    if (rows === null) continue;
-    tables[t] = rows;
-    counts[t] = rows.length;
+  const failed: string[] = [];
+  for (let i = 0; i < BACKUP_TABLES.length; i++) {
+    const t = BACKUP_TABLES[i];
+    onProgress?.(i, BACKUP_TABLES.length, t);
+    try {
+      const rows = await selectAll(t);
+      if (rows === null) continue;
+      tables[t] = rows;
+      counts[t] = rows.length;
+    } catch (e) {
+      console.warn('[backup]', (e as Error).message);
+      failed.push(t);
+    }
   }
-  return { format: 'altech-production-backup', version: 2, source: 'client', created_at: new Date().toISOString(), tables, counts };
+  onProgress?.(BACKUP_TABLES.length, BACKUP_TABLES.length, '');
+  let local: unknown = null;
+  try { local = JSON.parse(localStorage.getItem('altech-deliverers-v1') || 'null'); } catch { /* ignore */ }
+  return {
+    format: 'altech-production-backup', version: 2, source: 'client',
+    created_at: new Date().toISOString(), tables, counts,
+    ...(failed.length ? { failed_tables: failed } : {}),
+    ...(local ? { local: { deliverers: local } } : {}),
+  };
 }
 
 /** JSON d'une ligne avec les clés triées, pour comparer indépendamment de l'ordre. */
@@ -250,13 +278,18 @@ async function verifyFromClient(data: Record<string, any>) {
 
 /** Paramètres › Base de données : sauvegarde complète de toutes les tables + comptes. */
 export const backup = {
-  export: async () => {
+  export: async (onProgress?: BackupProgress) => {
+    // backup_export() construit TOUTE la sauvegarde en une requête : sur une
+    // base surchargée elle dépasse le délai. Dans ce cas (ou si elle n'existe
+    // pas) on lit table par table depuis le navigateur.
     const { data, error } = await supabase.rpc('backup_export');
-    if (!error) return data as Record<string, any>;
-    if (!isMissingSchema(error.message) && !/PGRST202|Could not find the function/i.test(error.message)) {
-      throw new Error(`[rpc:backup_export] ${error.message}`);
+    if (!error && data) {
+      let local: unknown = null;
+      try { local = JSON.parse(localStorage.getItem('altech-deliverers-v1') || 'null'); } catch { /* ignore */ }
+      return local ? { ...(data as Record<string, any>), local: { deliverers: local } } : data as Record<string, any>;
     }
-    return exportFromClient();
+    if (error) console.warn('[backup] backup_export indisponible, export table par table :', error.message);
+    return exportFromClient(onProgress);
   },
   verify: async (data: Record<string, any>) => {
     const { data: res, error } = await supabase.rpc('backup_verify', { p_backup: data });

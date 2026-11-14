@@ -45,6 +45,7 @@ export default function SettingsPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const verifyRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<'' | 'backup' | 'verify' | 'restore'>('');
+  const [backupProgress, setBackupProgress] = useState('');
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
 
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
@@ -69,8 +70,17 @@ export default function SettingsPage() {
   const handleBackup = async () => {
     setBusy('backup');
     try {
-      const data = await backup.export();
+      setBackupProgress('');
+      const data = await backup.export((done, total) => {
+        setBackupProgress(`${Math.min(done + 1, total)}/${total}`);
+      });
       downloadJSON(data, `altech-backup-${todayISO()}.json`);
+      if (Array.isArray(data.failed_tables) && data.failed_tables.length) {
+        toast.error(
+          `Sauvegarde téléchargée mais ${data.failed_tables.length} table(s) n'ont pas pu être lues ` +
+          `(base surchargée) : ${data.failed_tables.join(', ')}. Relancez la sauvegarde plus tard pour les compléter.`
+        );
+      }
       const tables = Object.keys(data.tables ?? {}).length;
       const rows = Object.values<number>(data.counts ?? {}).reduce((s, n) => s + n, 0);
       if (data.auth) toast.success(`Sauvegarde téléchargée — ${tables} tables, ${rows} lignes, ${data.auth.users?.length ?? 0} comptes`);
@@ -216,7 +226,7 @@ export default function SettingsPage() {
             <Card index={0}>
               <div className="flex items-center gap-2 mb-3 text-pistachio"><Download size={20} /><h3 className="font-display font-semibold text-text-primary">{t('backup')}</h3></div>
               <p className="text-sm text-text-muted mb-4">Exporter toutes les données (toutes les interfaces, historiques, stock, opérations) et tous les comptes en JSON</p>
-              <Button variant="gold" onClick={handleBackup} disabled={!!busy}><Download size={16} /> {busy === 'backup' ? 'Export en cours...' : t('downloadBackup')}</Button>
+              <Button variant="gold" onClick={handleBackup} disabled={!!busy}><Download size={16} /> {busy === 'backup' ? `Export en cours...${backupProgress ? ` ${backupProgress}` : ''}` : t('downloadBackup')}</Button>
             </Card>
             <Card index={1}>
               <div className="flex items-center gap-2 mb-3 text-gold-dark"><ShieldCheck size={20} /><h3 className="font-display font-semibold text-text-primary">Vérifier une sauvegarde</h3></div>
