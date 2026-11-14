@@ -295,6 +295,13 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         items: data.items.map(itemPayload),
       })
     );
+    // On ne relit QUE la commande creee (et non toute la table avec ses lignes
+    // et reglements) : la creation redevient instantanee.
+    const created = await db.commands.get(row.id).catch(() => null);
+    if (created) {
+      set({ commands: [created, ...get().commands.filter((c) => c.id !== created.id)] });
+      return created;
+    }
     const commands = await db.commands.list();
     set({ commands });
     return commands.find((c) => c.id === row.id) as Command;

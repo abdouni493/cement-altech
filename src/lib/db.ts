@@ -37,8 +37,8 @@ async function readAll<T>(table: string, build: () => any): Promise<T[]> {
   const rows: T[] = [];
   for (let from = 0; ; from += PAGE) {
     let res = await build().range(from, from + PAGE - 1);
-    for (let attempt = 0; res.error && attempt < 2 && isTransient(res.error.message); attempt++) {
-      await sleep(700 * (attempt + 1));
+    for (let attempt = 0; res.error && attempt < 1 && isTransient(res.error.message); attempt++) {
+      await sleep(2500);
       res = await build().range(from, from + PAGE - 1);
     }
     const { data, error } = res;
@@ -277,8 +277,10 @@ async function call<T>(fn: string, args: Record<string, any> = {}): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     const { data, error } = await supabase.rpc(fn, args);
     if (!error) return data as T;
-    if (attempt < 2 && isTransient(error.message)) {
-      await sleep(700 * (attempt + 1));
+    // UNE seule relance, espacee : multiplier les essais ne fait qu'ajouter de
+    // la charge a une base deja saturee.
+    if (attempt < 1 && isTransient(error.message)) {
+      await sleep(2500);
       continue;
     }
     throw new Error(`[rpc:${fn}] ${error.message}`);
@@ -940,6 +942,25 @@ export const db = {
         if (!isMissingSchema((e as Error).message)) throw e;
         return (await select<any>('commands', '*, command_items(*)', 'created_at')).map(toCommand);
       }
+    },
+    /** UNE commande (avec ses lignes et reglements) — evite de relire toute la table. */
+    get: async (id: string): Promise<Command | null> => {
+      for (const cols of ['*, command_items(*), command_payments(*)', '*, command_items(*)']) {
+        const { data, error } = await supabase.from('commands').select(cols).eq('id', id).maybeSingle();
+        if (error) {
+          if (isMissingSchema(error.message)) continue;
+          throw new Error(`[commands] ${error.message}`);
+        }
+        if (!data) return null;
+        const r: any = data;
+        return toCommand({
+          ...r,
+          command_items: [...(r.command_items ?? [])].sort(
+            (a: any, b: any) => (a.position ?? 0) - (b.position ?? 0)
+          ),
+        });
+      }
+      return null;
     },
     update: (id: string, row: Record<string, any>) => update('commands', id, row),
     /**

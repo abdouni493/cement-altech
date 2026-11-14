@@ -36,9 +36,9 @@ export function hydrateFromSupabase(options: { force?: boolean } = {}) {
   if (inFlight) return inFlight;
   // Synchronisation de FOND : jamais pendant qu'un operateur enregistre (elle
   // concurrencerait sa requete et provoquait des « statement timeout »), ni
-  // quand l'onglet est masque, ni plus d'une fois toutes les 3 minutes.
+  // quand l'onglet est masque, ni plus d'une fois toutes les 15 minutes.
   if (!force && (
-    Date.now() - lastRun < 180_000 || isWriteBusy() ||
+    Date.now() - lastRun < 900_000 || isWriteBusy() ||
     (typeof document !== 'undefined' && document.visibilityState === 'hidden')
   )) {
     return Promise.resolve({ ok: true, failed: [] as string[] });
