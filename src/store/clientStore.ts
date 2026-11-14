@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { inBackground } from '@/lib/background';
 import type {
   Client, PartyPayment, PaymentMethodDetails, PartyOldDebt, PartyCreditRefund,
 } from '@/types';
@@ -80,11 +81,10 @@ interface ClientState {
  * enregistré mais la dette ne baisse pas »).
  */
 async function refreshClientDebt(): Promise<void> {
-  await Promise.all([
-    useSalesStore.getState().load(),
-    useCommandStore.getState().load(),
-    useCaisseStore.getState().load(),
-  ]).catch(() => undefined);
+  // en arriere-plan : l'operateur n'attend pas la relecture des autres ecrans
+  void inBackground('sales', () => useSalesStore.getState().load());
+  void inBackground('commands', () => useCommandStore.getState().load());
+  void inBackground('caisse', () => useCaisseStore.getState().load());
 }
 
 /**

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { inBackground } from '@/lib/background';
 import type { Sale, SaleLine, UsedProduct } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { computeTva, DEFAULT_TVA_RATE } from '@/lib/utils';
@@ -125,12 +126,7 @@ interface SalesState {
  * L'import est dynamique : `commandStore` importe deja `salesStore`.
  */
 async function refreshDeliveries(): Promise<void> {
-  try {
-    const { useCommandStore } = await import('./commandStore');
-    await useCommandStore.getState().load();
-  } catch {
-    /* la liste sera rechargee au prochain passage sur l'ecran Commandes */
-  }
+  void inBackground('commands', async () => (await import('./commandStore')).useCommandStore.getState().load());
 }
 
 /**
@@ -138,14 +134,8 @@ async function refreshDeliveries(): Promise<void> {
  * son compte (acompte) : sa fiche et la caisse sont relues.
  */
 async function refreshAccounts(): Promise<void> {
-  try {
-    const [{ useClientStore }, { useCaisseStore }] = await Promise.all([
-      import('./clientStore'), import('./caisseStore'),
-    ]);
-    await Promise.all([useClientStore.getState().load(), useCaisseStore.getState().load()]);
-  } catch {
-    /* relus au prochain passage sur l'ecran */
-  }
+  void inBackground('clients', async () => (await import('./clientStore')).useClientStore.getState().load());
+  void inBackground('caisse', async () => (await import('./caisseStore')).useCaisseStore.getState().load());
 }
 
 /** True when the database has not received the POS/production update yet. */

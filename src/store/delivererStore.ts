@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { inBackground } from '@/lib/background';
 import type {
   Deliverer, DelivererPayment, PaymentMethodDetails, PurchaseDelivererAssignment,
 } from '@/types';
@@ -51,7 +52,7 @@ function persist(get: () => DelivererState): void {
 }
 
 async function reloadCaisse(): Promise<void> {
-  await useCaisseStore.getState().load().catch(() => undefined);
+  void inBackground('caisse', () => useCaisseStore.getState().load());
 }
 
 /** Crée une sortie de caisse (best effort) et renvoie son id, ou undefined. */

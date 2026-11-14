@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { inBackground } from '@/lib/background';
 import type { Purchase } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
@@ -92,7 +93,8 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
 
       // The purchase changed the stock: reload both lists from the database so
       // the /stock screen immediately shows the new quantities.
-      const [purchases] = await Promise.all([db.purchases.list(), useStockStore.getState().load()]);
+      const purchases = await db.purchases.list();
+      void inBackground('stock', () => useStockStore.getState().load());
       set({ purchases });
 
       // Filet de sécurité : « ancien achat » n'existe que si
@@ -153,11 +155,9 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
       );
       // update_purchase() réconcilie le stock par écart et refait le règlement :
       // les trois écrans concernés sont rechargés depuis la base.
-      const [purchases] = await Promise.all([
-        db.purchases.list(),
-        data.products ? useStockStore.getState().load() : Promise.resolve(),
-        useCaisseStore.getState().load(),
-      ]);
+      const purchases = await db.purchases.list();
+      if (data.products) void inBackground('stock', () => useStockStore.getState().load());
+      void inBackground('caisse', () => useCaisseStore.getState().load());
       set({ purchases });
 
       const saved = purchases.find((p) => p.id === id);

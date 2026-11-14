@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { inBackground } from '@/lib/background';
 import type {
   CommandDelivery, CommandDeliveryItem, CommandAdjustment, CommandAdjustmentLine, CommandPayment,
 } from '@/types';
@@ -227,7 +228,7 @@ const deliveryItemPayload = (i: CommandDeliveryItem) => ({
 
 /** Recharge « Gestion de stock » après un mouvement déclenché par une livraison. */
 const reloadStock = () =>
-  useStockStore.getState().load().catch(() => undefined);
+  inBackground('stock', () => useStockStore.getState().load());
 
 /** Option TVA envoyee a la base — omise quand l'appelant ne la precise pas. */
 const tvaPayload = (p?: DeliveryPayment) =>
@@ -240,7 +241,7 @@ const tvaPayload = (p?: DeliveryPayment) =>
  * immediatement dans « Ventes », dans la caisse et sur la fiche du client.
  */
 const reloadSales = () =>
-  useSalesStore.getState().load().catch(() => undefined);
+  inBackground('sales', () => useSalesStore.getState().load());
 
 /**
  * Le compte du client suit chaque modification : l'acompte (argent libere par
@@ -249,14 +250,8 @@ const reloadSales = () =>
  * Import dynamique : `clientStore` importe deja ce module.
  */
 const reloadAccounts = async () => {
-  try {
-    const [{ useClientStore }, { useCaisseStore }] = await Promise.all([
-      import('./clientStore'), import('./caisseStore'),
-    ]);
-    await Promise.all([useClientStore.getState().load(), useCaisseStore.getState().load()]);
-  } catch {
-    /* relus au prochain passage sur l'ecran */
-  }
+  void inBackground('clients', async () => (await import('./clientStore')).useClientStore.getState().load());
+  void inBackground('caisse', async () => (await import('./caisseStore')).useCaisseStore.getState().load());
 };
 
 export const useCommandStore = create<CommandState>()((set, get) => ({

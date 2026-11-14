@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { inBackground } from '@/lib/background';
 import type { Production, UsedProduct, Category } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { save } from '@/lib/persist';
@@ -82,7 +83,8 @@ export const useProductionStore = create<ProductionState>()((set, get) => ({
     );
 
     // ingredients left the stock → both screens reload from the database
-    const [productions] = await Promise.all([db.productions.list(), useStockStore.getState().load()]);
+    const productions = await db.productions.list();
+    void inBackground('stock', () => useStockStore.getState().load());
     set({ productions });
     return productions.find((p) => p.id === row.id) as Production;
   },
@@ -117,9 +119,8 @@ export const useProductionStore = create<ProductionState>()((set, get) => ({
       throw new Error('La quantité dépasse le reste en stock de production');
     }
     await save('productions.transferToComptoir', () => rpc.transferToComptoir(id, qty));
-    const [productions] = await Promise.all([
-      db.productions.list(), useComptoirStore.getState().load(),
-    ]);
+    const productions = await db.productions.list();
+    void inBackground('comptoir', () => useComptoirStore.getState().load());
     set({ productions });
   },
 

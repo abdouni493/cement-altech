@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { inBackground } from '@/lib/background';
 import type {
   Supplier, PartyPayment, PaymentMethodDetails, PartyOldDebt, PartyCreditRefund,
 } from '@/types';
@@ -59,10 +60,9 @@ interface SupplierState {
  * dette jusqu'au prochain rafraîchissement de la page.
  */
 async function refreshSupplierDebt(): Promise<void> {
-  await Promise.all([
-    usePurchaseStore.getState().load(),
-    useCaisseStore.getState().load(),
-  ]).catch(() => undefined);
+  // en arriere-plan : l'operateur n'attend pas la relecture des autres ecrans
+  void inBackground('purchases', () => usePurchaseStore.getState().load());
+  void inBackground('caisse', () => useCaisseStore.getState().load());
 }
 
 /**

@@ -349,7 +349,6 @@ async function rpcOrDirect<T>(fn: string, args: Record<string, any>, direct: () 
   if (!error) return data as T;
   if (!isTransient(error.message)) throw new Error(`[rpc:${fn}] ${error.message}`);
   markSlow(fn);
-  console.info(`[db] ${fn} trop lente : enregistrement direct (memorise 6 h)`);
   return direct();
 }
 
@@ -1451,9 +1450,8 @@ export const rpc = {
   // /clients/commands
   createCommand: (payload: Record<string, any>) => call<any>('create_command', { p_payload: payload }),
   /** create_command SANS relance : sert a basculer vite sur la creation directe. */
-  /** create_command, ou creation directe si la fonction depasse le delai. */
-  createCommandSafe: (payload: Record<string, any>) =>
-    rpcOrDirect<any>('create_command', { p_payload: payload }, () => db.commands.createDirect(payload)),
+  /** Creation d'une commande : ecriture directe (create_command() est trop lente sur cette base). */
+  createCommandSafe: (payload: Record<string, any>) => db.commands.createDirect(payload),
   /**
    * Modifier une commande EN ENTIER : en-tete, TVA, acompte et lignes.
    * L'ancienne version n'ecrivait que l'en-tete — l'acompte, la TVA et les
