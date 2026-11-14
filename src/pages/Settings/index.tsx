@@ -61,11 +61,38 @@ export default function SettingsPage() {
 
   const saveStore = async () => { await updateSettings(form); toast.success('Informations enregistrées'); };
 
-  const saveAccount = () => {
-    if (account.newPwd && account.newPwd !== account.confirmPwd) { toast.error('Les mots de passe ne correspondent pas'); return; }
-    updateMyAccount({ name: account.name, username: account.username, email: account.email, ...(account.newPwd ? { password: account.newPwd } : {}) });
-    toast.success('Compte mis à jour');
-    setAccount({ ...account, oldPwd: '', newPwd: '', confirmPwd: '' });
+  const [savingAccount, setSavingAccount] = useState(false);
+
+  const saveAccount = async () => {
+    const email = account.email.trim();
+    if (!account.name.trim()) { toast.error('Le nom complet est obligatoire'); return; }
+    if (!account.username.trim()) { toast.error("Le nom d'utilisateur est obligatoire"); return; }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { toast.error('Adresse e-mail invalide'); return; }
+    if (account.newPwd) {
+      if (!account.oldPwd) { toast.error("Saisissez l'ancien mot de passe"); return; }
+      if (account.newPwd.length < 6) { toast.error('Le nouveau mot de passe doit contenir au moins 6 caractères'); return; }
+      if (account.newPwd !== account.confirmPwd) { toast.error('Les mots de passe ne correspondent pas'); return; }
+    }
+    setSavingAccount(true);
+    try {
+      const res = await updateMyAccount({
+        name: account.name,
+        username: account.username,
+        email,
+        ...(account.newPwd ? { oldPassword: account.oldPwd, newPassword: account.newPwd } : {}),
+      });
+      if (!res.ok) { toast.error(res.error || 'Mise à jour du compte impossible'); return; }
+      const saved = useAuthStore.getState().user;
+      setAccount({
+        name: saved?.name ?? account.name,
+        username: saved?.username ?? account.username,
+        email: saved?.email ?? email,
+        oldPwd: '', newPwd: '', confirmPwd: '',
+      });
+      toast.success('Compte mis à jour');
+    } finally {
+      setSavingAccount(false);
+    }
   };
 
   const handleBackup = async () => {
@@ -211,7 +238,7 @@ export default function SettingsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input label={t('fullName')} value={account.name} onChange={(e) => setAccount({ ...account, name: e.target.value })} />
             <Input label={t('username')} value={account.username} onChange={(e) => setAccount({ ...account, username: e.target.value })} />
-            <Input label={t('email')} value={account.email} onChange={(e) => setAccount({ ...account, email: e.target.value })} />
+            <Input label={t('email')} type="email" value={account.email} onChange={(e) => setAccount({ ...account, email: e.target.value })} />
           </div>
           <div className="mt-6 pt-4 border-t border-gold/15">
             <h4 className="text-sm font-semibold text-text-secondary mb-3">{t('changePassword')}</h4>
@@ -221,7 +248,7 @@ export default function SettingsPage() {
               <Input label="Confirmer" type="password" value={account.confirmPwd} onChange={(e) => setAccount({ ...account, confirmPwd: e.target.value })} />
             </div>
           </div>
-          <div className="flex justify-end mt-4"><Button variant="gold" onClick={saveAccount}><Save size={16} /> {t('save')}</Button></div>
+          <div className="flex justify-end mt-4"><Button variant="gold" onClick={saveAccount} disabled={savingAccount}><Save size={16} /> {savingAccount ? 'Enregistrement...' : t('save')}</Button></div>
         </Card>
       )}
 

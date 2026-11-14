@@ -4,6 +4,14 @@ import type { User, CreateAccountData, Lang } from '@/types';
 import { uid } from '@/lib/utils';
 import { supabase, resolveLoginEmail, fetchProfile } from '@/lib/supabase';
 
+export interface UpdateMyAccountData {
+  name: string;
+  username: string;
+  email: string;
+  oldPassword?: string;
+  newPassword?: string;
+}
+
 interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
@@ -23,7 +31,8 @@ interface AuthState {
   /** true as soon as the store has an administrator (hides the login-page button) */
   adminExists: () => Promise<boolean>;
   createAccount: (data: CreateAccountData) => Promise<{ ok: boolean; error?: string }>;
-  updateMyAccount: (data: Partial<User>) => void;
+  /** Settings › "Mon compte": saves name, username, e-mail and password in Supabase. */
+  updateMyAccount: (data: UpdateMyAccountData) => Promise<{ ok: boolean; error?: string }>;
 }
 
 /** Builds the application user from a `public.profiles` row. */
@@ -200,26 +209,57 @@ export const useAuthStore = create<AuthState>()(
         return { ok: true };
       },
 
-      updateMyAccount: (data) => {
+      updateMyAccount: async (data) => {
         const current = get().user;
-        if (!current) return;
-        const updated = { ...current, ...data };
-        set({
-          user: updated,
-          registeredAccounts: get().registeredAccounts.map((a) =>
-            a.id === current.id ? { ...a, ...data } : a
-          ),
-        });
-        supabase
-          .from('profiles')
-          .update({
-            full_name: updated.name,
-            username: updated.username,
-          })
-          .eq('id', current.id)
-          .then(({ error }) => {
-            if (error) console.warn('[auth] profil non synchronisé:', error.message);
+        if (!current) return { ok: false, error: 'Aucun utilisateur connecté' };
+
+        const name = data.name.trim();
+        const username = data.username.trim().toLowerCase();
+        const email = data.email.trim().toLowerCase();
+        const changes = { name, username, email };
+
+        // Local offline admin account (no Supabase row): update it in place.
+        const localAccount = get().registeredAccounts.find((a) => a.id === current.id);
+        if (localAccount) {
+          if (data.newPassword && localAccount.password && data.oldPassword !== localAccount.password) {
+            return { ok: false, error: 'Ancien mot de passe incorrect' };
+          }
+          const patch = { ...changes, ...(data.newPassword ? { password: data.newPassword } : {}) };
+          set({
+            user: { ...current, ...changes },
+            registeredAccounts: get().registeredAccounts.map((a) =>
+              a.id === current.id ? { ...a, ...patch } : a
+            ),
           });
+          return { ok: true };
+        }
+
+        try {
+          const { error } = await supabase.rpc('update_my_account', {
+            p_name: name,
+            p_username: username,
+            p_email: email,
+            p_old_password: data.oldPassword || null,
+            p_new_password: data.newPassword || null,
+          });
+
+          if (error) {
+            // Function not yet installed in the database: fall back to the Auth API.
+            if (error.code === 'PGRST202' || /update_my_account/i.test(error.message)) {
+              const fallback = await updateAccountWithAuthApi(current, changes, data);
+              if (!fallback.ok) return fallback;
+            } else {
+              return { ok: false, error: error.message };
+            }
+          }
+
+          // Re-read the saved profile so the screen shows what is really stored.
+          const profile = await fetchProfile(current.id);
+          set({ user: profile ? userFromProfile(profile) : { ...current, ...changes }, isOnline: true });
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: (e as Error).message || 'Supabase injoignable' };
+        }
       },
     }),
     {
@@ -242,6 +282,39 @@ export const useAuthStore = create<AuthState>()(
     }
   )
 );
+
+/**
+ * Fallback when `update_my_account()` is not installed yet: profile row via the
+ * REST API, e-mail / password via Supabase Auth.
+ */
+async function updateAccountWithAuthApi(
+  current: User,
+  changes: { name: string; username: string; email: string },
+  data: UpdateMyAccountData
+): Promise<{ ok: boolean; error?: string }> {
+  if (data.newPassword) {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: current.email,
+      password: data.oldPassword || '',
+    });
+    if (error) return { ok: false, error: 'Ancien mot de passe incorrect' };
+  }
+
+  const authChanges: { email?: string; password?: string; data?: Record<string, string> } = {
+    data: { full_name: changes.name, username: changes.username },
+  };
+  if (changes.email !== current.email.toLowerCase()) authChanges.email = changes.email;
+  if (data.newPassword) authChanges.password = data.newPassword;
+  const { error: authError } = await supabase.auth.updateUser(authChanges);
+  if (authError) return { ok: false, error: authError.message };
+
+  const { error } = await supabase
+    .from('profiles')
+    .update({ full_name: changes.name, username: changes.username, email: changes.email })
+    .eq('id', current.id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
 
 /** Offline fallback: accounts registered from this browser (admins + workers). */
 function loginLocally(
