@@ -27,7 +27,7 @@ const PAGE = 1000;
  * the screens. Small tables still cost a single request.
  */
 /** Erreurs passageres de la base : la requete peut etre relancee telle quelle. */
-function isTransient(message: string): boolean {
+export function isTransient(message: string): boolean {
   return /statement timeout|canceling statement|57014|timeout|Failed to fetch|NetworkError|fetch failed|503|502|504/i.test(message);
 }
 
@@ -976,6 +976,97 @@ export const db = {
         return (await select<any>('commands', '*, command_items(*)', 'created_at')).map(toCommand);
       }
     },
+    /**
+     * CREATION DIRECTE — secours quand la fonction `create_command()` depasse le
+     * delai de la base. Ecrit les MEMES lignes qu'elle (commande, lignes,
+     * adresse du client, acompte en caisse) par petites requetes separees ;
+     * les totaux TVA / TTC / reste sont recalcules par le declencheur de la
+     * table. En cas d'echec sur les lignes, la commande est retiree.
+     */
+    createDirect: async (p: Record<string, any>): Promise<{ id: string; reference: string }> => {
+      const created = p.created_at ? new Date(p.created_at) : new Date();
+      const year = String(created.getFullYear());
+      const advance = Math.max(0, Number(p.advance_paid) || 0);
+      const tvaOn = !!p.tva_enabled;
+
+      // Prochain numero CMD-AAAA-NNN d'apres les references existantes.
+      const { data: refs, error: refErr } = await supabase
+        .from('commands').select('reference').like('reference', `CMD-${year}-%`);
+      if (refErr) throw new Error(`[commands] ${refErr.message}`);
+      let seq = (refs ?? []).reduce((m: number, r: any) => {
+        const n = parseInt(String(r.reference).split('-').pop() ?? '', 10);
+        return Number.isFinite(n) && n > m ? n : m;
+      }, 0);
+
+      const clean = (v: any) => (typeof v === 'string' && v.trim() ? v.trim() : null);
+      let row: any = null;
+      for (let attempt = 0; attempt < 5 && !row; attempt++) {
+        seq += 1;
+        const reference = `CMD-${year}-${String(seq).padStart(3, '0')}`;
+        const { data, error } = await supabase.from('commands').insert({
+          reference,
+          client_id: p.client_id || null,
+          client_name: p.client_name || 'Client',
+          client_phone: clean(p.client_phone),
+          client_address: clean(p.client_address),
+          driver_name: clean(p.driver_name),
+          driver_plate: clean(p.driver_plate),
+          receive_date: p.receive_date || null,
+          receive_hour: p.receive_hour ?? '00',
+          receive_minute: p.receive_minute ?? '00',
+          total_amount: Number(p.total_amount) || 0,
+          tva_enabled: tvaOn,
+          tva_rate: tvaOn ? (Number(p.tva_rate) || 19) : 0,
+          advance_paid: advance,
+          extra_paid: 0,
+          paid_amount: advance,
+          notes: p.notes ?? '',
+          bon_number: clean(p.bon_number),
+          is_historical: !!p.is_historical,
+          status: 'pending',
+          created_at: created.toISOString(),
+        }).select('id, reference').single();
+        if (!error) { row = data; break; }
+        if (!/duplicate key|already exists|23505/i.test(error.message)) throw new Error(`[commands] ${error.message}`);
+      }
+      if (!row) throw new Error('[commands] impossible de trouver un numero de commande libre');
+
+      const items = (p.items ?? []).map((i: any, idx: number) => ({
+        command_id: row.id,
+        position: i.position ?? idx,
+        product_id: i.product_id || null,
+        fiche_technic_id: i.fiche_technic_id || null,
+        product_name: i.product_name || 'Produit',
+        quantity: Number(i.quantity) || 0,
+        unit_price: Number(i.unit_price) || 0,
+        total_price: Number(i.total_price) || 0,
+        sell_by_unit: !!i.sell_by_unit,
+        sell_unit: i.sell_unit ?? null,
+      }));
+      if (items.length) {
+        const { error } = await supabase.from('command_items').insert(items);
+        if (error) {
+          await supabase.from('commands').delete().eq('id', row.id);
+          throw new Error(`[command_items] ${error.message}`);
+        }
+      }
+
+      // l'adresse saisie devient l'adresse de reference du client (facultatif)
+      const addr = clean(p.client_address);
+      if (p.client_id && addr) {
+        await supabase.from('clients').update({ address: addr }).eq('id', p.client_id);
+      }
+
+      // L'acompte d'une commande ACTUELLE entre en caisse (pas d'une ancienne).
+      if (advance > 0 && !p.is_historical) {
+        await supabase.from('caisse_transactions').insert({
+          type: 'deposit', amount: advance, date: created.toISOString().slice(0, 10),
+          description: `Acompte commande ${row.reference}`, category_name: 'Commande',
+          ref_table: 'commands', ref_id: row.id,
+        });
+      }
+      return { id: row.id, reference: row.reference };
+    },
     /** UNE commande (avec ses lignes et reglements) — evite de relire toute la table. */
     get: async (id: string): Promise<Command | null> => {
       for (const cols of ['*, command_items(*), command_payments(*)', '*, command_items(*)']) {
@@ -1254,6 +1345,12 @@ export const rpc = {
 
   // /clients/commands
   createCommand: (payload: Record<string, any>) => call<any>('create_command', { p_payload: payload }),
+  /** create_command SANS relance : sert a basculer vite sur la creation directe. */
+  createCommandOnce: async (payload: Record<string, any>) => {
+    const { data, error } = await supabase.rpc('create_command', { p_payload: payload });
+    if (error) throw new Error(`[rpc:create_command] ${error.message}`);
+    return data as any;
+  },
   /**
    * Modifier une commande EN ENTIER : en-tete, TVA, acompte et lignes.
    * L'ancienne version n'ecrivait que l'en-tete — l'acompte, la TVA et les
