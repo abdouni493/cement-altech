@@ -1,0 +1,255 @@
+{
+  "generated_at": "2026-11-15T00:47:46.417Z",
+  "baseline_commit": "d8ae668",
+  "engine": "PostgreSQL 15.20 (Debian 15.20-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+  "account_role": "admin (auth.uid fixture)",
+  "network": "local PostgreSQL in Docker, no network latency; SQL execution only",
+  "notes": [
+    "Each operation runs in a subtransaction rolled back after timing; identical starting state for each run.",
+    "These are server timings, not click-to-print or Vercel/Supabase network measurements.",
+    "Large fixture remains below the old numbering truncation boundary so baseline can finish.",
+    "Browser waterfall benchmark is separate; no production writes."
+  ],
+  "results": [
+    {
+      "version": "before",
+      "dataset": "small",
+      "kind": "command",
+      "counts": {
+        "sales": 10,
+        "commands": 11,
+        "BLs_on_selected_order": 0
+      },
+      "runs": 15,
+      "p95_ms": 1.686,
+      "median_ms": 0.121,
+      "samples_ms": [
+        4.775,
+        0.362,
+        0.274,
+        0.285,
+        0.237,
+        0.322,
+        0.121,
+        0.126,
+        0.104,
+        0.094,
+        0.098,
+        0.091,
+        0.089,
+        0.088,
+        0.089
+      ]
+    },
+    {
+      "version": "before",
+      "dataset": "small",
+      "kind": "delivery",
+      "counts": {
+        "sales": 10,
+        "commands": 11,
+        "BLs_on_selected_order": 0
+      },
+      "runs": 15,
+      "p95_ms": 6.47,
+      "median_ms": 1.583,
+      "samples_ms": [
+        14.575,
+        2.931,
+        2.996,
+        2.289,
+        2.264,
+        2.498,
+        1.583,
+        1.285,
+        1.149,
+        1.883,
+        1.381,
+        1.187,
+        1.345,
+        1.138,
+        1.122
+      ]
+    },
+    {
+      "version": "after",
+      "dataset": "small",
+      "kind": "command",
+      "counts": {
+        "sales": 10,
+        "commands": 11,
+        "BLs_on_selected_order": 0
+      },
+      "runs": 15,
+      "p95_ms": 3.646,
+      "median_ms": 0.903,
+      "samples_ms": [
+        8.257,
+        1.392,
+        1.358,
+        1.189,
+        1.67,
+        1.196,
+        0.861,
+        0.807,
+        0.782,
+        1.17,
+        0.779,
+        0.793,
+        0.802,
+        0.79,
+        0.903
+      ]
+    },
+    {
+      "version": "after",
+      "dataset": "small",
+      "kind": "delivery",
+      "counts": {
+        "sales": 10,
+        "commands": 11,
+        "BLs_on_selected_order": 0
+      },
+      "runs": 15,
+      "p95_ms": 9.818,
+      "median_ms": 2.512,
+      "samples_ms": [
+        20.059,
+        5.429,
+        4.964,
+        4.523,
+        4.212,
+        4.336,
+        2.484,
+        3.112,
+        2.507,
+        2.487,
+        2.406,
+        2.303,
+        2.512,
+        2.439,
+        2.457
+      ]
+    },
+    {
+      "version": "before",
+      "dataset": "large",
+      "kind": "command",
+      "counts": {
+        "sales": 880,
+        "commands": 801,
+        "BLs_on_selected_order": 80
+      },
+      "runs": 15,
+      "p95_ms": 1.554,
+      "median_ms": 0.243,
+      "samples_ms": [
+        4.035,
+        0.485,
+        0.327,
+        0.344,
+        0.29,
+        0.339,
+        0.22,
+        0.167,
+        0.147,
+        0.197,
+        0.155,
+        0.14,
+        0.49,
+        0.243,
+        0.157
+      ]
+    },
+    {
+      "version": "before",
+      "dataset": "large",
+      "kind": "delivery",
+      "counts": {
+        "sales": 880,
+        "commands": 801,
+        "BLs_on_selected_order": 80
+      },
+      "runs": 15,
+      "p95_ms": 75.657,
+      "median_ms": 4.231,
+      "samples_ms": [
+        144.027,
+        46.356,
+        6.659,
+        5.476,
+        4.949,
+        5.991,
+        3.737,
+        3.838,
+        4.231,
+        3.819,
+        4.024,
+        3.789,
+        4.135,
+        4.273,
+        3.972
+      ]
+    },
+    {
+      "version": "after",
+      "dataset": "large",
+      "kind": "command",
+      "counts": {
+        "sales": 880,
+        "commands": 801,
+        "BLs_on_selected_order": 80
+      },
+      "runs": 15,
+      "p95_ms": 4.174,
+      "median_ms": 1.288,
+      "samples_ms": [
+        9.348,
+        1.741,
+        1.633,
+        1.287,
+        1.898,
+        1.239,
+        1.384,
+        0.967,
+        1.288,
+        1,
+        1.021,
+        1.382,
+        1.087,
+        1.122,
+        1.956
+      ]
+    },
+    {
+      "version": "after",
+      "dataset": "large",
+      "kind": "delivery",
+      "counts": {
+        "sales": 880,
+        "commands": 801,
+        "BLs_on_selected_order": 80
+      },
+      "runs": 15,
+      "p95_ms": 9.724,
+      "median_ms": 3.271,
+      "samples_ms": [
+        19.327,
+        5.609,
+        5.434,
+        4.979,
+        5.332,
+        5.17,
+        3.032,
+        3.058,
+        3.181,
+        3.271,
+        3.186,
+        3.025,
+        3.113,
+        3.039,
+        3.568
+      ]
+    }
+  ]
+}

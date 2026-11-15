@@ -1,0 +1,52 @@
+{
+  "generated_at": "2026-11-15T00:46:11.935Z",
+  "fixture": "disposable local PostgreSQL15, admin",
+  "upload": "unmeasured; no staging",
+  "app_reload": "unmeasured; no staging",
+  "results": [
+    {
+      "commands": 10,
+      "bytes": 10930,
+      "parse": {
+        "engine": "Node.js JSON.parse (not browser)",
+        "runs": 15,
+        "median_ms": 0.027061000000685453,
+        "p95_ms": 0.22064299999965442
+      },
+      "database": {
+        "runs": 5,
+        "p95_ms": 385.5482,
+        "median_ms": 306.618,
+        "samples_ms": [
+          392.344,
+          292.972,
+          268.843,
+          306.618,
+          358.365
+        ]
+      }
+    },
+    {
+      "commands": 5000,
+      "bytes": 3472916,
+      "parse": {
+        "engine": "Node.js JSON.parse (not browser)",
+        "runs": 15,
+        "median_ms": 8.471400000000358,
+        "p95_ms": 9.56074499999886
+      },
+      "database": {
+        "runs": 5,
+        "p95_ms": 503.9744,
+        "median_ms": 415.416,
+        "samples_ms": [
+          515.368,
+          458.4,
+          377.78,
+          396.253,
+          415.416
+        ]
+      }
+    }
+  ]
+}

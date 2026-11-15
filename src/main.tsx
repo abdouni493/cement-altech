@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import { purgeLegacyStorage } from './lib/legacyStorage';
 import { installLiveNames } from './lib/liveNames';
+import { completeRestoreReloadTiming } from './lib/restoreTiming';
 
 // Self-hosted brand fonts (bundled locally — work fully offline, identical design)
 import '@fontsource/playfair-display/400.css';
@@ -35,3 +36,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </BrowserRouter>
   </React.StrictMode>
 );
+
+// First rendered frame after a restore; route hydration is measured separately.
+requestAnimationFrame(() => completeRestoreReloadTiming());

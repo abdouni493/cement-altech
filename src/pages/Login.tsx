@@ -11,7 +11,6 @@ import { Modal } from '@/components/ui/Modal';
 import { toast } from '@/components/ui/Toast';
 import { useSettingsStore } from '@/store/settingsStore';
 import { LogoBadge } from '@/components/shared/LogoBadge';
-import { hydrateFromSupabase } from '@/lib/sync';
 
 const floatingIcons = Array.from({ length: 12 }).map((_, i) => ({
   id: i,
@@ -67,7 +66,6 @@ export default function Login() {
     try {
       const ok = await login({ identifier, password });
       if (ok) {
-        await hydrateFromSupabase();
         toast.success(t('welcome') + ' 👋');
         // '/' redirects to the first interface this account is allowed to open
         navigate('/', { replace: true });

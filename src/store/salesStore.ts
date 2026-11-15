@@ -1,13 +1,14 @@
 import { create } from 'zustand';
-import { inBackground } from '@/lib/background';
+import { inBackground, invalidateModules } from '@/lib/background';
 import type { Sale, SaleLine, UsedProduct } from '@/types';
 import { db, rpc } from '@/lib/db';
 import { computeTva, DEFAULT_TVA_RATE } from '@/lib/utils';
 import { save, trySave } from '@/lib/persist';
+import { readPosCommitted, type PosCommittedResult } from '@/lib/posQueries';
 import { toast } from '@/components/ui/Toast';
-import { useComptoirStore } from './comptoirStore';
-import { useProductionStore } from './productionStore';
-import { useStockStore } from './stockStore';
+import { useComptoirStore, applyConfirmedComptoir } from './comptoirStore';
+import { applyConfirmedProductions } from './productionStore';
+import { useStockStore, applyConfirmedStock } from './stockStore';
 
 export type AddSaleInput = Omit<
   Sale,
@@ -138,11 +139,6 @@ async function refreshAccounts(): Promise<void> {
   void inBackground('caisse', async () => (await import('./caisseStore')).useCaisseStore.getState().load());
 }
 
-/** True when the database has not received the POS/production update yet. */
-function isMissingFunction(message: string): boolean {
-  return /PGRST202|Could not find the function|does not exist|schema cache/i.test(message);
-}
-
 /**
  * Filet de sécurité : « ancienne vente » et TVA n'existent que si
  * `altech_production_update_anciens_achats_ventes_tva.sql` a été exécuté.
@@ -165,10 +161,41 @@ function warnIfFlagsMissing(saved: Sale | undefined, historical: boolean, tvaEna
   }
 }
 
+let salesReadGeneration = 0;
+
+/** Confirmed delivery invoices supersede reads started before the commit. */
+export function applyConfirmedSales(rows: Sale[]): void {
+  salesReadGeneration += 1;
+  const ids = new Set(rows.map((row) => row.id));
+  useSalesStore.setState((state) => ({ sales: [...rows, ...state.sales.filter((row) => !ids.has(row.id))] }));
+}
+
+/** Confirmed writes stay confirmed even if an optional readback fails. */
+async function mergePosReadback(id: string, productionIds: string[] = []): Promise<PosCommittedResult | null> {
+  try {
+    const result = await readPosCommitted(id, productionIds);
+    applyConfirmedSales([result.sale]);
+    applyConfirmedProductions(result.productions);
+    applyConfirmedStock(result.products, result.productIds);
+    applyConfirmedComptoir(result.comptoir, result.comptoirIds);
+    invalidateModules('clients', 'caisse', 'productions');
+    return result;
+  } catch (error) {
+    invalidateModules('sales', 'stock', 'comptoir', 'productions', 'clients', 'caisse');
+    console.warn('[pos] Vente confirmée, relecture ciblée indisponible:', (error as Error).message);
+    toast.warning('Vente enregistrée ; les détails seront vérifiés au prochain affichage. Ne la recréez pas.');
+    return null;
+  }
+}
+
 export const useSalesStore = create<SalesState>()((set, get) => ({
   sales: [],
 
-  load: async () => set({ sales: await db.sales.list() }),
+  load: async () => {
+    const generation = ++salesReadGeneration;
+    const sales = await db.sales.list();
+    if (generation === salesReadGeneration) set({ sales });
+  },
 
   addSale: async (s) => {
     const total = s.totalAmount ?? s.products.reduce((acc, p) => acc + p.quantity * p.sellingPrice, 0);
@@ -222,17 +249,11 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
       })
     );
 
-    // a sale may have consumed comptoir items AND raw stock products
-    const [sales] = await Promise.all([
-      db.sales.list(),
-      useComptoirStore.getState().load(),
-      useStockStore.getState().load(),
-    ]);
-    set({ sales });
+    const confirmed = await mergePosReadback(row.id);
+    const sales = confirmed ? [confirmed.sale] : [];
+    warnIfFlagsMissing(confirmed?.sale, historical, tvaEnabled);
 
-    warnIfFlagsMissing(sales.find((x) => x.id === row.id), historical, tvaEnabled);
-
-    return (
+    const saved: Sale = (
       sales.find((x) => x.id === row.id) ?? {
         ...(s as unknown as Sale),
         id: row.id,
@@ -251,6 +272,8 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
         payments: [],
       }
     );
+    if (!confirmed) applyConfirmedSales([saved]);
+    return saved;
   },
 
   addPosSale: async (input) => {
@@ -327,123 +350,36 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
       productions: productions.map((pr) => productionPayload(pr, hour)),
     };
 
-    /** Lots créés par le chemin de secours : ils comptent comme rattachés même
-     *  si la base n'a pas su enregistrer `sale_id` sur la production. */
-    const fallbackMade: string[] = [];
+    // Missing atomic SQL is a deployment error. Never replace it with separate
+    // production, transfer and sale transactions after an ambiguous response.
+    const row = await save<{ id: string; reference: string }>('sales.createWithProductions', () =>
+      rpc.createSaleWithProductions(payload)
+    );
 
-    const row = await save<{ id: string; reference: string }>('sales.createWithProductions', async () => {
-      try {
-        return await rpc.createSaleWithProductions(payload);
-      } catch (e) {
-        // A real business error (insufficient stock, …) must reach the cashier.
-        if (!isMissingFunction((e as Error)?.message ?? '')) throw e;
+    // Read only this committed sale, its batches and the affected stock IDs.
+    let confirmed = await mergePosReadback(row.id);
 
-        // The database has not received the POS update yet: replay the very
-        // same steps one RPC at a time so the point of sale keeps working.
-        const made: Record<string, { comptoirId: string; productionId: string }> = {};
-        for (const pr of productions) {
-          const prod = await rpc.createProduction({
-            ...productionPayload(pr, hour),
-            date: saleDate,
-            // l'origine est écrite dès l'insertion : une base qui ignore la
-            // colonne ne fera pas échouer le lot, elle l'ignorera simplement
-            origin: 'pos',
-          });
-          // output_quantity is stored as numeric(14,3): transfer what the row
-          // really holds so the batch ceiling is never exceeded.
-          const item = await rpc.transferToComptoir(prod.id, Number(prod.output_quantity));
-          made[pr.lineKey] = { comptoirId: item.id, productionId: prod.id };
-          fallbackMade.push(prod.id);
-        }
-
-        const sale = await rpc.createSale({
-          client_id: input.clientId,
-          date: saleDate,
-          bon_number: input.bonNumber ?? null,
-          is_historical: historical,
-          tva_enabled: tvaEnabled,
-          tva_rate: tva.rate,
-          tva_amount: tva.tvaAmount,
-          reduction: red,
-          total_amount: total,
-          final_amount: final,
-          paid_amount: paid,
-          products: input.products.map((p) => {
-            const line = saleLinePayload(p);
-            const batch = p.lineKey ? made[p.lineKey] : undefined;
-            return batch ? { ...line, comptoir_id: batch.comptoirId, product_id: null } : line;
-          }),
-        });
-
-        // best effort — needs the columns added by the POS update
-        for (const pr of productions) {
-          const batch = made[pr.lineKey];
-          if (!batch) continue;
-          await trySave('productions.markPosOrigin', () =>
-            db.productions.update(batch.productionId, {
-              origin: 'pos', sale_id: sale.id, sale_reference: sale.reference,
-            })
-          );
-        }
-        return sale;
-      }
-    });
-
-    // productions consumed stock, the comptoir was fed then sold: reload all
-    let [sales] = await Promise.all([
-      db.sales.list(),
-      useComptoirStore.getState().load(),
-      useProductionStore.getState().load(),
-      useStockStore.getState().load(),
-    ]);
-    set({ sales });
-
-    // ---------------------------------------------------------------------
-    //  Filet de sécurité : les lots ont-ils VRAIMENT été lancés ?
-    // ---------------------------------------------------------------------
-    //  C'est le contrôle qui manquait : la vente pouvait être enregistrée sans
-    //  qu'aucune production n'apparaisse dans /production et sans qu'aucune
-    //  matière ne soit déduite du stock — et personne n'en était averti.
-    //  Si des lots manquent, on demande à la base de les rattraper
-    //  (repair_pos_sale_productions, idempotent : jamais deux fois le même).
-    if (!historical && productions.length > 0) {
-      const linked = useProductionStore
-        .getState()
-        .productions.filter((p) => p.saleId === row.id || fallbackMade.includes(p.id)).length;
-
-      if (linked < productions.length) {
-        const repaired = await trySave('sales.repairPosProductions', () =>
-          rpc.repairPosSaleProductions({
-            sale_id: row.id,
-            productions: productions.map((pr) => productionPayload(pr, hour)),
-          })
-        );
-
-        if (repaired && repaired > 0) {
-          [sales] = await Promise.all([
-            db.sales.list(),
-            useComptoirStore.getState().load(),
-            useProductionStore.getState().load(),
-            useStockStore.getState().load(),
-          ]);
-          set({ sales });
-          toast.warning(
-            `${repaired} production(s) rattrapée(s) pour la vente ${row.reference} — ` +
-            "les matières viennent d'être déduites du stock."
-          );
-        } else {
-          toast.error(
-            `Vente ${row.reference} enregistrée MAIS aucune production n'a été lancée : ` +
-            'les matières premières ne sont pas déduites du stock. Exécutez ' +
-            'altech_production_update_pos_fiche_production_stock.sql dans Supabase.'
-          );
-        }
+    // Compatibility check for older POS routines; the lookup is constrained to
+    // this sale, not the complete production history. Never attempt repairs
+    // merely because the confirmation read failed.
+    if (confirmed && !historical && productions.length > confirmed.productions.length) {
+      const repaired = await trySave('sales.repairPosProductions', () =>
+        rpc.repairPosSaleProductions({
+          sale_id: row.id,
+          productions: productions.map((pr) => productionPayload(pr, hour)),
+        })
+      );
+      if (repaired && repaired > 0) {
+        confirmed = await mergePosReadback(row.id);
+        toast.warning(`${repaired} production(s) rattrapée(s) pour la vente ${row.reference} — les matières viennent d'être déduites du stock.`);
+      } else {
+        toast.error(`Vente ${row.reference} enregistrée MAIS des productions sont absentes : vérifiez la mise à jour SQL POS et ne recréez pas la vente.`);
       }
     }
+    const sales = confirmed ? [confirmed.sale] : [];
+    warnIfFlagsMissing(confirmed?.sale, historical, tvaEnabled);
 
-    warnIfFlagsMissing(sales.find((x) => x.id === row.id), historical, tvaEnabled);
-
-    return (
+    const saved: Sale = (
       sales.find((x) => x.id === row.id) ?? {
         id: row.id,
         reference: row.reference,
@@ -464,6 +400,8 @@ export const useSalesStore = create<SalesState>()((set, get) => ({
         payments: [],
       }
     );
+    if (!confirmed) applyConfirmedSales([saved]);
+    return saved;
   },
 
   updateSale: async (id, data) => {

@@ -13,16 +13,21 @@ import { toast } from '@/components/ui/Toast';
 import { RecycleBin } from './RecycleBin';
 import { MigrationPanel } from './MigrationPanel';
 import { backup } from '@/lib/db';
+import { recordRestoreTiming, type RestoreTiming } from '@/lib/restoreTiming';
 
 type VerifyResult = Awaited<ReturnType<typeof backup.verify>>;
 
 /** Lit un fichier de sauvegarde choisi par l'utilisateur. */
-function readBackupFile(file: File): Promise<Record<string, unknown>> {
+function readBackupFile(file: File, timing?: RestoreTiming): Promise<Record<string, unknown>> {
+  const readStarted = performance.now();
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       try {
+        if (timing) timing.readMs = performance.now() - readStarted;
+        const parseStarted = performance.now();
         const data = JSON.parse(reader.result as string);
+        if (timing) timing.parseMs = performance.now() - parseStarted;
         if (data?.format !== 'altech-production-backup' || !data.tables) throw new Error();
         resolve(data);
       } catch {
@@ -142,8 +147,9 @@ export default function SettingsPage() {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
+    const timing: RestoreTiming = { bytes: file.size };
     try {
-      const data = await readBackupFile(file);
+      const data = await readBackupFile(file, timing);
       const withAccounts = !!data.auth;
       const msg = `Restaurer la sauvegarde du ${new Date(String(data.created_at)).toLocaleString('fr-FR')} ?\n\n`
         + (withAccounts
@@ -153,7 +159,11 @@ export default function SettingsPage() {
             + 'les comptes des employés seront à recréer (bouton « Créer le compte »).');
       if (!window.confirm(msg)) return;
       setBusy('restore');
+      const requestStarted = performance.now();
       const result = await backup.restore(data);
+      // This is HTTP round trip (upload + database + response), not server-only time.
+      timing.requestMs = performance.now() - requestStarted;
+      recordRestoreTiming(timing);
       const localDeliverers = (data as { local?: { deliverers?: unknown } }).local?.deliverers;
       if (localDeliverers) {
         try { localStorage.setItem('altech-deliverers-v1', JSON.stringify(localDeliverers)); } catch { /* ignore */ }
@@ -162,6 +172,7 @@ export default function SettingsPage() {
       toast.success(`Données restaurées — ${rows} lignes. Rechargement...`);
       setTimeout(async () => {
         if (withAccounts) await useAuthStore.getState().logout().catch(() => undefined);
+        recordRestoreTiming({ ...timing, reloadStartedAt: Date.now() });
         window.location.reload();
       }, 1500);
     } catch (err) {

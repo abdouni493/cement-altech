@@ -291,7 +291,17 @@ export function printDeliveryNote(data: DeliveryNoteData, store: StoreSettings) 
       docDate: data.deliveredAt,
       endText: data.endText,
       doitName: data.clientName,
-      metaLines: [`N° BL : ${data.reference}`],
+      doitLines: fiscalLines({ name: data.clientName, phone: data.clientPhone,
+        address: data.clientAddress, rc: data.clientRc, nif: data.clientNif,
+        nis: data.clientNis, article: data.clientArticle }),
+      metaLines: [
+        `N° BL : ${data.reference}`,
+        `COMMANDE : ${data.commandReference}`,
+        data.bonNumber ? `N° BON : ${data.bonNumber}` : '',
+        data.saleReference ? `FACTURE : ${data.saleReference}` : '',
+        data.driverName ? `CHAUFFEUR : ${data.driverName}` : '',
+        data.driverPlate ? `MATRICULE : ${data.driverPlate}` : '',
+      ].filter(Boolean),
       tables: [
         {
           columns: withColumnLabels([

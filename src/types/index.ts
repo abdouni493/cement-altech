@@ -692,6 +692,8 @@ export interface CommandDelivery {
   paidAmount?: number;
   /** Reste dû sur cette livraison — c'est la dette du client. */
   restAmount?: number;
+  /** Customer credit confirmed by the atomic operator action. */
+  creditApplied?: number;
   /** Facture de vente générée par ce bon. */
   saleId?: string;
   saleReference?: string;

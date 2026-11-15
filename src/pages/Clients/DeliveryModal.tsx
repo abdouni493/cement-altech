@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Truck, PackageCheck, AlertTriangle, CalendarClock, User, Hash, MapPin, Package, History,
   Percent, Wallet, Receipt, PiggyBank,
@@ -11,9 +11,9 @@ import { formatCurrency, DEFAULT_TVA_RATE } from '@/lib/utils';
 import { stockRequirementsForDelivery } from '@/lib/ficheStock';
 import { useFicheTechnicStore } from '@/store/ficheTechnicStore';
 import { useStockStore } from '@/store/stockStore';
-import { useCommandStore } from '@/store/commandStore';
-import { lineTotal } from '@/lib/commandBilling';
 import { toast } from '@/components/ui/Toast';
+import { useAuthStore } from '@/store/authStore';
+import { newOperation, type OperationTicket } from '@/lib/commandOperation';
 import type { Command, DeliveryDriver, DeliveryPayment } from '@/store/commandStore';
 import type { CommandDelivery, CommandDeliveryItem } from '@/types';
 
@@ -66,7 +66,8 @@ export function DeliveryModal({
 }: DeliveryModalProps) {
   const ficheTechnics = useFicheTechnicStore((s) => s.ficheTechnics);
   const products = useStockStore((s) => s.products);
-  const updateCommand = useCommandStore((s) => s.updateCommand);
+  const operation = useRef<OperationTicket>(newOperation());
+  const savingRef = useRef(false);
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   /** Prix unitaire de chaque ligne — modifiable ; un prix change met a jour la commande. */
   const [prices, setPrices] = useState<Record<string, number>>({});
@@ -92,12 +93,13 @@ export function DeliveryModal({
 
   useEffect(() => {
     if (!open || !command) return;
+    operation.current = newOperation(`delivery:${useAuthStore.getState().user?.id ?? 'anonymous'}:${command.id}:${editing?.id ?? 'new'}`);
     const init: Record<string, number> = {};
     command.items.forEach((it, idx) => {
       const key = it.id || String(idx);
       if (editing) {
         const line = editing.items.find(
-          (l) => (l.commandItemId && l.commandItemId === it.id) || l.productName === it.productName
+          (l) => (l.commandItemId ? l.commandItemId === it.id : l.productName === it.productName && command.items.filter((i) => i.productName === it.productName).length === 1)
         );
         init[key] = line?.quantity ?? 0;
       } else {
@@ -165,7 +167,7 @@ export function DeliveryModal({
       // when editing, the line being edited is not part of "already delivered"
       const editedQty = editing
         ? editing.items.find(
-            (l) => (l.commandItemId && l.commandItemId === it.id) || l.productName === it.productName
+            (l) => (l.commandItemId ? l.commandItemId === it.id : l.productName === it.productName && command.items.filter((i) => i.productName === it.productName).length === 1)
           )?.quantity ?? 0
         : 0;
       const base = Math.max(0, alreadyDelivered - editedQty);
@@ -234,33 +236,23 @@ export function DeliveryModal({
   const restToPay = Math.max(0, totalTtc - paidTotal);
 
   const handleSave = async () => {
-    if (!command) return;
+    if (!command || savingRef.current) return;
+    if (operation.current.payload) {
+      savingRef.current = true; setSaving(true);
+      try { await onSave([], new Date(deliveredAt).toISOString(), notes, {}, { operation: operation.current }); onClose(); }
+      finally { savingRef.current = false; setSaving(false); }
+      return;
+    }
     if (totalNow <= 0) { toast.error('Saisissez au moins une quantité à livrer'); return; }
     const over = rows.find((r) => r.now > r.maxNow + 0.0001);
     if (over) {
       toast.error(`« ${over.item.productName} » : la quantité dépasse le reste à livrer`);
       return;
     }
+    savingRef.current = true;
+    operation.current.startedAt ??= performance.now();
     setSaving(true);
     try {
-      // Prix modifies : ils appartiennent a la commande. On la met a jour
-      // d'abord — la base recalcule alors tous ses bons, factures, la dette
-      // du client, la caisse et les rapports.
-      if (pricesChanged) {
-        await updateCommand(command.id, {
-          clientId: command.clientId,
-          clientName: command.clientName,
-          clientPhone: command.clientPhone,
-          notes: command.notes,
-          receiveDate: command.receiveDate,
-          receiveHour: command.receiveHour,
-          receiveMinute: command.receiveMinute,
-          items: command.items.map((it, idx) => {
-            const price = Math.max(0, Number(prices[it.id || String(idx)] ?? it.unitPrice ?? 0));
-            return { ...it, unitPrice: price, totalPrice: lineTotal(it.quantity, price) };
-          }),
-        });
-      }
       const items: CommandDeliveryItem[] = rows
         .filter((r) => r.now > 0)
         .map((r) => ({
@@ -278,10 +270,15 @@ export function DeliveryModal({
           driverPlate: driverPlate.trim() || undefined,
           location: location.trim() || undefined,
         },
-        { tvaEnabled, tvaRate, cashPaid: cashUsed, advanceApplied: advanceUsed, creditUsed }
+        { tvaEnabled, tvaRate, cashPaid: cashUsed, advanceApplied: advanceUsed, creditUsed,
+          operation: operation.current,
+          priceOverrides: pricesChanged ? rows.filter((r) => Math.abs(r.price - r.item.unitPrice) > 0.0001)
+            .map((r) => ({ commandItemId: r.item.id!, unitPrice: Math.max(0, r.price) })) : [],
+        }
       );
       onClose();
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };

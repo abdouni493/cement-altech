@@ -1,0 +1,20 @@
+{
+  "conditions": "Chromium local Vite; intercepted Supabase fixtures, no injected latency; actual create/deliver controls, double clicks, title dialog, print iframe/reprint; not hosted latency",
+  "passed": true,
+  "timings": [
+    {
+      "operationId": "cbaa35d7-0542-4873-907d-805293da9d9f",
+      "kind": "command",
+      "rpcMs": 24.100000000093132,
+      "confirmationMs": 34.89999999990687,
+      "printReadyMs": 59
+    },
+    {
+      "operationId": "1f5b1380-a146-451d-b1c8-5b3c2127a3d2",
+      "kind": "delivery",
+      "rpcMs": 18.100000000093132,
+      "confirmationMs": 49.799999999813735,
+      "printReadyMs": 67.89999999990687
+    }
+  ]
+}

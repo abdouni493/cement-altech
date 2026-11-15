@@ -1,0 +1,219 @@
+{
+  "baseline_commit": "d8ae668",
+  "engine": "PostgreSQL 15.20 (Debian 15.20-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit",
+  "account_role": "admin via local auth.uid fixture",
+  "network": "local Docker PostgreSQL; SQL execution only; no Vercel/Supabase latency",
+  "statement_timeout_ms": 500,
+  "notes": [
+    "Before timeouts are lower bounds, not completed operation times.",
+    "Each successful call is rolled back in a subtransaction; identical starting state per sample.",
+    "VNT/BL use historical order fixtures to exercise identical numbering without consuming live stock.",
+    "No hosted or production writes."
+  ],
+  "results": [
+    {
+      "namespace": "CMD",
+      "version": "before",
+      "commands": 999,
+      "sales": 0,
+      "BLs_on_order": 0,
+      "runs": 5,
+      "completed": 0,
+      "statement_timeouts": 5,
+      "median_ms": 499.66,
+      "p95_ms": 499.681,
+      "samples": [
+        {
+          "ms": 499.682,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.574,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.66,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.675,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.17,
+          "status": "statement_timeout"
+        }
+      ]
+    },
+    {
+      "namespace": "CMD",
+      "version": "after",
+      "commands": 999,
+      "sales": 0,
+      "BLs_on_order": 0,
+      "runs": 5,
+      "completed": 5,
+      "statement_timeouts": 0,
+      "median_ms": 4,
+      "p95_ms": 4.283,
+      "samples": [
+        {
+          "ms": 3.869,
+          "status": "completed"
+        },
+        {
+          "ms": 4.129,
+          "status": "completed"
+        },
+        {
+          "ms": 3.967,
+          "status": "completed"
+        },
+        {
+          "ms": 4.321,
+          "status": "completed"
+        },
+        {
+          "ms": 4,
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "namespace": "VNT",
+      "version": "before",
+      "commands": 1,
+      "sales": 999,
+      "BLs_on_order": 0,
+      "runs": 5,
+      "completed": 0,
+      "statement_timeouts": 5,
+      "median_ms": 499.68,
+      "p95_ms": 499.897,
+      "samples": [
+        {
+          "ms": 499.486,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.935,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.746,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.68,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.66,
+          "status": "statement_timeout"
+        }
+      ]
+    },
+    {
+      "namespace": "VNT",
+      "version": "after",
+      "commands": 1,
+      "sales": 999,
+      "BLs_on_order": 0,
+      "runs": 5,
+      "completed": 5,
+      "statement_timeouts": 0,
+      "median_ms": 20.52,
+      "p95_ms": 50.156,
+      "samples": [
+        {
+          "ms": 57.522,
+          "status": "completed"
+        },
+        {
+          "ms": 20.69,
+          "status": "completed"
+        },
+        {
+          "ms": 12.62,
+          "status": "completed"
+        },
+        {
+          "ms": 12.244,
+          "status": "completed"
+        },
+        {
+          "ms": 20.52,
+          "status": "completed"
+        }
+      ]
+    },
+    {
+      "namespace": "BL",
+      "version": "before",
+      "commands": 1,
+      "sales": 0,
+      "BLs_on_order": 99,
+      "runs": 5,
+      "completed": 0,
+      "statement_timeouts": 5,
+      "median_ms": 499.635,
+      "p95_ms": 503.027,
+      "samples": [
+        {
+          "ms": 499.681,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 503.864,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.584,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.635,
+          "status": "statement_timeout"
+        },
+        {
+          "ms": 499.093,
+          "status": "statement_timeout"
+        }
+      ]
+    },
+    {
+      "namespace": "BL",
+      "version": "after",
+      "commands": 1,
+      "sales": 0,
+      "BLs_on_order": 99,
+      "runs": 5,
+      "completed": 5,
+      "statement_timeouts": 0,
+      "median_ms": 20.43,
+      "p95_ms": 31.026,
+      "samples": [
+        {
+          "ms": 20.43,
+          "status": "completed"
+        },
+        {
+          "ms": 25.412,
+          "status": "completed"
+        },
+        {
+          "ms": 17.956,
+          "status": "completed"
+        },
+        {
+          "ms": 32.43,
+          "status": "completed"
+        },
+        {
+          "ms": 15.081,
+          "status": "completed"
+        }
+      ]
+    }
+  ]
+}

@@ -37,15 +37,24 @@ interface ProductionState {
   deleteCategory: (id: string) => Promise<void>;
 }
 
+let readGeneration = 0;
+
+export function applyConfirmedProductions(rows: Production[], affectedIds: string[] = rows.map((row) => row.id)): void {
+  readGeneration += 1;
+  const ids = new Set(affectedIds);
+  useProductionStore.setState((state) => ({ productions: [...rows, ...state.productions.filter((row) => !ids.has(row.id))] }));
+}
+
 export const useProductionStore = create<ProductionState>()((set, get) => ({
   productions: [],
   categories: [],
 
   load: async () => {
+    const generation = ++readGeneration;
     const [productions, categories] = await Promise.all([
       db.productions.list(), db.productionCategories.list(),
     ]);
-    set({ productions, categories });
+    if (generation === readGeneration) set({ productions, categories });
   },
 
   addProduction: async (data) => {

@@ -8,6 +8,8 @@ import { toast } from '@/components/ui/Toast';
 import { useStockStore } from './stockStore';
 import { useCaisseStore } from './caisseStore';
 import { ignoredEdits } from '@/lib/purchaseEdit';
+import { getPurchase } from '@/lib/purchaseQueries';
+import { useAuthStore } from './authStore';
 
 export type AddPurchaseInput = Omit<
   Purchase,
@@ -38,6 +40,7 @@ export interface UpdatePurchaseInput {
 
 interface PurchaseState {
   purchases: Purchase[];
+  revision: number;
   load: () => Promise<void>;
   addPurchase: (p: AddPurchaseInput) => Promise<Purchase>;
   /** Edits an invoice — header AND lines; the stock follows the correction. */
@@ -47,16 +50,43 @@ interface PurchaseState {
   deletePurchase: (id: string) => Promise<void>;
 }
 
+let purchaseReadGeneration = 0;
+
 export const usePurchaseStore = create<PurchaseState>()((set, get) => {
+  const mergeConfirmed = (row: Purchase) => {
+    purchaseReadGeneration += 1;
+    set((state) => ({ purchases: [row, ...state.purchases.filter((p) => p.id !== row.id)], revision: state.revision + 1 }));
+  };
+  const refreshConfirmed = async (id: string): Promise<Purchase | null> => {
+    purchaseReadGeneration += 1;
+    const accountId = useAuthStore.getState().user?.id;
+    try {
+      const row = await getPurchase(id);
+      if (accountId === useAuthStore.getState().user?.id) mergeConfirmed(row);
+      return row;
+    } catch {
+      // The write committed; never report it as an unsuccessful save or replay it.
+      set((state) => ({ revision: state.revision + 1 }));
+      toast.warning('Achat enregistré — relecture indisponible ; actualisez la liste avant de réessayer.');
+      return null;
+    }
+  };
   const payFn = async (purchaseId: string, amount: number, date?: string) => {
     await save('purchases.payDebt', () => rpc.paySupplierDebt(purchaseId, amount, date));
-    set({ purchases: await db.purchases.list() });
+    await refreshConfirmed(purchaseId);
   };
 
   return {
     purchases: [],
+    revision: 0,
 
-    load: async () => set({ purchases: await db.purchases.list() }),
+    // Full history remains an explicit capability for reports/supplier accounts.
+    load: async () => {
+      const generation = purchaseReadGeneration;
+      const accountId = useAuthStore.getState().user?.id;
+      const purchases = await db.purchases.list();
+      if (generation === purchaseReadGeneration && accountId === useAuthStore.getState().user?.id) set({ purchases });
+    },
 
     addPurchase: async (p) => {
       const total =
@@ -93,13 +123,11 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
 
       // The purchase changed the stock: reload both lists from the database so
       // the /stock screen immediately shows the new quantities.
-      const purchases = await db.purchases.list();
+      const saved = await refreshConfirmed(row.id);
       void inBackground('stock', () => useStockStore.getState().load());
-      set({ purchases });
 
       // Filet de sécurité : « ancien achat » n'existe que si
       // altech_production_update_anciens_achats_ventes_tva.sql a été exécuté.
-      const saved = purchases.find((x) => x.id === row.id);
       if (p.isHistorical && saved && !saved.isHistorical) {
         toast.error(
           "Base de données non mise à jour : la facture a été enregistrée normalement " +
@@ -108,7 +136,7 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
       }
 
       return (
-        purchases.find((x) => x.id === row.id) ?? {
+        saved ?? {
           ...(p as unknown as Purchase),
           id: row.id,
           reference: row.reference,
@@ -155,12 +183,9 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
       );
       // update_purchase() réconcilie le stock par écart et refait le règlement :
       // les trois écrans concernés sont rechargés depuis la base.
-      const purchases = await db.purchases.list();
+      const saved = await refreshConfirmed(id);
       if (data.products) void inBackground('stock', () => useStockStore.getState().load());
       void inBackground('caisse', () => useCaisseStore.getState().load());
-      set({ purchases });
-
-      const saved = purchases.find((p) => p.id === id);
       const ignored = saved ? ignoredEdits(saved, data) : [];
       if (ignored.length > 0) {
         toast.error(
@@ -176,7 +201,8 @@ export const usePurchaseStore = create<PurchaseState>()((set, get) => {
 
     deletePurchase: async (id) => {
       await save('purchases.delete', () => db.purchases.remove(id));
-      set({ purchases: get().purchases.filter((p) => p.id !== id) });
+      purchaseReadGeneration += 1;
+      set((state) => ({ purchases: state.purchases.filter((p) => p.id !== id), revision: state.revision + 1 }));
     },
   };
 });

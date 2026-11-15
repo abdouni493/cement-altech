@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -28,7 +28,11 @@ import {
   type Command, type CommandLine, type DeliveryDriver, type DeliveryPayment,
   type AdjustmentInput,
 } from '@/store/commandStore';
-import { useSalesStore } from '@/store/salesStore';
+import { useSalesStore, applyConfirmedSales } from '@/store/salesStore';
+import { db } from '@/lib/db';
+import { isWriteBusy } from '@/lib/persist';
+import { useAuthStore } from '@/store/authStore';
+import { listCommandSummaries, type CommandSummaryPage } from '@/lib/commandQueries';
 import { useClientStore } from '@/store/clientStore';
 import { useFicheTechnicStore } from '@/store/ficheTechnicStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -40,6 +44,7 @@ import { printCommandOrder, printDeliveryNote, DELIVERY_NOTE_COLUMNS } from '@/l
 import { PrintTitleDialog, type PrintTitleRequest } from '@/components/shared/PrintTitleDialog';
 import { cardVariants, EASE } from '@/lib/animations';
 import type { Client, CommandDelivery } from '@/types';
+import { newOperation, operationConfirmed, type OperationTicket } from '@/lib/commandOperation';
 
 type DateFilter = 'today' | 'week' | 'month' | 'period' | 'all';
 type StatusFilter = 'all' | 'paid' | 'debt' | 'undelivered' | 'partial' | 'delivered';
@@ -54,7 +59,7 @@ export default function CommandsPage() {
     addDelivery, updateDelivery, deleteDelivery,
     cancelRemainder, increaseCommand: increaseCommandLines,
   } = useCommandStore();
-  const { clients, addClient, updateClient, applyCreditToCommand, applyCreditToSale } = useClientStore();
+  const { clients, addClient } = useClientStore();
   const sales = useSalesStore((s) => s.sales);
   const { ficheTechnics } = useFicheTechnicStore();
   const settings = useSettingsStore((s) => s.settings);
@@ -106,6 +111,8 @@ export default function CommandsPage() {
   /** La commande en cours de saisie est-elle une « ancienne commande » ? */
   const [formHistorical, setFormHistorical] = useState(false);
   const [saving, setSaving] = useState(false);
+  const commandOperation = useRef<OperationTicket>(newOperation(`command:${useAuthStore.getState().user?.id ?? 'anonymous'}`));
+  const savingRef = useRef(false);
 
   // Interaction modals
   const [viewingCmd, setViewingCmd] = useState<Command | null>(null);
@@ -162,60 +169,88 @@ export default function CommandsPage() {
   };
 
   /* --------------------------------------------------------------- filters */
-  const filteredCommands = useMemo(() => {
-    return commands.filter((c) => {
-      // les anciennes commandes vivent dans leur propre onglet
-      if (scope === 'historical' ? !c.isHistorical : !!c.isHistorical) return false;
-      const q = search.toLowerCase();
-      const matchesSearch =
-        c.clientName.toLowerCase().includes(q) ||
-        c.reference.toLowerCase().includes(q) ||
-        (c.bonNumber || '').toLowerCase().includes(q) ||
-        (c.clientAddress || '').toLowerCase().includes(q) ||
-        (c.clientPhone ? c.clientPhone.includes(search) : false);
-
-      const d = deliveryStatus(c);
-      let matchesStatus = true;
-      if (statusFilter === 'paid') matchesStatus = c.restAmount <= 0;
-      else if (statusFilter === 'debt') matchesStatus = c.restAmount > 0;
-      else if (statusFilter === 'undelivered') matchesStatus = d.delivered <= 0;
-      else if (statusFilter === 'partial') matchesStatus = d.isPartial;
-      else if (statusFilter === 'delivered') matchesStatus = d.isFull;
-
-      let matchesDate = true;
-      const cmdTime = new Date(c.createdAt).getTime();
+  const [pageIndex, setPageIndex] = useState(0);
+  const [summaryPage, setSummaryPage] = useState<(Omit<CommandSummaryPage, 'rows'> & { rows: Command[] }) | null>(null);
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState('');
+  const [summaryStale, setSummaryStale] = useState(false);
+  const [refreshList, setRefreshList] = useState(0);
+  const pageRequest = useRef(0);
+  const pageSize = 50;
+  const filterKey = JSON.stringify([search, scope, statusFilter, dateFilter, from, to]);
+  useEffect(() => { setPageIndex(0); }, [filterKey]);
+  useEffect(() => {
+    const request = ++pageRequest.current;
+    const timer = setTimeout(async () => {
+      setListLoading(true); setListError('');
+      let start: Date | null = null, end: Date | null = null;
       if (dateFilter === 'today') {
-        const start = new Date(); start.setHours(0, 0, 0, 0);
-        const end = new Date(); end.setHours(23, 59, 59, 999);
-        matchesDate = cmdTime >= start.getTime() && cmdTime <= end.getTime();
-      } else if (dateFilter === 'week') {
-        const start = new Date(); start.setDate(start.getDate() - 7);
-        matchesDate = cmdTime >= start.getTime();
-      } else if (dateFilter === 'month') {
-        const start = new Date(); start.setDate(start.getDate() - 30);
-        matchesDate = cmdTime >= start.getTime();
+        start = new Date(); start.setHours(0, 0, 0, 0);
+        end = new Date(); end.setHours(23, 59, 59, 999);
+      } else if (dateFilter === 'week' || dateFilter === 'month') {
+        start = new Date(); start.setDate(start.getDate() - (dateFilter === 'week' ? 7 : 30));
       } else if (dateFilter === 'period') {
-        const start = new Date(from); start.setHours(0, 0, 0, 0);
-        const end = new Date(to + 'T23:59:59');
-        matchesDate = cmdTime >= start.getTime() && cmdTime <= end.getTime();
+        start = new Date(from + 'T00:00:00'); end = new Date(to + 'T23:59:59.999');
       }
+      try {
+        const page = await listCommandSummaries({ search, scope, status: statusFilter,
+          from: start?.toISOString(), to: end?.toISOString(), limit: pageSize, offset: pageIndex * pageSize });
+        if (request === pageRequest.current) { setSummaryPage(page); setSummaryStale(false); }
+      } catch (error) {
+        if (request === pageRequest.current) setListError((error as Error).message);
+      } finally { if (request === pageRequest.current) setListLoading(false); }
+    }, 200);
+    return () => { clearTimeout(timer); if (request === pageRequest.current) pageRequest.current += 1; };
+  }, [filterKey, pageIndex, refreshList]);
 
-      return matchesSearch && matchesStatus && matchesDate;
+  const filteredCommands = summaryPage?.rows ?? [];
+  const stats = summaryPage?.stats ?? { totalPaid: 0, totalRest: 0, totalValue: 0, pendingDelivery: 0, invoiced: 0, invoicedRest: 0 };
+  const totalCount = summaryPage?.totalCount ?? 0;
+
+  /** Snapshot reads are bounded to one order. A mutation invalidates older reads. */
+  const withCommand = async (cmd: Command, run: (full: Command) => void) => {
+    if (!('isSummary' in cmd)) { run(cmd); return; }
+    const request = pageRequest.current;
+    const actor = useAuthStore.getState().user?.id;
+    try {
+      const [full, orderDeliveries, orderAdjustments, linkedSales] = await Promise.all([
+        db.commands.get(cmd.id), db.commandDeliveries.forCommand(cmd.id),
+        db.commandAdjustments.forCommand(cmd.id), db.sales.forCommand(cmd.id),
+      ]);
+      if (!full) throw new Error('Commande introuvable');
+      if (request !== pageRequest.current || useAuthStore.getState().user?.id !== actor) return;
+      useCommandStore.setState((state) => ({
+        commands: [full, ...state.commands.filter((c) => c.id !== full.id)],
+        deliveries: [...orderDeliveries, ...state.deliveries.filter((d) => d.commandId !== full.id)],
+        adjustments: [...orderAdjustments, ...state.adjustments.filter((a) => a.commandId !== full.id)],
+      }));
+      applyConfirmedSales(linkedSales);
+      run(full);
+    } catch (error) { toast.error(`Lecture impossible — ${(error as Error).message}`); }
+  };
+  const invalidateSummary = (created?: Command, changedId?: string) => {
+    pageRequest.current += 1;
+    setListLoading(false);
+    setSummaryStale(true);
+    const changed = changedId ? useCommandStore.getState().commands.find((c) => c.id === changedId) : undefined;
+    setSummaryPage((page) => {
+      if (!page) return page;
+      let rows = changed ? page.rows.map((c) => c.id === changed.id ? changed : c) : page.rows;
+      const insert = created && pageIndex === 0 && (!!created.isHistorical === (scope === 'historical'));
+      if (insert) rows = [created, ...rows.filter((c) => c.id !== created.id)].slice(0, pageSize);
+      return { ...page, totalCount: page.totalCount + (insert ? 1 : 0), rows };
     });
-  }, [commands, scope, search, statusFilter, dateFilter, from, to]);
+  };
+  useEffect(() => {
+    const refresh = () => {
+      if (document.hidden || isWriteBusy() || formOpen || deliverCmd) return;
+      setRefreshList((n) => n + 1);
+    };
+    window.addEventListener('focus', refresh);
+    const timer = window.setInterval(refresh, 60_000);
+    return () => { window.removeEventListener('focus', refresh); window.clearInterval(timer); };
+  }, [formOpen, deliverCmd]);
 
-  const stats = useMemo(() => {
-    const totalPaid = filteredCommands.reduce((s, c) => s + c.paidAmount, 0);
-    const totalRest = filteredCommands.reduce((s, c) => s + c.restAmount, 0);
-    const totalValue = filteredCommands.reduce((s, c) => s + commandTtc(c), 0);
-    const pendingDelivery = filteredCommands.filter((c) => !deliveryStatus(c).isFull).length;
-    // Ce qui a réellement été FACTURÉ par les livraisons (elles valent vente)
-    const ids = new Set(filteredCommands.map((c) => c.id));
-    const linked = sales.filter((x) => !!x.deliveryId && x.commandId && ids.has(x.commandId));
-    const invoiced = linked.reduce((s, x) => s + x.finalAmount, 0);
-    const invoicedRest = linked.reduce((s, x) => s + x.restAmount, 0);
-    return { totalPaid, totalRest, totalValue, pendingDelivery, invoiced, invoicedRest };
-  }, [filteredCommands, sales]);
 
   const clientSearchResults = useMemo(
     () =>
@@ -327,7 +362,20 @@ export default function CommandsPage() {
         Math.max(0, formTtc - (Number(versement) || 0))))
     : 0;
 
-  const handleOpenCreateForm = (historical = false) => {
+  const handleOpenCreateForm = async (historical = false) => {
+    commandOperation.current = newOperation(`command:${useAuthStore.getState().user?.id ?? 'anonymous'}`);
+    if (commandOperation.current.payload) {
+      if (savingRef.current) return;
+      savingRef.current = true;
+      toast.info('Vérification de la tentative précédente…');
+      try {
+        const saved = await useCommandStore.getState().recoverOperation(commandOperation.current, 'command') as Command;
+        invalidateSummary(saved);
+        setPrintPrompt({ kind: 'command', cmd: saved });
+        requestAnimationFrame(() => operationConfirmed(commandOperation.current, 'command'));
+      } finally { savingRef.current = false; }
+      return;
+    }
     setEditingId(null); setSelectedClient(null); setSelectedItems([]);
     setReceiveDate(todayISO()); setReceiveHour('14'); setReceiveMinute('30');
     setCustomTotal(null); setVersement(0); setClientSearch(''); setRecipeSearch('');
@@ -342,7 +390,8 @@ export default function CommandsPage() {
     setShowNewClientForm(false); setFormOpen(true);
   };
 
-  const handleOpenEditForm = (cmd: Command) => {
+  const handleOpenEditForm = (cmd: Command): void => {
+    if ('isSummary' in cmd) { void withCommand(cmd, handleOpenEditForm); return; }
     setEditingId(cmd.id);
     setFormHistorical(!!cmd.isHistorical);
     const known = clients.find((c) => c.id === cmd.clientId);
@@ -371,6 +420,17 @@ export default function CommandsPage() {
   };
 
   const handleSaveCommand = async () => {
+    if (savingRef.current) return;
+    if (!editingId && commandOperation.current.payload) {
+      savingRef.current = true; setSaving(true);
+      toast.info('Vérification de la tentative précédente avec ses valeurs originales…');
+      try {
+        const saved = await useCommandStore.getState().recoverOperation(commandOperation.current, 'command') as Command;
+        invalidateSummary(saved); setPrintPrompt({ kind: 'command', cmd: saved }); setFormOpen(false);
+        requestAnimationFrame(() => operationConfirmed(commandOperation.current, 'command'));
+      } finally { savingRef.current = false; setSaving(false); }
+      return;
+    }
     if (!selectedClient) { toast.error('Veuillez sélectionner un client'); return; }
     if (!clientAddress.trim()) {
       setAddressError(true);
@@ -380,6 +440,8 @@ export default function CommandsPage() {
     if (selectedItems.length === 0) { toast.error('Ajoutez au moins un produit'); return; }
     if (versement < 0) { toast.error('Le versement ne peut pas être négatif'); return; }
 
+    savingRef.current = true;
+    commandOperation.current.startedAt ??= performance.now();
     setSaving(true);
     try {
       // Back-date the command only when the operator actually changed the date;
@@ -391,11 +453,6 @@ export default function CommandsPage() {
           : undefined;
 
       const address = clientAddress.trim();
-      // l'adresse saisie devient l'adresse de référence du client
-      if (address && address !== (clients.find((c) => c.id === selectedClient.id)?.address || '')) {
-        await updateClient(selectedClient.id, { address });
-      }
-
       const cmdData = {
         // le rang fige l'ordre de saisie : il distingue deux lignes du meme produit
         clientId: selectedClient.id,
@@ -425,20 +482,18 @@ export default function CommandsPage() {
         const updated = useCommandStore.getState().commands.find((c) => c.id === editingId);
         if (updated) setPrintPrompt({ kind: 'command', cmd: updated });
       } else {
-        const newCmd = await addCommand({ ...cmdData, totalAmount: finalTotalAmount });
-        let saved = newCmd;
-        if (newCmd && formCreditUsed > 0.004) {
-          try {
-            const applied = await applyCreditToCommand(newCmd.id, formCreditUsed);
-            if (applied > 0) toast.info(`Acompte du client utilisé : ${formatCurrency(applied)}`);
-            saved = useCommandStore.getState().commands.find((c) => c.id === newCmd.id) ?? newCmd;
-          } catch { /* message déjà affiché */ }
-        }
+        const saved = await addCommand({ ...cmdData, totalAmount: finalTotalAmount,
+          requestedCredit: formCreditUsed, operation: commandOperation.current });
+        if ((saved.creditApplied ?? 0) > 0) toast.info(`Acompte du client utilisé : ${formatCurrency(saved.creditApplied ?? 0)} · reste confirmé : ${formatCurrency(saved.restAmount)}`);
         toast.success('Commande créée');
-        if (saved) setPrintPrompt({ kind: 'command', cmd: saved });
+        invalidateSummary(saved);
+        setPrintPrompt({ kind: 'command', cmd: saved });
+        requestAnimationFrame(() => operationConfirmed(commandOperation.current, 'command'));
       }
+      if (editingId) invalidateSummary(undefined, editingId);
       setFormOpen(false);
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -467,25 +522,31 @@ export default function CommandsPage() {
     payment: DeliveryPayment
   ) => {
     if (!deliverCmd) return;
+    if (payment.operation?.payload) {
+      toast.info('Vérification de la livraison précédente avec ses valeurs originales…');
+      const delivery = await useCommandStore.getState().recoverOperation(payment.operation, 'delivery') as CommandDelivery;
+      const refreshed = useCommandStore.getState().commands.find((c) => c.id === delivery.commandId) ?? deliverCmd;
+      invalidateSummary(undefined, delivery.commandId);
+      setPrintPrompt({ kind: 'delivery', cmd: refreshed, delivery });
+      requestAnimationFrame(() => operationConfirmed(payment.operation!, 'delivery'));
+      setEditingDelivery(null); setDeliverCmd(null); return;
+    }
     if (editingDelivery) {
-      await updateDelivery(editingDelivery.id, items, deliveredAt, notes, driver, payment);
-      const saleId = useCommandStore.getState().deliveries.find((d) => d.id === editingDelivery.id)?.saleId;
-      if (saleId && (payment.creditUsed ?? 0) > 0.004) {
-        try { await applyCreditToSale(saleId, payment.creditUsed); } catch { /* message déjà affiché */ }
-      }
-      toast.success('Livraison modifiée — la facture de vente a été mise à jour');
+      const delivery = await updateDelivery(editingDelivery.id, items, deliveredAt, notes, driver, payment);
+      const refreshed = useCommandStore.getState().commands.find((c) => c.id === deliverCmd.id) ?? deliverCmd;
+      invalidateSummary(undefined, deliverCmd.id);
+      if ((delivery.creditApplied ?? 0) > 0) toast.info(`Acompte du client utilisé : ${formatCurrency(delivery.creditApplied ?? 0)}`);
+      toast.success(`Livraison modifiée — reste confirmé : ${formatCurrency(delivery.restAmount ?? 0)}`);
+      setPrintPrompt({ kind: 'delivery', cmd: refreshed, delivery });
+      if (payment.operation) requestAnimationFrame(() => operationConfirmed(payment.operation!, 'delivery'));
       setEditingDelivery(null);
       setDeliverCmd(null);
       return;
     }
-    let delivery = await addDelivery(deliverCmd.id, items, deliveredAt, notes, driver, payment);
-    if (delivery?.saleId && (payment.creditUsed ?? 0) > 0.004) {
-      try {
-        const applied = await applyCreditToSale(delivery.saleId, payment.creditUsed);
-        if (applied > 0) toast.info(`Acompte du client utilisé : ${formatCurrency(applied)}`);
-        delivery = useCommandStore.getState().deliveries.find((d) => d.id === delivery!.id) ?? delivery;
-      } catch { /* message déjà affiché */ }
-    }
+    const delivery = await addDelivery(deliverCmd.id, items, deliveredAt, notes, driver, payment);
+    const actualCredit = delivery.creditApplied ?? 0;
+    if (actualCredit > 0) toast.info(`Acompte du client utilisé : ${formatCurrency(actualCredit)} · reste confirmé : ${formatCurrency(delivery.restAmount ?? 0)}`);
+    invalidateSummary(undefined, deliverCmd.id);
     const refreshed = useCommandStore.getState().commands.find((c) => c.id === deliverCmd.id) ?? deliverCmd;
     const rest = delivery?.restAmount ?? 0;
     toast.success(
@@ -495,6 +556,7 @@ export default function CommandsPage() {
     );
     setDeliverCmd(null);
     if (delivery) setPrintPrompt({ kind: 'delivery', cmd: refreshed, delivery });
+    if (payment.operation) requestAnimationFrame(() => operationConfirmed(payment.operation!, 'delivery'));
   };
 
   /** Identifiants fiscaux du client rattaché à une commande (bloc « DOIT »). */
@@ -551,7 +613,7 @@ export default function CommandsPage() {
         driverPlate: delivery.driverPlate || cmd.driverPlate,
         lines: cmd.items.map((it) => {
           const line = delivery.items.find(
-            (l) => (l.commandItemId && l.commandItemId === it.id) || l.productName === it.productName
+            (l) => (l.commandItemId ? l.commandItemId === it.id : l.productName === it.productName && cmd.items.filter((i) => i.productName === it.productName).length === 1)
           );
           return {
             productName: it.productName,
@@ -583,7 +645,11 @@ export default function CommandsPage() {
   };
 
   /* -------------------------------------------------- printing (command) */
-  const printBonDeCommande = (cmd: Command) =>
+  const printBonDeCommande = (cmd: Command): void => {
+    if ('isSummary' in cmd) { void withCommand(cmd, printBonDeCommande); return; }
+    printLoadedBonDeCommande(cmd);
+  };
+  const printLoadedBonDeCommande = (cmd: Command) =>
     printCommandOrder(
       {
         reference: cmd.reference,
@@ -757,33 +823,33 @@ export default function CommandsPage() {
     const d = deliveryStatus(cmd);
     const nb = deliveriesOf(cmd.id).length;
     return [
-      { label: 'Détails', icon: <Eye size={15} />, onClick: () => setViewingCmd(cmd) },
+      { label: 'Détails', icon: <Eye size={15} />, onClick: () => { void withCommand(cmd, setViewingCmd); } },
       {
         label: d.isFull ? 'Entièrement livrée' : 'Nouvelle livraison',
         icon: <Truck size={15} />,
         disabled: d.isFull,
-        onClick: () => { setEditingDelivery(null); setDeliverCmd(cmd); },
+        onClick: () => { void withCommand(cmd, (full) => { setEditingDelivery(null); setDeliverCmd(full); }); },
       },
-      { label: `Livraisons (${nb})`, icon: <History size={15} />, onClick: () => setHistoryCmd(cmd) },
+      { label: `Livraisons (${nb})`, icon: <History size={15} />, onClick: () => { void withCommand(cmd, setHistoryCmd); } },
       { label: 'Bon de commande', icon: <Printer size={15} />, onClick: () => printBonDeCommande(cmd) },
       {
         label: 'Payer la dette',
         icon: <Coins size={15} />,
         hidden: cmd.restAmount <= 0 || !can('clients', 'pay'),
-        onClick: () => { setPayCmd(cmd); setPayAmount(cmd.restAmount); },
+        onClick: () => { void withCommand(cmd, (full) => { setPayCmd(full); setPayAmount(full.restAmount); }); },
       },
       {
         label: 'Annuler le reste',
         icon: <ScissorsSquare size={15} />,
         hidden: !can('clients', 'edit'),
         disabled: d.remaining <= 0,
-        onClick: () => setAdjust({ mode: 'cancel', cmd }),
+        onClick: () => { void withCommand(cmd, (full) => setAdjust({ mode: 'cancel', cmd: full })); },
       },
       {
         label: 'Augmenter la commande',
         icon: <PlusCircle size={15} />,
         hidden: !can('clients', 'edit'),
-        onClick: () => setAdjust({ mode: 'increase', cmd }),
+        onClick: () => { void withCommand(cmd, (full) => setAdjust({ mode: 'increase', cmd: full })); },
       },
       {
         label: 'Modifier',
@@ -805,7 +871,7 @@ export default function CommandsPage() {
   const commandFooter = (
     <tr className="border-t-2 border-gold/30 bg-vanilla/60 font-bold">
       <td className="px-4 py-2.5 text-xs uppercase tracking-wide text-text-secondary" colSpan={2}>
-        {filteredCommands.length} commande(s)
+        {totalCount} commande(s)
       </td>
       <td className="hidden px-4 py-2.5 md:table-cell" />
       <td className="hidden px-4 py-2.5 md:table-cell" />
@@ -823,7 +889,7 @@ export default function CommandsPage() {
       <PageHeader
         title="Commandes clients"
         icon={<ShoppingCart size={24} />}
-        subtitle={`${filteredCommands.length} ${scope === 'historical' ? 'ancienne(s) commande(s)' : 'commande(s)'} · ${stats.pendingDelivery} en attente de livraison`}
+        subtitle={`${totalCount} ${scope === 'historical' ? 'ancienne(s) commande(s)' : 'commande(s)'} · ${stats.pendingDelivery} en attente de livraison`}
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => navigate('/clients')}>
@@ -936,6 +1002,16 @@ export default function CommandsPage() {
         </div>
       </Card>
 
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+        <span>{listLoading ? 'Chargement…' : `Page ${pageIndex + 1} · ${totalCount} commande(s)`}
+          {summaryStale && ' · Totaux à actualiser'}</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={() => setRefreshList((n) => n + 1)}>Actualiser</Button>
+          <Button variant="secondary" disabled={pageIndex === 0 || listLoading} onClick={() => setPageIndex((n) => n - 1)}>Précédent</Button>
+          <Button variant="secondary" disabled={(pageIndex + 1) * pageSize >= totalCount || listLoading} onClick={() => setPageIndex((n) => n + 1)}>Suivant</Button>
+        </div>
+      </div>
+      {listError && <p role="alert" className="text-rose-deep">{listError}</p>}
       {/* ======================= LISTE DES COMMANDES =======================
           Tableau par défaut — comme toutes les autres interfaces. Les cartes
           restent disponibles d'un clic, et la bascule se fait en fondu. */}
@@ -950,7 +1026,7 @@ export default function CommandsPage() {
           rowKey={(cmd) => cmd.id}
           actions={commandActions}
           footer={commandFooter}
-          onRowClick={(cmd) => setViewingCmd(cmd)}
+          onRowClick={(cmd) => { void withCommand(cmd, setViewingCmd); }}
         />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
@@ -1060,10 +1136,10 @@ export default function CommandsPage() {
                   {/* Items */}
                   <div className="mb-3">
                     <h4 className="text-[11px] font-bold text-text-muted uppercase tracking-wider mb-1.5">
-                      Produits ({cmd.items.length})
+                      Produits {('isSummary' in cmd) ? '— ouvrir les détails' : `(${cmd.items.length})`}
                     </h4>
                     <div className="space-y-1 max-h-[110px] overflow-y-auto pr-1">
-                      {cmd.items.map((item, idx) => {
+                      {!('isSummary' in cmd) && cmd.items.map((item, idx) => {
                         const done = (item.deliveredQuantity ?? 0) >= item.quantity;
                         return (
                           <div key={idx} className="flex justify-between text-xs py-1 border-b border-gold/5 last:border-b-0">
@@ -1110,7 +1186,7 @@ export default function CommandsPage() {
                   {/* Actions */}
                   <div className="space-y-2 mt-auto pt-2 border-t border-gold/15">
                     <div className="grid grid-cols-2 gap-2">
-                      <Button size="sm" variant="secondary" className="text-xs" onClick={() => setViewingCmd(cmd)}>
+                      <Button size="sm" variant="secondary" className="text-xs" onClick={() => { void withCommand(cmd, setViewingCmd); }}>
                         <Eye size={13} /> Détails
                       </Button>
                       <Button
@@ -1118,13 +1194,13 @@ export default function CommandsPage() {
                         variant={d.isFull ? 'secondary' : 'gold'}
                         className="text-xs font-bold"
                         disabled={d.isFull}
-                        onClick={() => { setEditingDelivery(null); setDeliverCmd(cmd); }}
+                        onClick={() => { void withCommand(cmd, (full) => { setEditingDelivery(null); setDeliverCmd(full); }); }}
                       >
                         <Truck size={13} /> {d.isFull ? 'Livrée' : 'Livraison'}
                       </Button>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <Button size="sm" variant="secondary" className="text-xs" onClick={() => setHistoryCmd(cmd)}>
+                      <Button size="sm" variant="secondary" className="text-xs" onClick={() => { void withCommand(cmd, setHistoryCmd); }}>
                         <History size={13} /> Livraisons ({cmdDeliveries.length})
                       </Button>
                       <Button size="sm" variant="secondary" className="text-xs" onClick={() => printBonDeCommande(cmd)}>
@@ -1140,7 +1216,7 @@ export default function CommandsPage() {
                         <Button
                           size="sm" variant="rose" className="text-xs"
                           disabled={d.remaining <= 0}
-                          onClick={() => setAdjust({ mode: 'cancel', cmd })}
+                          onClick={() => { void withCommand(cmd, (full) => setAdjust({ mode: 'cancel', cmd: full })); }}
                           title={d.remaining > 0
                             ? `Annuler les ${d.remaining} unité(s) non livrées — la dette correspondante disparaît`
                             : 'Rien à annuler : tout a été livré'}
@@ -1149,7 +1225,7 @@ export default function CommandsPage() {
                         </Button>
                         <Button
                           size="sm" variant="mint" className="text-xs"
-                          onClick={() => setAdjust({ mode: 'increase', cmd })}
+                          onClick={() => { void withCommand(cmd, (full) => setAdjust({ mode: 'increase', cmd: full })); }}
                           title="Le client en redemande : augmenter les quantités de cette commande"
                         >
                           <PlusCircle size={13} /> Augmenter
@@ -1182,7 +1258,7 @@ export default function CommandsPage() {
                       {cmd.restAmount > 0 && can('clients', 'pay') && (
                         <Button
                           size="sm" variant="gold" className="flex-1 text-xs"
-                          onClick={() => { setPayCmd(cmd); setPayAmount(cmd.restAmount); }}
+                          onClick={() => { void withCommand(cmd, (full) => { setPayCmd(full); setPayAmount(full.restAmount); }); }}
                         >
                           <Coins size={13} /> Payer
                         </Button>

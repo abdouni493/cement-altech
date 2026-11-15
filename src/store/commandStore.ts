@@ -3,7 +3,11 @@ import { inBackground } from '@/lib/background';
 import type {
   CommandDelivery, CommandDeliveryItem, CommandAdjustment, CommandAdjustmentLine, CommandPayment,
 } from '@/types';
-import { db, rpc } from '@/lib/db';
+import { db, rpc, toCommandMutation } from '@/lib/db';
+import { bindOperation, newOperation, operationRpcReturned, operationFailed, type OperationTicket } from '@/lib/commandOperation';
+import { applyConfirmedClient } from './clientStore';
+import { useAuthStore } from './authStore';
+import { applyConfirmedSales } from './salesStore';
 import { save } from '@/lib/persist';
 import { useStockStore } from './stockStore';
 import { useSalesStore } from './salesStore';
@@ -89,6 +93,8 @@ export type AddCommandInput = Omit<
   paidAmount?: number;
   /** Optional manual creation date (ISO) — lets the POS back-date a command. */
   createdAt?: string;
+  requestedCredit?: number;
+  operation?: OperationTicket;
 };
 
 /** Ordered vs delivered summary of a command — drives the card alert. */
@@ -130,6 +136,7 @@ interface CommandState {
   adjustments: CommandAdjustment[];
   load: () => Promise<void>;
   addCommand: (c: AddCommandInput) => Promise<Command>;
+  recoverOperation: (operation: OperationTicket, kind: 'command' | 'delivery') => Promise<Command | CommandDelivery>;
   /** Returns false when the product lines were kept because a delivery exists. */
   updateCommand: (id: string, data: Partial<Command>) => Promise<boolean>;
   /** Annule le reste NON LIVRE : plus de dette ni de quantite en attente. */
@@ -163,7 +170,7 @@ interface CommandState {
     notes?: string,
     driver?: DeliveryDriver,
     payment?: DeliveryPayment
-  ) => Promise<void>;
+  ) => Promise<CommandDelivery>;
   deleteDelivery: (id: string) => Promise<void>;
 }
 
@@ -181,6 +188,10 @@ export interface DeliveryPayment {
    * apres la creation de la facture, sans ecriture de caisse.
    */
   creditUsed?: number;
+  /** Existing BL edited through the same idempotent transaction. */
+  deliveryId?: string;
+  priceOverrides?: { commandItemId: string; unitPrice: number }[];
+  operation?: OperationTicket;
 }
 
 export interface DeliveryDriver {
@@ -254,19 +265,61 @@ const reloadAccounts = async () => {
   void inBackground('caisse', async () => (await import('./caisseStore')).useCaisseStore.getState().load());
 };
 
+let commandReadVersion = 0;
+const mergeById = <T extends { id: string }>(old: T[], rows: T[]) => {
+  const ids = new Set(rows.map((r) => r.id));
+  return [...rows, ...old.filter((r) => !ids.has(r.id))];
+};
+
+/** Never enqueue history reads after a committed action. Reconcile related screens by ID. */
+function mergeMutation(raw: unknown, actor: string | undefined) {
+  const result = toCommandMutation(raw);
+  if (useAuthStore.getState().user?.id !== actor) return result;
+  commandReadVersion += 1;
+  useCommandStore.setState((state) => ({
+    commands: mergeById(state.commands, [result.command]),
+    deliveries: mergeById(state.deliveries, result.deliveries),
+  }));
+  if (result.client) applyConfirmedClient(result.client);
+  if (result.sales.length) applyConfirmedSales(result.sales);
+  return result;
+}
+
 export const useCommandStore = create<CommandState>()((set, get) => ({
   commands: [],
   deliveries: [],
   adjustments: [],
 
   load: async () => {
+    const version = commandReadVersion;
     const [commands, deliveries, adjustments] = await Promise.all([
       db.commands.list(), db.commandDeliveries.list(), db.commandAdjustments.list(),
     ]);
-    set({ commands, deliveries, adjustments });
+    if (version === commandReadVersion) set({ commands, deliveries, adjustments });
+  },
+
+  recoverOperation: async (operation, kind) => {
+    const actor = useAuthStore.getState().user?.id;
+    if (!operation.payload) throw new Error('Aucune tentative à vérifier');
+    commandReadVersion += 1;
+    const payload = JSON.parse(operation.payload);
+    bindOperation(operation, payload);
+    try {
+      const raw = await save('commands.recover', () => kind === 'command'
+        ? rpc.createCommandSafe(payload, operation.id)
+        : rpc.createCommandDeliverySafe(payload, operation.id));
+      operationRpcReturned(operation);
+      const result = mergeMutation(raw, actor);
+      if (kind === 'command') return result.command;
+      if (!result.delivery) throw new Error('Réponse incomplète ; vérifiez à nouveau la même tentative');
+      return { ...result.delivery, creditApplied: result.creditApplied };
+    } catch (error) { operationFailed(operation, error); throw error; }
   },
 
   addCommand: async (data) => {
+    const actor = useAuthStore.getState().user?.id;
+    commandReadVersion += 1;
+    const operation = data.operation ?? newOperation();
     const advance = data.advancePaid ?? data.paidAmount ?? 0;
     const payload = {
         client_id: data.clientId,
@@ -286,21 +339,15 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
         bon_number: data.bonNumber ?? null,
         is_historical: data.isHistorical ?? false,
         created_at: data.createdAt ?? null,
+        requested_credit: data.requestedCredit ?? 0,
         items: data.items.map(itemPayload),
       };
-    // create_command() ou, si elle depasse le delai de la base, creation
-    // directe par petites ecritures (memes lignes) — voir rpcOrDirect().
-    const row = await save('commands.create', () => rpc.createCommandSafe(payload));
-    // On ne relit QUE la commande creee (et non toute la table avec ses lignes
-    // et reglements) : la creation redevient instantanee.
-    const created = await db.commands.get(row.id).catch(() => null);
-    if (created) {
-      set({ commands: [created, ...get().commands.filter((c) => c.id !== created.id)] });
-      return created;
-    }
-    const commands = await db.commands.list();
-    set({ commands });
-    return commands.find((c) => c.id === row.id) as Command;
+    bindOperation(operation, payload);
+    let row;
+    try { row = await save('commands.create', () => rpc.createCommandSafe(payload, operation.id)); }
+    catch (error) { operationFailed(operation, error); throw error; }
+    operationRpcReturned(operation);
+    return mergeMutation(row, actor).command;
   },
 
   /**
@@ -466,50 +513,38 @@ export const useCommandStore = create<CommandState>()((set, get) => ({
   },
 
   addDelivery: async (commandId, items, deliveredAt, notes = '', driver, payment) => {
-    const row = await save('commands.deliver', () =>
-      rpc.createCommandDelivery({
-        command_id: commandId,
-        delivered_at: deliveredAt,
-        notes,
-        driver_name: driver?.driverName ?? null,
-        driver_plate: driver?.driverPlate ?? null,
-        location: driver?.location ?? null,
-        ...tvaPayload(payment),
-        cash_paid: payment?.cashPaid ?? 0,
-        advance_applied: payment?.advanceApplied ?? 0,
-        items: items.map(deliveryItemPayload),
-      })
-    );
-    // La livraison a retiré les matières premières du stock : « Gestion de
-    // stock » doit repartir des quantités réelles de la base.
-    const [commands, deliveries, adjustments] = await Promise.all([
-      db.commands.list(), db.commandDeliveries.list(), db.commandAdjustments.list(),
-      reloadStock(), reloadSales(), reloadAccounts(),
-    ]);
-    set({ commands, deliveries, adjustments });
-    return deliveries.find((d) => d.id === row.id) as CommandDelivery;
+    const actor = useAuthStore.getState().user?.id;
+    commandReadVersion += 1;
+    const operation = payment?.operation ?? newOperation();
+    const payload = {
+      command_id: commandId,
+      ...(payment?.deliveryId ? { delivery_id: payment.deliveryId } : {}),
+      delivered_at: deliveredAt,
+      notes,
+      driver_name: driver?.driverName ?? null,
+      driver_plate: driver?.driverPlate ?? null,
+      location: driver?.location ?? null,
+      ...tvaPayload(payment),
+      cash_paid: payment?.cashPaid ?? 0,
+      advance_applied: payment?.advanceApplied ?? 0,
+      requested_credit: payment?.creditUsed ?? 0,
+      price_overrides: (payment?.priceOverrides ?? []).map((p) => ({ command_item_id: p.commandItemId, unit_price: p.unitPrice })),
+      items: items.map(deliveryItemPayload),
+    };
+    bindOperation(operation, payload);
+    let row;
+    try { row = await save('commands.deliver', () => rpc.createCommandDeliverySafe(payload, operation.id)); }
+    catch (error) { operationFailed(operation, error); throw error; }
+    operationRpcReturned(operation);
+    const result = mergeMutation(row, actor);
+    if (!result.delivery) throw new Error('Livraison confirmée, mais réponse incomplète. Réessayez la même opération pour récupérer le bon.');
+    return { ...result.delivery, creditApplied: result.creditApplied };
   },
 
   updateDelivery: async (id, items, deliveredAt, notes = '', driver, payment) => {
-    await save('commands.delivery.update', () =>
-      rpc.updateCommandDelivery(id, {
-        delivered_at: deliveredAt,
-        notes,
-        driver_name: driver?.driverName ?? null,
-        driver_plate: driver?.driverPlate ?? null,
-        location: driver?.location ?? null,
-        ...tvaPayload(payment),
-        cash_paid: payment?.cashPaid ?? 0,
-        advance_applied: payment?.advanceApplied ?? 0,
-        items: items.map(deliveryItemPayload),
-      })
-    );
-    // les quantités déduites ont été recalculées côté serveur
-    const [commands, deliveries, adjustments] = await Promise.all([
-      db.commands.list(), db.commandDeliveries.list(), db.commandAdjustments.list(),
-      reloadStock(), reloadSales(), reloadAccounts(),
-    ]);
-    set({ commands, deliveries, adjustments });
+    const previous = get().deliveries.find((d) => d.id === id);
+    if (!previous) throw new Error('Rechargez la livraison avant de la modifier');
+    return get().addDelivery(previous.commandId, items, deliveredAt, notes, driver, { ...payment, deliveryId: id });
   },
 
   deleteDelivery: async (id) => {

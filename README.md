@@ -1,5 +1,7 @@
 # 🧪 Produits Chimiques — Gestion
 
+> Le code actuel utilise Supabase pour les données métier. La description historique de `localStorage` ci-dessous ne décrit plus cette persistance. Pour installer la base et déployer les commandes/livraisons atomiques, suivre [le guide de migration](MIGRATION_NOUVEAU_PROJET.md) et [le guide de validation et déploiement](docs/COMMAND_PERFORMANCE_ROLLOUT.md).
+
 Application web complète de gestion de produits chimiques : stock, achats, production, comptoir, point de vente, ventes, clients, fournisseurs, employés, dépenses, rapports et paramètres. Interface premium bilingue **Français / Arabe (RTL)** avec animations Framer Motion. L'application démarre **vide** (aucune donnée de démonstration) : toutes les données que vous saisissez sont enregistrées localement dans la base `localStorage` du navigateur et conservées entre les sessions.
 
 ## 🛠️ Stack

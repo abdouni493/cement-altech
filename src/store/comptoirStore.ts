@@ -13,13 +13,22 @@ interface ComptoirState {
   recoverDestructions: (destructionIds: string[]) => Promise<void>;
 }
 
+let readGeneration = 0;
+
+export function applyConfirmedComptoir(rows: ComptoirItem[], affectedIds: string[] = rows.map((row) => row.id)): void {
+  readGeneration += 1;
+  const ids = new Set(affectedIds);
+  useComptoirStore.setState((state) => ({ items: [...rows, ...state.items.filter((row) => !ids.has(row.id))] }));
+}
+
 export const useComptoirStore = create<ComptoirState>()((set) => ({
   items: [],
   destructions: [],
 
   load: async () => {
+    const generation = ++readGeneration;
     const [items, destructions] = await Promise.all([db.comptoir.list(), db.comptoir.destructions()]);
-    set({ items, destructions });
+    if (generation === readGeneration) set({ items, destructions });
   },
 
   destroy: async (comptoirId, qty, reason) => {

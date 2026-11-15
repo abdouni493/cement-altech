@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ShoppingCart, Plus, Eye, Wallet, Printer, Trash2, Calendar, Folder, DollarSign, TrendingDown, CheckCircle2, FileText, CarFront, History, PencilLine, Bike } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { SearchBar } from '@/components/ui/SearchBar';
@@ -22,7 +22,10 @@ import { useStockStore } from '@/store/stockStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useLanguage } from '@/hooks/useLanguage';
 import { usePermissions } from '@/hooks/usePermissions';
-import { formatCurrency, formatDate, matchesDateFilter, isWithinRange, todayISO, type DateFilter } from '@/lib/utils';
+import { formatCurrency, formatDate, todayISO, type DateFilter } from '@/lib/utils';
+import { getPurchase, isPurchaseSummary, listPurchaseSummaries, type PurchaseSummaryPage } from '@/lib/purchaseQueries';
+import { useAuthStore } from '@/store/authStore';
+import { isWriteBusy } from '@/lib/persist';
 import { printInvoice } from '@/lib/print';
 import { toast } from '@/components/ui/Toast';
 import type { Purchase } from '@/types';
@@ -30,7 +33,8 @@ import type { Purchase } from '@/types';
 export default function PurchasePage() {
   const { t, language } = useLanguage();
   const { can } = usePermissions();
-  const { purchases, payDebt, deletePurchase } = usePurchaseStore();
+  const { revision, payDebt, deletePurchase } = usePurchaseStore();
+  const accountId = useAuthStore((s) => s.user?.id);
   const suppliers = useSupplierStore((s) => s.suppliers);
   const delivererAssignments = useDelivererStore((s) => s.assignments);
   const settings = useSettingsStore((s) => s.settings);
@@ -55,53 +59,85 @@ export default function PurchasePage() {
   const [paying, setPaying] = useState<Purchase | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
-  const supplierName = (id: string) => suppliers.find((s) => s.id === id)?.name || '—';
+  const supplierNames = useMemo(() => new Map(suppliers.map((s) => [s.id, s.name])), [suppliers]);
+  const productUnits = useMemo(() => new Map(stockProducts.map((p) => [p.id, p.unit])), [stockProducts]);
+  const supplierName = (id: string) => supplierNames.get(id) || '—';
+  const [page, setPage] = useState(0);
+  const [pageData, setPageData] = useState<PurchaseSummaryPage | null>(null);
+  const [pageOwner, setPageOwner] = useState(accountId);
+  const [listError, setListError] = useState('');
+  const [listLoading, setListLoading] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const readGeneration = useRef(0);
+  const PAGE_SIZE = 50;
 
-  const filtered = useMemo(() => {
-    return purchases.filter((p) => {
-      const q = search.toLowerCase();
-      const matchSearch =
-        supplierName(p.supplierId).toLowerCase().includes(q) ||
-        p.reference.toLowerCase().includes(q) ||
-        (p.bonNumber || '').toLowerCase().includes(q) ||
-        (p.driverPlate || '').toLowerCase().includes(q) ||
-        (delivererAssignments[p.id]?.delivererName || '').toLowerCase().includes(q);
-      
-      const matchDate = dateFilter === 'period'
-        ? isWithinRange(p.date, startDate, endDate)
-        : matchesDateFilter(p.date, dateFilter as DateFilter);
-
-      const matchUnit = !unitFilter || p.products.some((line) => {
-        const prod = stockProducts.find((sp) => sp.id === line.productId);
-        return (line.unit || prod?.unit) === unitFilter;
+  useEffect(() => { setPage(0); }, [search, dateFilter, startDate, endDate, unitFilter, accountId]);
+  useEffect(() => {
+    setPageData(null); setViewing(null); setEditing(null); setPaying(null); setDeleteId(null);
+    setCreateOpen(false); setCreateHistoricalOpen(false);
+  }, [accountId]);
+  useEffect(() => {
+    const generation = ++readGeneration.current;
+    setListLoading(true); setListError('');
+    const now = new Date();
+    let from: string | null = null; let to: string | null = null;
+    if (dateFilter === 'today') from = to = todayISO();
+    else if (dateFilter === 'week') {
+      const start = new Date(); start.setDate(start.getDate() - 6);
+      from = start.toISOString().slice(0, 10); to = todayISO();
+    } else if (dateFilter === 'month') {
+      from = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+      to = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`;
+    } else if (dateFilter === 'period') { from = startDate; to = endDate; }
+    const q = search.toLowerCase();
+    const delivererIds = q ? Object.entries(delivererAssignments)
+      .filter(([, a]) => (a.delivererName || '').toLowerCase().includes(q)).map(([id]) => id) : [];
+    const timer = window.setTimeout(() => {
+      void listPurchaseSummaries({ search, unit: unitFilter, from, to, delivererIds,
+        limit: PAGE_SIZE, offset: page * PAGE_SIZE }).then((result) => {
+        if (generation !== readGeneration.current) return;
+        setPageData(result); setPageOwner(accountId); setListLoading(false);
+        if (page > 0 && page * PAGE_SIZE >= result.totalCount) setPage(Math.max(0, Math.ceil(result.totalCount / PAGE_SIZE) - 1));
+      }).catch((error: Error) => {
+        if (generation !== readGeneration.current) return;
+        setListError(error.message); setListLoading(false);
       });
+    }, 150);
+    return () => { window.clearTimeout(timer); readGeneration.current += 1; };
+  }, [search, dateFilter, startDate, endDate, unitFilter, delivererAssignments, page, revision, refreshVersion, accountId]);
 
-      return matchSearch && matchDate && matchUnit;
-    });
-  }, [purchases, search, dateFilter, startDate, endDate, unitFilter, stockProducts, suppliers, delivererAssignments]);
+  useEffect(() => {
+    const refresh = () => {
+      if (!isWriteBusy() && document.visibilityState !== 'hidden') setRefreshVersion((v) => v + 1);
+    };
+    window.addEventListener('focus', refresh);
+    const timer = window.setInterval(refresh, 60_000);
+    return () => { window.removeEventListener('focus', refresh); window.clearInterval(timer); };
+  }, []);
 
-  // Statistics calculation for the filtered purchases
-  const stats = useMemo(() => {
-    let totalPurchases = 0;
-    let totalPaid = 0;
-    let totalDebt = 0;
-    filtered.forEach((p) => {
-      totalPurchases += p.totalAmount;
-      totalPaid += p.paidAmount;
-      totalDebt += p.restAmount;
-    });
-    return { totalPurchases, totalPaid, totalDebt };
-  }, [filtered]);
+  const visiblePage = pageOwner === accountId ? pageData : null;
+  const filtered = visiblePage?.rows ?? [];
+  const stats = visiblePage?.stats ?? { totalPurchases: 0, totalPaid: 0, totalDebt: 0 };
+  const itemCount = (p: Purchase) => isPurchaseSummary(p) ? p.lineCount : p.products.length;
+  const withDetail = async (purchase: Purchase, action: (p: Purchase) => void) => {
+    try {
+      const row = isPurchaseSummary(purchase) ? await getPurchase(purchase.id) : purchase;
+      if (accountId === useAuthStore.getState().user?.id) action(row);
+    }
+    catch (error) { toast.error((error as Error).message); }
+  };
 
   /** Units involved in an invoice — displayed as badges on the card. */
   const getPurchaseUnits = (purchase: Purchase) => {
+    if (isPurchaseSummary(purchase)) return purchase.units;
     const list = purchase.products
-      .map((line) => line.unit || stockProducts.find((sp) => sp.id === line.productId)?.unit || null)
+      .map((line) => line.unit || productUnits.get(line.productId) || null)
       .filter(Boolean) as string[];
     return Array.from(new Set(list));
   };
 
   const handlePrint = (p: Purchase) => {
+    if (isPurchaseSummary(p)) { void withDetail(p, handlePrint); return; }
     const sup = suppliers.find((s) => s.id === p.supplierId);
     printInvoice({
       type: 'purchase', reference: p.reference, date: p.date,
@@ -132,7 +168,7 @@ export default function PurchasePage() {
     { key: 'date', label: t('date'), render: (p) => formatDate(p.date, language) },
     { key: 'bon', label: 'N° BL / matricule', hideOnMobile: true,
       render: (p) => [p.bonNumber, p.driverPlate].filter(Boolean).join(' · ') || '—' },
-    { key: 'items', label: 'Articles', align: 'right', render: (p) => p.products.length },
+    { key: 'items', label: 'Articles', align: 'right', render: (p) => itemCount(p) },
     { key: 'total', label: t('total'), align: 'right', render: (p) => formatCurrency(p.totalAmount) },
     { key: 'paid', label: t('paid'), align: 'right',
       render: (p) => <span className="text-pistachio">{formatCurrency(p.paidAmount)}</span> },
@@ -145,11 +181,11 @@ export default function PurchasePage() {
   ];
 
   const purchaseActions = (p: Purchase): ActionItem[] => [
-    { label: 'Voir le détail', icon: <Eye size={15} />, onClick: () => setViewing(p) },
+    { label: 'Voir le détail', icon: <Eye size={15} />, onClick: () => { void withDetail(p, setViewing); } },
     { label: 'Modifier la facture', icon: <PencilLine size={15} />, hidden: !can('purchase', 'edit'),
-      onClick: () => setEditing(p) },
+      onClick: () => { void withDetail(p, setEditing); } },
     { label: 'Payer la dette', icon: <Wallet size={15} />,
-      hidden: !can('purchase', 'pay') || p.restAmount <= 0, onClick: () => setPaying(p) },
+      hidden: !can('purchase', 'pay') || p.restAmount <= 0, onClick: () => { void withDetail(p, setPaying); } },
     { label: t('print'), icon: <Printer size={15} />, onClick: () => handlePrint(p) },
     { label: t('delete'), icon: <Trash2 size={15} />, danger: true, hidden: !can('purchase', 'delete'),
       onClick: () => setDeleteId(p.id) },
@@ -157,7 +193,7 @@ export default function PurchasePage() {
 
   return (
     <div>
-      <PageHeader title={t('purchase')} icon={<ShoppingCart size={24} />} subtitle={`${purchases.length} factures`}
+      <PageHeader title={t('purchase')} icon={<ShoppingCart size={24} />} subtitle={`${visiblePage?.totalCount ?? 0} factures`}
         actions={can('purchase', 'create') && (
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="gold" onClick={() => setCreateOpen(true)}><Plus size={18} /> {t('newPurchase')}</Button>
@@ -264,13 +300,22 @@ export default function PurchasePage() {
         )}
       </div>
 
+      <div className="flex items-center justify-between gap-3 mb-4 text-sm">
+        <Button variant="secondary" size="sm" disabled={listLoading} onClick={() => setRefreshVersion((v) => v + 1)}>Actualiser</Button>
+        <span>{listLoading ? 'Chargement…' : `${visiblePage?.totalCount ?? 0} factures`} · Page {page + 1} / {Math.max(1, Math.ceil((visiblePage?.totalCount ?? 0) / PAGE_SIZE))}</span>
+        <div className="flex gap-2">
+          <Button variant="secondary" size="sm" disabled={listLoading || page === 0} onClick={() => setPage((v) => Math.max(0, v - 1))}>Précédent</Button>
+          <Button variant="secondary" size="sm" disabled={listLoading || (page + 1) * PAGE_SIZE >= (visiblePage?.totalCount ?? 0)} onClick={() => setPage((v) => v + 1)}>Suivant</Button>
+        </div>
+      </div>
+      {listError && <p role="alert" className="text-rose-deep mb-4">Lecture impossible : {listError}</p>}
       {filtered.length === 0 ? <EmptyState message={t('noData')} /> : view === 'table' ? (
         <DataTable
           rows={filtered}
           columns={purchaseColumns}
           rowKey={(p) => p.id}
           actions={purchaseActions}
-          onRowClick={(p) => setViewing(p)}
+          onRowClick={(p) => { void withDetail(p, setViewing); }}
         />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 animate-fadeIn">
@@ -290,7 +335,7 @@ export default function PurchasePage() {
                   <span className="text-xs text-text-muted">{formatDate(p.date, language)}</span>
                 </div>
                 <p className="text-sm font-semibold text-text-secondary mb-1">{supplierName(p.supplierId)}</p>
-                <p className="text-xs text-text-muted mb-2">{p.products.length} article(s)</p>
+                <p className="text-xs text-text-muted mb-2">{itemCount(p)} article(s)</p>
 
                 {(p.bonNumber || p.driverPlate) && (
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-2 text-[11px] text-text-secondary">
@@ -332,18 +377,18 @@ export default function PurchasePage() {
                   )}
                   
                   <div className="flex items-center gap-1">
-                    <Button size="sm" variant="secondary" className="px-2" onClick={() => setViewing(p)} title={t('view')}><Eye size={13} /></Button>
+                    <Button size="sm" variant="secondary" className="px-2" onClick={() => { void withDetail(p, setViewing); }} title={t('view')}><Eye size={13} /></Button>
                     {can('purchase', 'edit') && (
                       <Button
                         size="sm" variant="secondary" className="px-2"
-                        onClick={() => setEditing(p)}
+                        onClick={() => { void withDetail(p, setEditing); }}
                         title="Modifier la facture (produits, quantités, prix, règlement)"
                       >
                         <PencilLine size={13} className="text-gold-dark" />
                       </Button>
                     )}
                     {can('purchase', 'pay') && p.restAmount > 0 && (
-                      <Button size="sm" variant="gold" className="text-xs" onClick={() => setPaying(p)}>
+                      <Button size="sm" variant="gold" className="text-xs" onClick={() => { void withDetail(p, setPaying); }}>
                         <Wallet size={13} /> {t('pay')}
                       </Button>
                     )}

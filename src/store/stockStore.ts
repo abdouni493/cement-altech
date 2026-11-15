@@ -30,6 +30,14 @@ interface StockState {
   deleteUnit: (id: string) => Promise<void>;
 }
 
+let readGeneration = 0;
+
+export function applyConfirmedStock(rows: Product[], affectedIds: string[] = rows.map((row) => row.id)): void {
+  readGeneration += 1;
+  const ids = new Set(affectedIds);
+  useStockStore.setState((state) => ({ products: [...rows, ...state.products.filter((row) => !ids.has(row.id))] }));
+}
+
 export const useStockStore = create<StockState>()((set, get) => ({
   products: [],
   marques: [],
@@ -37,10 +45,11 @@ export const useStockStore = create<StockState>()((set, get) => ({
   units: [],
 
   load: async () => {
+    const generation = ++readGeneration;
     const [products, marques, categories, units] = await Promise.all([
       db.products.list(), db.marques.list(), db.categories.list(), db.units.list(),
     ]);
-    set({ products, marques, categories, units });
+    if (generation === readGeneration) set({ products, marques, categories, units });
   },
 
   addProduct: async (p) => {

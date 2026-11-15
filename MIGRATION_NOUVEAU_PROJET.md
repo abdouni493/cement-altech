@@ -13,8 +13,14 @@ exécuter **dans cet ordre**, chaque fichier en entier (copier / coller / Run) :
 1. `altech_production_supabase.sql` — tables, fonctions, sécurité de base
 2. `altech_production_toutes_mises_a_jour.sql` — toutes les mises à jour (dont sauvegarde / restauration)
 3. `altech_production_nouveau_projet_finalisation.sql` — performance (index, règles de sécurité optimisées) et délais
+4. `sql_nouveau_projet/04_atomic_reference_allocator.sql` — numérotation atomique, sans troncature ni renumérotation des documents émis
+5. `sql_nouveau_projet/05_atomic_command_operations.sql` — commandes et livraisons atomiques, rejouables avec le même identifiant d'opération
+6. `sql_nouveau_projet/06_command_summaries.sql` — pagination et totaux filtrés des commandes
+7. `sql_nouveau_projet/07_purchase_summaries.sql` — pagination et totaux filtrés des achats
 
-Les trois fichiers sont ré-exécutables sans risque.
+Pour le chemin découpé : `sql_nouveau_projet/01_schema_de_base.sql`, les sept parties `02`, `03_finalisation.sql`, puis **04 → 05 → 06 → 07**. Les nouveaux fichiers sont ré-exécutables; ne pas rejouer une ancienne définition après eux sans les réappliquer.
+
+Déployer le SQL avant le nouveau frontend et rafraîchir les anciennes sessions. Voir [validation, mesures et déploiement](docs/COMMAND_PERFORMANCE_ROLLOUT.md) pour les diagnostics, tests locaux, compatibilité et reprise sans perte des numéros émis.
 
 ## Étape 2 — Créer le premier compte administrateur
 

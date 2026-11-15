@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/store/authStore';
 import { usePermissions } from '@/hooks/usePermissions';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -37,7 +37,7 @@ const Reports       = lazy(() => import('@/pages/Reports'));
 const SettingsPage  = lazy(() => import('@/pages/Settings'));
 
 import { useThemeStore, applyTheme } from '@/store/themeStore';
-import { hydrateFromSupabase } from '@/lib/sync';
+import { hydrateFromSupabase, clearHydratedData } from '@/lib/sync';
 import { navItems } from '@/components/layout/navItems';
 
 function BootScreen({ label = 'Connexion à la base de données…' }: { label?: string }) {
@@ -108,50 +108,46 @@ export default function App() {
   const theme = useThemeStore((s) => s.theme);
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const userId = useAuthStore((s) => s.user?.id);
+  const location = useLocation();
   const [hydrating, setHydrating] = useState(false);
+  const [hydratedScreen, setHydratedScreen] = useState('');
 
-  // Restores the Supabase session then reloads every module FROM THE DATABASE.
+  // Restoring auth must not fan out into every business table.
+  useEffect(() => { void restoreSession(); }, [restoreSession]);
+
   useEffect(() => {
+    if (!isAuthenticated || !userId) {
+      clearHydratedData();
+      setHydrating(false);
+      return;
+    }
     let cancelled = false;
-    (async () => {
-      await restoreSession();
-      if (cancelled) return;
-      if (useAuthStore.getState().isAuthenticated) {
-        setHydrating(true);
-        await hydrateFromSupabase();
-        if (!cancelled) setHydrating(false);
+    setHydrating(true);
+    void hydrateFromSupabase({ pathname: location.pathname }).finally(() => {
+      if (!cancelled) {
+        setHydrating(false);
+        setHydratedScreen(`${userId}:${location.pathname}`);
       }
-    })();
+    });
     return () => { cancelled = true; };
-  }, [restoreSession]);
+  }, [isAuthenticated, userId, location.pathname]);
 
-  // A fresh login (or an account switch) reloads everything as well.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    let cancelled = false;
-    (async () => {
-      setHydrating(true);
-      await hydrateFromSupabase();
-      if (!cancelled) setHydrating(false);
-    })();
-    return () => { cancelled = true; };
-  }, [isAuthenticated]);
-
-  // Coming back to the tab re-reads the data (and the permission matrix) so two
-  // machines stay aligned and a worker picks up rights granted while he was in.
+  // Preserve cross-terminal freshness and refresh permissions independently of
+  // business data. Only the visible route refreshes, and writes take priority.
   useEffect(() => {
     const onFocus = () => {
-      if (!useAuthStore.getState().isAuthenticated) return;
+      if (!useAuthStore.getState().isAuthenticated || document.visibilityState === 'hidden') return;
       void useAuthStore.getState().refreshProfile();
-      void hydrateFromSupabase({ force: false });
+      void hydrateFromSupabase({ force: false, pathname: location.pathname });
     };
     window.addEventListener('focus', onFocus);
-    const timer = window.setInterval(onFocus, 900_000);
+    const timer = window.setInterval(onFocus, 60_000);
     return () => {
       window.removeEventListener('focus', onFocus);
       window.clearInterval(timer);
     };
-  }, []);
+  }, [location.pathname]);
 
   useEffect(() => {
     document.documentElement.setAttribute('dir', language === 'ar' ? 'rtl' : 'ltr');
@@ -171,7 +167,7 @@ export default function App() {
           Synchronisation des données…
         </div>
       )}
-      <Routes>
+      {isAuthenticated && userId && hydratedScreen !== `${userId}:${location.pathname}` ? <BootScreen /> : <Routes>
         <Route path="/login" element={<Login />} />
         <Route path="/no-access" element={<PrivateRoute><NoAccess /></PrivateRoute>} />
         <Route
@@ -206,7 +202,7 @@ export default function App() {
           <Route path="/" element={<HomeRedirect />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      </Routes>}
     </>
   );
 }

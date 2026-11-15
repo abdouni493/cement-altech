@@ -1,0 +1,59 @@
+{
+  "generated_at": "2026-11-15T00:49:03.125Z",
+  "fixture": "500 fully funded BLs on one order, advance_paid1001, 501 remains available; no linked invoices",
+  "role": "superuser local fixture (helper has no UI permission gate)",
+  "network": "local PostgreSQL15 Docker; SQL helper execution only",
+  "notes": [
+    "Seed uses direct inserts to isolate settlement cost; baseline numbering would stall at100thBL.",
+    "Fully funded documents remain unchanged; repeated command_advance_available scans are removed.",
+    "Linked-invoice updates and genuinely changed allocations still scale with affected documents."
+  ],
+  "results": [
+    {
+      "version": "before",
+      "runs": 15,
+      "p95_ms": 69.14919999999998,
+      "median_ms": 56.645,
+      "samples_ms": [
+        57.69,
+        55.801,
+        54.433,
+        56.79,
+        54.421,
+        54.078,
+        56.095,
+        54.093,
+        54.893,
+        56.645,
+        56.758,
+        63.193,
+        83.047,
+        61.065,
+        57.179
+      ]
+    },
+    {
+      "version": "after",
+      "runs": 15,
+      "p95_ms": 1.9178999999999966,
+      "median_ms": 0.774,
+      "samples_ms": [
+        4.237,
+        0.864,
+        0.896,
+        0.924,
+        0.774,
+        0.853,
+        0.546,
+        0.876,
+        0.778,
+        0.697,
+        0.69,
+        0.535,
+        0.681,
+        0.698,
+        0.618
+      ]
+    }
+  ]
+}

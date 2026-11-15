@@ -313,122 +313,27 @@ async function call<T>(fn: string, args: Record<string, any> = {}): Promise<T> {
     if (!error) return data as T;
     // UNE seule relance, espacee : multiplier les essais ne fait qu'ajouter de
     // la charge a une base deja saturee.
-    if (attempt < 1 && isTransient(error.message)) {
+    // Only a confirmed PostgreSQL cancellation proves rollback. A proxy timeout
+    // or lost response can follow COMMIT, so legacy non-idempotent RPCs must not
+    // be replayed automatically. v2 actions can be retried with their saved ID.
+    if (attempt < 1 && (error.code === '57014' || /statement timeout|canceling statement/i.test(error.message))) {
       await sleep(2500);
       continue;
     }
-    throw new Error(`[rpc:${fn}] ${error.message}`);
+    throw Object.assign(new Error(`[rpc:${fn}] ${error.message}`), { code: error.code });
   }
-}
-
-/* ---------------------------------------------------------------------------
- * FONCTIONS LENTES : BASCULE AUTOMATIQUE SUR L'ECRITURE DIRECTE
- * ---------------------------------------------------------------------------
- * Quand une fonction de la base depasse le delai (« statement timeout »), rien
- * n'est ecrit (transaction annulee) et l'ecran bascule sur une creation
- * directe par petites requetes. Cette lenteur est memorisee 6 heures : les
- * creations suivantes passent DIRECTEMENT par l'ecriture directe — plus
- * d'attente ni d'erreur 500 dans la console.
- * ------------------------------------------------------------------------- */
-// propre au projet : une lenteur notee sur l'ancienne base ne s'applique pas a la nouvelle
-const SLOW_KEY = 'altech-slow-rpc-asxdoij';
-const SLOW_TTL = 6 * 3600_000;
-
-function slowMap(): Record<string, number> {
-  try { return JSON.parse(localStorage.getItem(SLOW_KEY) || '{}'); } catch { return {}; }
-}
-function isKnownSlow(fn: string): boolean {
-  const t = slowMap()[fn];
-  return !!t && Date.now() - t < SLOW_TTL;
-}
-function markSlow(fn: string): void {
-  try { localStorage.setItem(SLOW_KEY, JSON.stringify({ ...slowMap(), [fn]: Date.now() })); } catch { /* ignore */ }
-}
-
-async function rpcOrDirect<T>(fn: string, args: Record<string, any>, direct: () => Promise<T>): Promise<T> {
-  if (isKnownSlow(fn)) return direct();
-  const { data, error } = await supabase.rpc(fn, args);
-  if (!error) return data as T;
-  if (!isTransient(error.message)) throw new Error(`[rpc:${fn}] ${error.message}`);
-  markSlow(fn);
-  return direct();
-}
-
-/** Prochain numero PREFIXE-AAAA-NNN d'apres les references existantes. */
-async function nextReference(table: string, prefix: string, year: string): Promise<number> {
-  const { data, error } = await supabase.from(table).select('reference').like('reference', `${prefix}-${year}-%`);
-  if (error) throw new Error(`[${table}] ${error.message}`);
-  return (data ?? []).reduce((m: number, r: any) => {
-    const n = parseInt(String(r.reference).split('-').pop() ?? '', 10);
-    return Number.isFinite(n) && n > m ? n : m;
-  }, 0);
 }
 
 /**
- * Creation directe d'une facture d'achat — memes ecritures que create_purchase():
- * la facture AVANT ses lignes (le declencheur de stock lit `is_historical`),
- * puis les lignes (stock alimente par trg_purchase_line_stock) et l'acompte
- * (sortie de caisse par trg_purchase_payment_caisse).
+ * Numbered documents are created only by their transactional SQL RPC. In
+ * particular, a timeout or a lost response must never switch to browser-side
+ * numbering and a second series of writes. Migration 04 coordinates all ACH
+ * writers with the same atomic allocator.
  */
-async function createPurchaseDirect(p: Record<string, any>): Promise<{ id: string; reference: string }> {
-  const date = String(p.date || new Date().toISOString().slice(0, 10)).slice(0, 10);
-  const year = date.slice(0, 4);
-  const hist = !!p.is_historical;
-  const lines: any[] = p.products ?? [];
-  const total = p.total_amount ?? lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.purchase_price) || 0), 0);
-  const paid = Math.max(0, Number(p.paid_amount) || 0);
-  let seq = await nextReference('purchases', 'ACH', year);
-  let row: any = null;
-  for (let attempt = 0; attempt < 5 && !row; attempt++) {
-    seq += 1;
-    const { data, error } = await supabase.from('purchases').insert({
-      reference: `ACH-${year}-${String(seq).padStart(3, '0')}`,
-      supplier_id: p.supplier_id || null,
-      date,
-      bon_number: (p.bon_number || '').trim() || null,
-      driver_plate: (p.driver_plate || '').trim().toUpperCase() || null,
-      is_historical: hist,
-      total_amount: total,
-      paid_amount: paid,
-      rest_amount: Math.max(0, total - paid),
-      note: p.note ?? null,
-    }).select('id, reference').single();
-    if (!error) { row = data; break; }
-    if (!/duplicate key|already exists|23505/i.test(error.message)) throw new Error(`[purchases] ${error.message}`);
-  }
-  if (!row) throw new Error('[purchases] impossible de trouver un numero de facture libre');
-
-  if (lines.length) {
-    const { error } = await supabase.from('purchase_lines').insert(lines.map((l) => ({
-      purchase_id: row.id,
-      product_id: l.product_id || null,
-      product_name: l.product_name || 'Produit',
-      quantity: Number(l.quantity) || 0,
-      purchase_price: Number(l.purchase_price) || 0,
-      min_alert_quantity: l.min_alert_quantity ?? null,
-      unit_enabled: !!l.unit_enabled,
-      unit: l.unit ?? null,
-      expiration_enabled: !!l.expiration_enabled,
-      expiration_date: l.expiration_date || null,
-    })));
-    if (error) {
-      await supabase.from('purchases').delete().eq('id', row.id);
-      throw new Error(`[purchase_lines] ${error.message}`);
-    }
-  }
-  if (paid > 0) {
-    await supabase.from('purchase_payments').insert({
-      purchase_id: row.id, date, amount: paid,
-      description: hist ? 'Acompte ancien achat' : 'Acompte achat',
-    });
-  }
-  return { id: row.id, reference: row.reference };
-}
-
 const num = (v: any, d = 0) => (v === null || v === undefined ? d : Number(v));
 
 // ---------------------------------------------------------------- mappers ----
-const toProduct = (r: any): Product => ({
+export const toProduct = (r: any): Product => ({
   id: r.id,
   name: r.name,
   description: r.description ?? '',
@@ -663,7 +568,7 @@ const fromWorker = (w: Partial<Worker>) => ({
   permissions: w.permissions ?? {},
 });
 
-const toPurchase = (r: any): Purchase => ({
+export const toPurchase = (r: any): Purchase => ({
   id: r.id,
   reference: r.reference,
   supplierId: r.supplier_id ?? '',
@@ -692,7 +597,7 @@ const toPurchase = (r: any): Purchase => ({
   })),
 });
 
-const toSale = (r: any): Sale => ({
+export const toSale = (r: any): Sale => ({
   id: r.id,
   reference: r.reference,
   clientId: r.client_id ?? null,
@@ -730,7 +635,7 @@ const toSale = (r: any): Sale => ({
   })),
 });
 
-const toProduction = (r: any): Production => ({
+export const toProduction = (r: any): Production => ({
   id: r.id,
   name: r.name,
   description: r.description ?? '',
@@ -765,7 +670,7 @@ const toProduction = (r: any): Production => ({
   })),
 });
 
-const toComptoirItem = (r: any): ComptoirItem => ({
+export const toComptoirItem = (r: any): ComptoirItem => ({
   id: r.id,
   productionId: r.production_id ?? '',
   productName: r.product_name,
@@ -841,7 +746,7 @@ const toCommandAdjustment = (r: any): CommandAdjustment => ({
   })),
 });
 
-const toCommand = (r: any): Command => ({
+export const toCommand = (r: any): Command => ({
   id: r.id,
   reference: r.reference,
   bonNumber: r.bon_number ?? undefined,
@@ -896,6 +801,30 @@ const toCommand = (r: any): Command => ({
     sellUnit: i.sell_unit ?? undefined,
   })),
 });
+
+/** Normalize a committed v2 response without any post-write history reads. */
+export function toCommandMutation(r: any): {
+  command: Command; delivery?: CommandDelivery; deliveries: CommandDelivery[];
+  sales: Sale[]; client: Client | null; creditApplied: number; replayed: boolean;
+} {
+  const command = toCommand({ ...r.command,
+    command_items: [...(r.command.command_items ?? r.command.items ?? [])]
+      .sort((a: any, b: any) => (a.position ?? 0) - (b.position ?? 0)),
+    command_payments: r.command.command_payments ?? r.command.payments ?? [],
+  });
+  const delivery = (d: any) => toCommandDelivery({ ...d,
+    command_delivery_items: d.command_delivery_items ?? d.items ?? [],
+    command_delivery_consumptions: d.command_delivery_consumptions ?? d.consumptions ?? [],
+  });
+  return {
+    command,
+    delivery: r.delivery ? delivery(r.delivery) : undefined,
+    deliveries: (r.deliveries ?? []).map(delivery),
+    sales: (r.sales ?? []).map(toSale),
+    client: r.client ? toClient(r.client) : null,
+    creditApplied: num(r.credit_applied), replayed: !!r.replayed,
+  };
+}
 
 const toExpense = (r: any): Expense => ({
   id: r.id,
@@ -1050,6 +979,9 @@ export const db = {
 
   // /pos & /sales
   sales: {
+    forCommand: async (commandId: string): Promise<Sale[]> =>
+      (await readAll<any>('sales', () => supabase.from('sales')
+        .select('*, sale_lines(*), sale_payments(*)').eq('command_id', commandId).order('date').order('id'))).map(toSale),
     list: async (): Promise<Sale[]> =>
       (await select<any>('sales', '*, sale_lines(*), sale_payments(*)', 'date')).map(toSale),
     remove: (id: string) => remove('sales', id),
@@ -1080,97 +1012,6 @@ export const db = {
         if (!isMissingSchema((e as Error).message)) throw e;
         return (await select<any>('commands', '*, command_items(*)', 'created_at')).map(toCommand);
       }
-    },
-    /**
-     * CREATION DIRECTE — secours quand la fonction `create_command()` depasse le
-     * delai de la base. Ecrit les MEMES lignes qu'elle (commande, lignes,
-     * adresse du client, acompte en caisse) par petites requetes separees ;
-     * les totaux TVA / TTC / reste sont recalcules par le declencheur de la
-     * table. En cas d'echec sur les lignes, la commande est retiree.
-     */
-    createDirect: async (p: Record<string, any>): Promise<{ id: string; reference: string }> => {
-      const created = p.created_at ? new Date(p.created_at) : new Date();
-      const year = String(created.getFullYear());
-      const advance = Math.max(0, Number(p.advance_paid) || 0);
-      const tvaOn = !!p.tva_enabled;
-
-      // Prochain numero CMD-AAAA-NNN d'apres les references existantes.
-      const { data: refs, error: refErr } = await supabase
-        .from('commands').select('reference').like('reference', `CMD-${year}-%`);
-      if (refErr) throw new Error(`[commands] ${refErr.message}`);
-      let seq = (refs ?? []).reduce((m: number, r: any) => {
-        const n = parseInt(String(r.reference).split('-').pop() ?? '', 10);
-        return Number.isFinite(n) && n > m ? n : m;
-      }, 0);
-
-      const clean = (v: any) => (typeof v === 'string' && v.trim() ? v.trim() : null);
-      let row: any = null;
-      for (let attempt = 0; attempt < 5 && !row; attempt++) {
-        seq += 1;
-        const reference = `CMD-${year}-${String(seq).padStart(3, '0')}`;
-        const { data, error } = await supabase.from('commands').insert({
-          reference,
-          client_id: p.client_id || null,
-          client_name: p.client_name || 'Client',
-          client_phone: clean(p.client_phone),
-          client_address: clean(p.client_address),
-          driver_name: clean(p.driver_name),
-          driver_plate: clean(p.driver_plate),
-          receive_date: p.receive_date || null,
-          receive_hour: p.receive_hour ?? '00',
-          receive_minute: p.receive_minute ?? '00',
-          total_amount: Number(p.total_amount) || 0,
-          tva_enabled: tvaOn,
-          tva_rate: tvaOn ? (Number(p.tva_rate) || 19) : 0,
-          advance_paid: advance,
-          extra_paid: 0,
-          paid_amount: advance,
-          notes: p.notes ?? '',
-          bon_number: clean(p.bon_number),
-          is_historical: !!p.is_historical,
-          status: 'pending',
-          created_at: created.toISOString(),
-        }).select('id, reference').single();
-        if (!error) { row = data; break; }
-        if (!/duplicate key|already exists|23505/i.test(error.message)) throw new Error(`[commands] ${error.message}`);
-      }
-      if (!row) throw new Error('[commands] impossible de trouver un numero de commande libre');
-
-      const items = (p.items ?? []).map((i: any, idx: number) => ({
-        command_id: row.id,
-        position: i.position ?? idx,
-        product_id: i.product_id || null,
-        fiche_technic_id: i.fiche_technic_id || null,
-        product_name: i.product_name || 'Produit',
-        quantity: Number(i.quantity) || 0,
-        unit_price: Number(i.unit_price) || 0,
-        total_price: Number(i.total_price) || 0,
-        sell_by_unit: !!i.sell_by_unit,
-        sell_unit: i.sell_unit ?? null,
-      }));
-      if (items.length) {
-        const { error } = await supabase.from('command_items').insert(items);
-        if (error) {
-          await supabase.from('commands').delete().eq('id', row.id);
-          throw new Error(`[command_items] ${error.message}`);
-        }
-      }
-
-      // l'adresse saisie devient l'adresse de reference du client (facultatif)
-      const addr = clean(p.client_address);
-      if (p.client_id && addr) {
-        await supabase.from('clients').update({ address: addr }).eq('id', p.client_id);
-      }
-
-      // L'acompte d'une commande ACTUELLE entre en caisse (pas d'une ancienne).
-      if (advance > 0 && !p.is_historical) {
-        await supabase.from('caisse_transactions').insert({
-          type: 'deposit', amount: advance, date: created.toISOString().slice(0, 10),
-          description: `Acompte commande ${row.reference}`, category_name: 'Commande',
-          ref_table: 'commands', ref_id: row.id,
-        });
-      }
-      return { id: row.id, reference: row.reference };
     },
     /** UNE commande (avec ses lignes et reglements) — evite de relire toute la table. */
     get: async (id: string): Promise<Command | null> => {
@@ -1263,6 +1104,10 @@ export const db = {
 
   // /commands — livraisons
   commandDeliveries: {
+    forCommand: async (commandId: string): Promise<CommandDelivery[]> =>
+      (await readAll<any>('command_deliveries', () => supabase.from('command_deliveries')
+        .select('*, command_delivery_items(*), command_delivery_consumptions(*)')
+        .eq('command_id', commandId).order('delivered_at').order('id'))).map(toCommandDelivery),
     list: async (): Promise<CommandDelivery[]> => {
       // Les matières déduites du stock ne sont lisibles qu'une fois
       // `altech_production_update_livraison_stock_historique.sql` exécuté :
@@ -1281,6 +1126,10 @@ export const db = {
 
   // /commands — annulations du reste et augmentations
   commandAdjustments: {
+    forCommand: async (commandId: string): Promise<CommandAdjustment[]> =>
+      (await readAll<any>('command_adjustments', () => supabase.from('command_adjustments')
+        .select('*, command_adjustment_lines(*)').eq('command_id', commandId)
+        .order('created_at').order('id'))).map(toCommandAdjustment),
     list: async (): Promise<CommandAdjustment[]> =>
       (await selectOptional<any>('command_adjustments', '*, command_adjustment_lines(*)', 'created_at'))
         .map(toCommandAdjustment),
@@ -1420,8 +1269,13 @@ export const db = {
 /** Business buttons — one entry per action RPC declared in the SQL file. */
 export const rpc = {
   // /purchase
-  createPurchase: (payload: Record<string, any>) =>
-    rpcOrDirect<any>('create_purchase', { p_payload: payload }, () => createPurchaseDirect(payload)),
+  createPurchase: async (payload: Record<string, any>) => {
+    // Legacy create_purchase has no operation token: neither the generic retry
+    // helper nor a direct-write fallback may replay an ambiguous result.
+    const { data, error } = await supabase.rpc('create_purchase', { p_payload: payload });
+    if (error) throw Object.assign(new Error(`[rpc:create_purchase] ${error.message}`), { code: error.code });
+    return data;
+  },
   /** Modifier l'en-tête d'une facture d'achat (date, bon, matricule, payé). */
   updatePurchase: (id: string, payload: Record<string, any>) =>
     call<any>('update_purchase', { p_id: id, p_payload: payload }),
@@ -1451,10 +1305,11 @@ export const rpc = {
 
   // /clients/commands
   createCommand: (payload: Record<string, any>) => call<any>('create_command', { p_payload: payload }),
-  /** create_command SANS relance : sert a basculer vite sur la creation directe. */
-  /** create_command(), ou creation directe si la fonction depasse le delai de la base. */
-  createCommandSafe: (payload: Record<string, any>) =>
-    rpcOrDirect<any>('create_command', { p_payload: payload }, () => db.commands.createDirect(payload)),
+  /** The idempotent transaction is the only create path. Missing migration fails closed. */
+  createCommandSafe: (payload: Record<string, any>, operationId: string) =>
+    call<any>('create_command_v2', { p_operation_id: operationId, p_payload: payload }),
+  createCommandDeliverySafe: (payload: Record<string, any>, operationId: string) =>
+    call<any>('create_command_delivery_v2', { p_operation_id: operationId, p_payload: payload }),
   /**
    * Modifier une commande EN ENTIER : en-tete, TVA, acompte et lignes.
    * L'ancienne version n'ecrivait que l'en-tete — l'acompte, la TVA et les

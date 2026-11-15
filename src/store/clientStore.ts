@@ -102,6 +102,19 @@ async function reloadLedger(): Promise<Pick<ClientState, 'clients' | 'oldDebts' 
   return { clients, oldDebts, refunds };
 }
 
+let clientReadVersion = 0;
+export async function loadClientCatalog(): Promise<void> {
+  const version = clientReadVersion;
+  const clients = await db.clients.list();
+  if (version === clientReadVersion) useClientStore.setState({ clients });
+}
+
+/** A transaction response wins over older in-flight ledger reads. */
+export function applyConfirmedClient(client: Client): void {
+  clientReadVersion += 1;
+  useClientStore.setState((state) => ({ clients: [client, ...state.clients.filter((c) => c.id !== client.id)] }));
+}
+
 export const useClientStore = create<ClientState>()((set, get) => ({
   clients: [],
   payments: [],
@@ -109,11 +122,12 @@ export const useClientStore = create<ClientState>()((set, get) => ({
   refunds: [],
 
   load: async () => {
+    const version = clientReadVersion;
     const [clients, payments, oldDebts, refunds] = await Promise.all([
       db.clients.list(), db.clientPayments.list(),
       db.partyOldDebts.list('client'), db.partyRefunds.list('client'),
     ]);
-    set({ clients, payments, oldDebts, refunds });
+    if (version === clientReadVersion) set({ clients, payments, oldDebts, refunds });
   },
 
   addClient: async (data) => {
