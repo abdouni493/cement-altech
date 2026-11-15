@@ -17,8 +17,9 @@ exécuter **dans cet ordre**, chaque fichier en entier (copier / coller / Run) :
 5. `sql_nouveau_projet/05_atomic_command_operations.sql` — commandes et livraisons atomiques, rejouables avec le même identifiant d'opération
 6. `sql_nouveau_projet/06_command_summaries.sql` — pagination et totaux filtrés des commandes
 7. `sql_nouveau_projet/07_purchase_summaries.sql` — pagination et totaux filtrés des achats
+8. `sql_nouveau_projet/08_fix_livraison_stock_insuffisant.sql` — correctif : un manque de stock (ex. EAU) ne bloque plus la livraison, la matière est ramenée à zéro comme avant
 
-Pour le chemin découpé : `sql_nouveau_projet/01_schema_de_base.sql`, les sept parties `02`, `03_finalisation.sql`, puis **04 → 05 → 06 → 07**. Les nouveaux fichiers sont ré-exécutables; ne pas rejouer une ancienne définition après eux sans les réappliquer.
+Pour le chemin découpé : `sql_nouveau_projet/01_schema_de_base.sql`, les sept parties `02`, `03_finalisation.sql`, puis **04 → 05 → 06 → 07 → 08**. Les nouveaux fichiers sont ré-exécutables; ne pas rejouer une ancienne définition après eux sans les réappliquer.
 
 Déployer le SQL avant le nouveau frontend et rafraîchir les anciennes sessions. Voir [validation, mesures et déploiement](docs/COMMAND_PERFORMANCE_ROLLOUT.md) pour les diagnostics, tests locaux, compatibilité et reprise sans perte des numéros émis.
 

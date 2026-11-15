@@ -89,14 +89,13 @@ begin
   assert (select unit_price=10 from public.command_items where id=line2),'price rollback after failed delivery';
   assert (select current_quantity=97 from public.products where id=product),'stock rollback after failed delivery';
   update public.products set current_quantity=0 where id=product;
-  failed:=false;
-  begin perform public.create_command_delivery_v2(gen_random_uuid(),jsonb_build_object('command_id',cmd,
-    'items',jsonb_build_array(jsonb_build_object('command_item_id',line2,'product_name','Atomic ciment','quantity',1))));
-  exception when others then
-    if sqlerrm not like 'Stock insuffisant%' then raise; end if;
-    failed:=true; end;
-  assert failed,'insufficient stock rejected before accounting';
-  assert (select delivered_quantity=0 from public.command_items where id=line2),'failed stock write leaves quantity unchanged';
+  -- A shortage never blocks a delivery: stock is clamped to zero.
+  declare shortage jsonb; begin
+    shortage:=public.create_command_delivery_v2(gen_random_uuid(),jsonb_build_object('command_id',cmd,
+      'items',jsonb_build_array(jsonb_build_object('command_item_id',line2,'product_name','Atomic ciment','quantity',1))));
+    assert (select current_quantity=0 from public.products where id=product),'shortage clamps stock to zero';
+    perform public.delete_command_delivery((shortage#>>'{delivery,id}')::uuid);
+  end;
   update public.products set current_quantity=97 where id=product;
 
   -- Customer credit must not be overspent even when the requested value is stale.

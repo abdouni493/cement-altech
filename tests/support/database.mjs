@@ -12,6 +12,7 @@ export const newMigrations = [
   'sql_nouveau_projet/05_atomic_command_operations.sql',
   'sql_nouveau_projet/06_command_summaries.sql',
   'sql_nouveau_projet/07_purchase_summaries.sql',
+  'sql_nouveau_projet/08_fix_livraison_stock_insuffisant.sql',
 ];
 export function shell(args, options = {}) {
   const result = spawnSync('docker', args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, ...options });

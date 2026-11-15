@@ -107,26 +107,14 @@ begin
     from (select product_id, max(product_name) product_name,
                  sum(quantity) quantity, bool_or(required) required
             from requirements where quantity > 0 group by product_id) q;
-  if exists(select 1 from jsonb_array_elements(v_requirements) j
-             where j->>'product_id' is null and (j->>'required')::boolean) then
-    raise exception 'Matiere introuvable dans le stock';
-  end if;
+  -- Business rule (unchanged from the original delivery flow): a shortage never
+  -- blocks a delivery. The movement clamps the material to zero, as announced
+  -- by the delivery screen. Unknown materials are skipped like before. Only
+  -- lock the stock rows in a stable order to serialize concurrent deliveries.
   perform p.id from public.products p
-    where p.id in (select (j->>'product_id')::uuid from jsonb_array_elements(v_requirements) j)
+    where p.id in (select (j->>'product_id')::uuid from jsonb_array_elements(v_requirements) j
+                    where j->>'product_id' is not null)
     order by p.id for update;
-  for r in select * from jsonb_to_recordset(v_requirements)
-    as x(product_id uuid, product_name text, quantity numeric, required boolean)
-  loop
-    if r.product_id is null then continue; end if;
-    select p.current_quantity + coalesce((select sum(cc.quantity)
-      from public.command_delivery_consumptions cc
-      where cc.product_id=p.id and cc.delivery_id=nullif(p_payload->>'delivery_id','')::uuid),0)
-      into v_available from public.products p where p.id = r.product_id;
-    if v_available is null or v_available + 0.0001 < r.quantity then
-      raise exception 'Stock insuffisant : % (disponible %, demande %)',
-        r.product_name, coalesce(v_available, 0), r.quantity;
-    end if;
-  end loop;
 end;
 $fn$;
 revoke all on function public.validate_command_delivery_v2(jsonb) from public, anon, authenticated;
