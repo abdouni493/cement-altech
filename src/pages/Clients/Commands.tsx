@@ -195,8 +195,15 @@ export default function CommandsPage() {
         start = new Date(from + 'T00:00:00'); end = new Date(to + 'T23:59:59.999');
       }
       try {
-        const page = await listCommandSummaries({ search, scope, status: statusFilter,
-          from: start?.toISOString(), to: end?.toISOString(), limit: pageSize * pagesLoaded, offset: 0 });
+        // Le serveur renvoie au plus 100 lignes par appel : on lit toutes les
+        // tranches deja affichees (« Afficher plus ») en morceaux de 100.
+        const wanted = pageSize * pagesLoaded;
+        const chunk = 100;
+        const filters = { search, scope, status: statusFilter, from: start?.toISOString(), to: end?.toISOString() };
+        const parts = await Promise.all(Array.from({ length: Math.ceil(wanted / chunk) }, (_, i) =>
+          listCommandSummaries({ ...filters, limit: Math.min(chunk, wanted - i * chunk), offset: i * chunk })));
+        const seen = new Set<string>();
+        const page = { ...parts[0], rows: parts.flatMap((part) => part.rows).filter((row) => !seen.has(row.id) && !!seen.add(row.id)) };
         if (request === pageRequest.current) { setSummaryPage(page); setSummaryStale(false); }
       } catch (error) {
         if (request === pageRequest.current) setListError((error as Error).message);
