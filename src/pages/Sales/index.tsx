@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Receipt, Eye, Wallet, Printer, Trash2, History, Percent, Pencil, Truck, Store,
 } from 'lucide-react';
@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { ShowMore } from '@/components/ui/ShowMore';
 import { ViewToggle } from '@/components/ui/ViewToggle';
 import { useViewMode } from '@/components/ui/DataTable';
 import { PayDebtModal } from '@/components/shared/PayDebtModal';
@@ -71,6 +72,12 @@ export default function SalesPage() {
     }),
     [sales, search, dateFilter, origin, clients]
   );
+
+  /** Lignes affichees : « Afficher plus » en ajoute 50 pour continuer a defiler. */
+  const SALES_STEP = 50;
+  const [visibleCount, setVisibleCount] = useState(SALES_STEP);
+  useEffect(() => { setVisibleCount(SALES_STEP); }, [search, dateFilter, origin]);
+  const visible = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount]);
 
   /**
    * Totaux de l'écran : les livraisons sont des ventes comme les autres, on
@@ -144,7 +151,7 @@ export default function SalesPage() {
 
       {filtered.length === 0 ? <EmptyState message={t('noData')} /> : view === 'cards' ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filtered.map((s, i) => (
+          {visible.map((s, i) => (
             <Card key={s.id} index={i} hoverable className="flex flex-col">
               <div className="flex justify-between items-start mb-1">
                 <h3 className="font-display font-semibold text-text-primary flex flex-wrap items-center gap-1.5">
@@ -200,7 +207,7 @@ export default function SalesPage() {
               <th className="text-left px-4 py-3">N°</th><th className="text-left px-4 py-3">{t('client')}</th><th className="text-left px-4 py-3">{t('date')}</th>
               <th className="text-right px-4 py-3">{t('total')}</th><th className="text-right px-4 py-3">{t('rest')}</th><th className="text-center px-4 py-3">{t('actions')}</th>
             </tr></thead>
-            <tbody>{filtered.map((s) => (
+            <tbody>{visible.map((s) => (
               <tr key={s.id} className="border-t border-gold/10 hover:bg-gold/5">
                 <td className="px-4 py-3 font-medium">
                   <span className="flex flex-wrap items-center gap-1.5">
@@ -223,6 +230,10 @@ export default function SalesPage() {
             ))}</tbody>
           </table>
         </div>
+      )}
+      {filtered.length > 0 && (
+        <ShowMore shown={visible.length} total={filtered.length} step={SALES_STEP}
+          onMore={() => setVisibleCount((n) => n + SALES_STEP)} />
       )}
 
       <Modal open={!!viewing} onClose={() => setViewing(null)} title={viewing?.reference} size="md">

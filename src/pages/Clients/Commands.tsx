@@ -44,6 +44,7 @@ import { printCommandOrder, printDeliveryNote, DELIVERY_NOTE_COLUMNS } from '@/l
 import { PrintTitleDialog, type PrintTitleRequest } from '@/components/shared/PrintTitleDialog';
 import { cardVariants, EASE } from '@/lib/animations';
 import type { Client, CommandDelivery } from '@/types';
+import { ShowMore } from '@/components/ui/ShowMore';
 import { newOperation, operationConfirmed, type OperationTicket } from '@/lib/commandOperation';
 
 type DateFilter = 'today' | 'week' | 'month' | 'period' | 'all';
@@ -169,7 +170,8 @@ export default function CommandsPage() {
   };
 
   /* --------------------------------------------------------------- filters */
-  const [pageIndex, setPageIndex] = useState(0);
+  /** Tranches chargees : « Afficher plus » en ajoute une sans quitter la liste. */
+  const [pagesLoaded, setPagesLoaded] = useState(1);
   const [summaryPage, setSummaryPage] = useState<(Omit<CommandSummaryPage, 'rows'> & { rows: Command[] }) | null>(null);
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState('');
@@ -178,7 +180,7 @@ export default function CommandsPage() {
   const pageRequest = useRef(0);
   const pageSize = 50;
   const filterKey = JSON.stringify([search, scope, statusFilter, dateFilter, from, to]);
-  useEffect(() => { setPageIndex(0); }, [filterKey]);
+  useEffect(() => { setPagesLoaded(1); }, [filterKey]);
   useEffect(() => {
     const request = ++pageRequest.current;
     const timer = setTimeout(async () => {
@@ -194,14 +196,14 @@ export default function CommandsPage() {
       }
       try {
         const page = await listCommandSummaries({ search, scope, status: statusFilter,
-          from: start?.toISOString(), to: end?.toISOString(), limit: pageSize, offset: pageIndex * pageSize });
+          from: start?.toISOString(), to: end?.toISOString(), limit: pageSize * pagesLoaded, offset: 0 });
         if (request === pageRequest.current) { setSummaryPage(page); setSummaryStale(false); }
       } catch (error) {
         if (request === pageRequest.current) setListError((error as Error).message);
       } finally { if (request === pageRequest.current) setListLoading(false); }
     }, 200);
     return () => { clearTimeout(timer); if (request === pageRequest.current) pageRequest.current += 1; };
-  }, [filterKey, pageIndex, refreshList]);
+  }, [filterKey, pagesLoaded, refreshList]);
 
   const filteredCommands = summaryPage?.rows ?? [];
   const stats = summaryPage?.stats ?? { totalPaid: 0, totalRest: 0, totalValue: 0, pendingDelivery: 0, invoiced: 0, invoicedRest: 0 };
@@ -236,8 +238,8 @@ export default function CommandsPage() {
     setSummaryPage((page) => {
       if (!page) return page;
       let rows = changed ? page.rows.map((c) => c.id === changed.id ? changed : c) : page.rows;
-      const insert = created && pageIndex === 0 && (!!created.isHistorical === (scope === 'historical'));
-      if (insert) rows = [created, ...rows.filter((c) => c.id !== created.id)].slice(0, pageSize);
+      const insert = created && (!!created.isHistorical === (scope === 'historical'));
+      if (insert) rows = [created, ...rows.filter((c) => c.id !== created.id)].slice(0, pageSize * pagesLoaded);
       return { ...page, totalCount: page.totalCount + (insert ? 1 : 0), rows };
     });
   };
@@ -1003,12 +1005,10 @@ export default function CommandsPage() {
       </Card>
 
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-        <span>{listLoading ? 'Chargement…' : `Page ${pageIndex + 1} · ${totalCount} commande(s)`}
+        <span>{listLoading ? 'Chargement…' : `${Math.min(filteredCommands.length, totalCount)} / ${totalCount} commande(s)`}
           {summaryStale && ' · Totaux à actualiser'}</span>
         <div className="flex gap-2">
           <Button variant="secondary" onClick={() => setRefreshList((n) => n + 1)}>Actualiser</Button>
-          <Button variant="secondary" disabled={pageIndex === 0 || listLoading} onClick={() => setPageIndex((n) => n - 1)}>Précédent</Button>
-          <Button variant="secondary" disabled={(pageIndex + 1) * pageSize >= totalCount || listLoading} onClick={() => setPageIndex((n) => n + 1)}>Suivant</Button>
         </div>
       </div>
       {listError && <p role="alert" className="text-rose-deep">{listError}</p>}
@@ -1282,6 +1282,10 @@ export default function CommandsPage() {
         </div>
       )}
       </ViewSwitch>
+      )}
+      {filteredCommands.length > 0 && (
+        <ShowMore shown={filteredCommands.length} total={totalCount} step={pageSize}
+          loading={listLoading} onMore={() => setPagesLoaded((n) => n + 1)} />
       )}
 
       {/* ========= Annuler le reste / augmenter la commande ========= */}
